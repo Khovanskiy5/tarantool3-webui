@@ -16,7 +16,9 @@
     "test:unit:watch": "vitest",
     "test:e2e": "playwright test",
     "check-fsd": "eslint --rulesdir ./tools/eslint-rules --no-eslintrc --config .eslintrc.fsd.cjs 'src/**/*.{ts,vue}' --max-warnings 0",
-    "check-i18n": "node tools/check-i18n.mjs"
+    "check-i18n": "node tools/check-i18n.mjs",
+    "storybook": "storybook dev -p 6006 --no-open",
+    "build-storybook": "storybook build -o storybook-static"
   },
   "dependencies": {
     "vue": "^3.4.0",
@@ -55,7 +57,16 @@
     "vite-plugin-compression2": "^2.5.3",
     "vitest": "^2.0.0",
     "vue-tsc": "^2.0.21",
-    "wonka": "^6.3.6"
+    "wonka": "^6.3.6",
+    "storybook": "^8.6.0",
+    "@storybook/vue3": "^8.6.0",
+    "@storybook/vue3-vite": "^8.6.0",
+    "@storybook/addon-essentials": "^8.6.0",
+    "@storybook/addon-a11y": "^8.6.0",
+    "@storybook/addon-themes": "^8.6.0",
+    "@storybook/addon-interactions": "^8.6.0",
+    "@storybook/addon-viewport": "^8.6.0",
+    "@storybook/test": "^8.6.0"
   },
   "engines": {
     "bun": ">=1.1.0"

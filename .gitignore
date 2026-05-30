@@ -38,6 +38,7 @@ build/
 .turbo/
 .nuxt/
 .output/
+storybook-static/
 
 # Test artefacts
 coverage/

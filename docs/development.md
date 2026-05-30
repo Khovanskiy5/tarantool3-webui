@@ -159,6 +159,95 @@ cl:drop()
 
 Публичная поверхность helper'ов покрыта офлайн-тестом `backend/test/unit/helpers_test.lua` (11 кейсов) — если кто-то сломает API или удалит метод, CI упадёт сразу, без Docker.
 
+## Storybook (frontend компоненты)
+
+В `frontend/.storybook/` лежит конфиг Storybook 8 поверх `@storybook/vue3-vite`. Stories пишутся в TypeScript рядом с компонентами и формируют живой каталог UI-кита.
+
+Что включено:
+
+- **Framework:** `@storybook/vue3-vite` — переиспользует тот же Vite pipeline и FSD-алиасы (`@/shared`, `@/widgets`, ...), что и приложение.
+- **Аддоны:** `addon-essentials` (controls, actions, viewport, docs), `addon-a11y` (axe-core отчёт на каждой story), `addon-themes` (light/dark переключатель через `.webui-dark` class), `addon-interactions` (play-функции для сценариев), `addon-viewport` (mobile/tablet/laptop/wide).
+- **Глобальные декораторы** (`preview.ts`): PrimeVue с Aura, Pinia, vue-i18n, vue-router на `createMemoryHistory()` со stub-маршрутами под все пункты сайдбара. CSS-переменные подгружаются через `src/app/styles/index.css`.
+- **Branding** (`manager.ts`): тёмная тема Storybook, цвета совпадают с UI-кит.
+- **Auto-docs**: каждая story-файл с тегом `autodocs` получает страницу Docs c props table (через vue-docgen-api).
+
+Команды:
+
+```bash
+cd frontend
+bun run storybook         # запускает dev-сервер на http://localhost:6006
+bun run build-storybook   # собирает статический сайт в frontend/storybook-static/
+```
+
+`storybook-static/` в .gitignore и публикуется как часть проектного сайта (Task 11 — деплой).
+
+## Добавление нового shared UI компонента
+
+Каждый UI-примитив в `frontend/src/shared/ui/` обязан идти вместе со story-файлом и проходить axe-checks через `addon-a11y`.
+
+1. **Создать компонент:**
+
+   ```
+   frontend/src/shared/ui/button/
+   ├── index.ts            ← re-export Button.vue
+   ├── ui/
+   │   ├── Button.vue
+   │   └── Button.stories.ts
+   └── model/              ← опц., props types если переиспользуются
+   ```
+
+   `index.ts` должен экспортировать только публичное API (компонент + типы props). Внутренние файлы (`ui/`, `model/`) недоступны извне — это гарантирует `eslint-plugin-boundaries`.
+
+2. **Подключить компонент к kit:**
+
+   В `frontend/src/shared/ui/index.ts` добавить re-export:
+
+   ```ts
+   export { default as Button, type ButtonProps } from './button';
+   ```
+
+3. **Написать story:** скелет `Button.stories.ts`:
+
+   ```ts
+   import type { Meta, StoryObj } from '@storybook/vue3';
+   import { Button } from '@/shared/ui';
+
+   const meta: Meta<typeof Button> = {
+     title: 'Shared/Button',
+     component: Button,
+     tags: ['autodocs'],
+     argTypes: {
+       variant: { control: 'select', options: ['primary', 'secondary', 'ghost'] },
+       size: { control: 'select', options: ['sm', 'md', 'lg'] },
+       disabled: { control: 'boolean' },
+     },
+   };
+
+   export default meta;
+   type Story = StoryObj<typeof Button>;
+
+   export const Default: Story = { args: { label: 'Save' } };
+   export const Disabled: Story = { args: { label: 'Save', disabled: true } };
+   export const Loading: Story = { args: { label: 'Save', loading: true } };
+   export const Danger: Story = { args: { label: 'Delete', variant: 'danger' } };
+   ```
+
+   Минимальное покрытие — **все интересные состояния**: `Default`, `Disabled`, `Loading`, `Error`, `Focused` (где применимо). Это — материал для axe-аудита и для дизайн-ревью.
+
+4. **Проверить локально:**
+
+   ```bash
+   cd frontend
+   bun run storybook            # визуальная проверка
+   bun run lint                 # ESLint + boundaries
+   bun run type-check           # vue-tsc
+   bun run build-storybook      # сборка должна проходить
+   ```
+
+5. **Добавить unit-тест** (если у компонента есть нетривиальная логика): `Button.test.ts` через `@vue/test-utils` + `vitest`.
+
+Widget-уровень (`frontend/src/widgets/<name>/ui/<Widget>.stories.ts`) — то же самое, только под `title: 'Widgets/<Name>'` и с моками из `frontend/tests/fixtures/` (когда появятся).
+
 ## Структура и архитектура
 
 Полная картина — в `docs/architecture.md`. Кратко:

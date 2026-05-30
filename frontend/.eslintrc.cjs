@@ -76,5 +76,16 @@ module.exports = {
         'boundaries/no-private': 'off',
       },
     },
+    {
+      // Storybook config + co-located *.stories.ts files. They sit
+      // alongside the components they document and therefore must be
+      // allowed to import from any layer — the FSD rules apply to
+      // production code, not to documentation harnesses.
+      files: ['.storybook/**/*', 'src/**/*.stories.ts'],
+      rules: {
+        'boundaries/element-types': 'off',
+        'boundaries/no-private': 'off',
+      },
+    },
   ],
 };
