@@ -101,7 +101,7 @@ build-frontend: install ## Build production SPA (Vite via Bun).
 
 .PHONY: dump-schema
 dump-schema: ## Export GraphQL SDL from the backend (offline, no running cluster).
-	$(TARANTOOL) tools/dump-schema.lua > $(FRONTEND_DIR)/src/shared/api/schema.graphql
+	$(TARANTOOL) tools/dump-schema.lua $(FRONTEND_DIR)/src/shared/api/schema.graphql
 
 .PHONY: gen-types
 gen-types: dump-schema ## Generate TypeScript types from the GraphQL schema.

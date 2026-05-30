@@ -1,0 +1,28 @@
+# Skeleton GraphQL operations.
+#
+# Slice-specific operations live in their own slice (e.g.
+# entities/cluster/api/cluster.graphql). This file holds infrastructure
+# operations that the shared layer itself uses:
+#   * Ping is the cheapest possible smoke-test.
+#   * RoleStatus + WebuiVersion identify the responding instance.
+
+query Ping {
+  ping
+  serverTime
+  webuiVersion
+}
+
+query GetRoleStatus {
+  roleStatus {
+    state
+    version
+    tarantool
+    instance
+    uptimeSec
+    logLevel
+  }
+}
+
+query GetConfigJsonSchema {
+  configJsonSchema
+}

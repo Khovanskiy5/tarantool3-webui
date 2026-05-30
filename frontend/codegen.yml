@@ -1,0 +1,41 @@
+# graphql-codegen configuration.
+#
+# Run via `make gen-types` (which first calls `make dump-schema` to
+# refresh src/shared/api/schema.graphql from the backend's Lua source)
+# or directly via `bunx graphql-codegen --config codegen.yml`.
+#
+# The pipeline reads the locally dumped SDL — never the live backend —
+# so CI does not need a running Tarantool to regenerate TS types.
+
+schema: ./src/shared/api/schema.graphql
+
+documents:
+  - ./src/**/*.graphql
+  - ./src/**/*.{ts,vue}
+
+generates:
+  ./src/shared/api/generated.ts:
+    plugins:
+      - typescript
+      - typescript-operations
+      # typescript-vue-urql emits composables that import from
+      # @urql/vue (NOT the React-flavoured urql package). It is the
+      # correct flavour for our app/providers/urql wiring.
+      - typescript-vue-urql
+    config:
+      avoidOptionals: true
+      maybeValue: 'T | null'
+      scalars:
+        DateTime: string
+        UUID: string
+        JSON: 'Record<string, unknown>'
+      # withCompositionFunctions emits useFooQuery / useFooMutation
+      # using @urql/vue's composition API.
+      withCompositionFunctions: true
+      vueCompositionApiImportFrom: vue
+      preResolveTypes: true
+      enumsAsTypes: true
+      namingConvention:
+        typeNames: keep
+        enumValues: keep
+

@@ -511,6 +511,108 @@ GET  /admin/api/explore  → middleware.wrap('graphql_explorer', graphql.graphiq
 | Explorer (disabled) | `GET /admin/api/explore` | 404 |
 | Explorer (enabled) | `GET /admin/api/explore` | 200 text/html, 3 КБ |
 
+## Frontend codegen и API-клиенты (Task 8)
+
+Типы и операции GraphQL генерируются из SDL, дампимого офлайн прямо из исходного кода схемы. Поднятый backend не нужен — это критично для CI и для разработки без docker-compose.
+
+### Пайплайн
+
+```
+backend/webui/graphql/schema.lua    (источник правды)
+    │
+    │ tarantool tools/dump-schema.lua [path]
+    │ (загружает модуль schema, не открывает сокет)
+    ▼
+frontend/src/shared/api/schema.graphql    (SDL, gitignored)
+    │
+    │ bunx graphql-codegen --config codegen.yml
+    ▼
+frontend/src/shared/api/generated.ts      (TS types + DocumentNodes + Vue composables, gitignored)
+```
+
+Оркестратор — `tools/gen-types.sh` (вызывается `make gen-types` или `bun run gen-types`).
+
+### `tools/dump-schema.lua`
+
+Собственный SDL-printer на Lua. Walk'ает `schema:getTypeMap()`, фильтрует built-ins (`String/Int/Float/Boolean/ID` и `__*` introspection-типы), эмитит в стабильном порядке:
+
+```
+schema { query: Query, mutation: Mutation }
+scalars  (по алфавиту)
+enums
+interfaces
+unions
+objects
+input objects
+```
+
+Поддерживает: `type/interface/input/enum/union/scalar`, описания (`""" … """`), nullability (`T!`), списки (`[T]`), interface implementations, аргументы.
+
+Выход: stdout или файл по argv[1]. Stderr-логи только при `os.exit ≠ 0` или подтверждение записи в файл.
+
+### `frontend/codegen.yml`
+
+`graphql-codegen` плагины:
+- `typescript` — базовые TS-типы из SDL.
+- `typescript-operations` — типы результатов queries/mutations.
+- **`typescript-vue-urql`** — импортирует из `@urql/vue` (не из React-flavoured `urql`). Эмитит `useFooQuery/useFooMutation` composables.
+
+Конфиг:
+- `avoidOptionals: true` — точное соблюдение nullability SDL.
+- `maybeValue: 'T | null'` — плоский `T | null` вместо `Maybe<T>` для лёгкости чтения.
+- `scalars: { DateTime: string, UUID: string, JSON: 'Record<string, unknown>' }` — стартовая карта кастомных скаляров (будет расти в Tasks 18+).
+- `namingConvention: keep` — имена совпадают с SDL (PascalCase types, camelCase fields).
+
+Сгенерированный файл — `frontend/src/shared/api/generated.ts`. Документы операций — `frontend/src/shared/api/graphql/*.graphql` (плюс будущие per-slice операции из `entities/*/api/*.graphql`).
+
+### urql-клиент
+
+`@/shared/api/graphql/client.ts` — `createWebuiClient(handlers?)`.
+
+Exchanges (порядок):
+1. `cacheExchange` — встроенный documentCache (без `@urql/exchange-graphcache` — для админ-интерфейса этого хватает; нормализованный кэш требует declare keys на каждый тип, выгода низкая).
+2. `csrfExchange` — для mutations берёт `webui_csrf` из cookies (HttpOnly cookie сессии настраивается в Task 25), добавляет `X-CSRF-Token` в fetch-options.
+3. `tapErrorCodes` — анализирует `result.error.graphQLErrors[].extensions.code`:
+   - `UNAUTHORIZED` / `SESSION_EXPIRED` → `onUnauthorized` (default: redirect на `/login?reason=unauthorized`).
+   - `FORBIDDEN` → `onForbidden` (default: redirect на `/forbidden`).
+   - Прочие — warn в structured log с `code/request_id`.
+   - Network errors → `onNetworkError` (default: error log).
+4. `fetchExchange` — стандарт.
+
+Параметр `handlers` принимает кастомные функции для тестов/Storybook (опт-аут от навигации).
+
+`@/app/providers/urql` теперь обёртка над `createWebuiClient()` — установка клиента на Vue app остаётся в layer `app/`, но логика клиента — в `shared/api`.
+
+### REST-клиент
+
+`@/shared/api/rest/client.ts` — `RestClient` для эндпоинтов вне GraphQL.
+
+- `get/post/put/delete<T>(path, body?, opts?)` — типизированные методы.
+- На state-changing методах (`POST/PUT/DELETE`) автоматически добавляется `X-CSRF-Token`.
+- 401/403 → те же handlers (`onUnauthorized`/`onForbidden`).
+- Не-2xx ответ парсится как `{error: {code, message, request_id, details?}}` envelope (Task 3 формат), кидается `RestApiError(code, status, requestId, details)` — call site может switch'ить по стабильному `code`.
+- Поддержка raw body (`opts.rawBody` для file upload) и raw response (`opts.raw` для blob download).
+- Возврат `null` на 204.
+
+Доступен как именованный экспорт `restClient` (instance на same-origin) и как класс `RestClient` для кастомных base-path / handlers.
+
+### Команды
+
+| Команда | Назначение |
+|---|---|
+| `make dump-schema` | Записать SDL в `frontend/src/shared/api/schema.graphql` |
+| `make gen-types` | Полный пайплайн: dump-schema + graphql-codegen |
+| `bun run gen-types` (frontend/) | То же без префикса `make` |
+| `make gen-types-watch` | Watch-режим codegen (без re-dump SDL) |
+
+### Что в gitignore
+
+Артефакты пайплайна — gitignored, регенерируются по требованию:
+- `frontend/src/shared/api/schema.graphql`
+- `frontend/src/shared/api/generated.ts`
+
+Source-документы (`frontend/src/shared/api/graphql/*.graphql`) — коммитятся.
+
 ## Дальнейшие разделы
 
 Появляются по мере реализации задач:
