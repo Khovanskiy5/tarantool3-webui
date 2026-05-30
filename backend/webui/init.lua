@@ -28,6 +28,7 @@ local fiber = require('fiber')
 local log_util    = require('webui.log_util')
 local version     = require('webui.version')
 local http_srv    = require('webui.http.server')
+local storage     = require('webui.storage.spaces')
 local peer_cookie = require('webui.cluster.peer_cookie')
 local peers       = require('webui.cluster.peers')
 local poller      = require('webui.cluster.poller')
@@ -169,10 +170,36 @@ function M.start(opts)
         graphiql_enabled = opts.graphiql_enabled,
     })
 
+    -- Step 4 in the role start sequence: internal storage spaces.
+    -- `_webui_meta`, `_webui_sessions`, `_webui_audit` are created
+    -- on the leader and replicate to followers. The call is
+    -- idempotent and tolerant of the read-only state — peer_cookie
+    -- below uses the same can_run_ddl gate.
+    local sto_ok, sto_result = pcall(storage.bootstrap)
+    if not sto_ok then
+        STATE.status = 'uninitialized'
+        STATE.config = nil
+        logger.error('storage bootstrap failed', { err = tostring(sto_result) })
+        return nil, 'storage bootstrap failed: ' .. tostring(sto_result)
+    end
+    if sto_result == nil then
+        STATE.status = 'uninitialized'
+        STATE.config = nil
+        logger.error('storage bootstrap returned nil; treating as fatal')
+        return nil, 'storage bootstrap returned nil'
+    end
+    logger.debug('storage ready', {
+        schema_version    = sto_result.schema_version,
+        created_meta      = sto_result.created_meta,
+        created_sessions  = sto_result.created_sessions,
+        created_audit     = sto_result.created_audit,
+        deferred          = sto_result.deferred,
+    })
+
     -- Step 5 in the role start sequence: peer cookie (system user
-    -- `webui_peer` + per-instance secret persistence). Steps 3, 4,
-    -- 7, 8 land in subsequent tasks (metrics, storage, cluster
-    -- state, fibers).
+    -- `webui_peer` + per-instance secret persistence). Steps 3,
+    -- 7, 8 land in subsequent tasks (metrics, cluster state,
+    -- fibers).
     --
     -- Production source of truth for the peer secret is the cluster
     -- config (`credentials.users.webui_peer.password`); look it up
