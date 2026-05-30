@@ -83,6 +83,7 @@ build = {
         ['webui.graphql.resolvers.lifecycle'] = 'backend/webui/graphql/resolvers/lifecycle.lua',
         ['webui.graphql.resolvers.failover']  = 'backend/webui/graphql/resolvers/failover.lua',
         ['webui.graphql.resolvers.vshard']    = 'backend/webui/graphql/resolvers/vshard.lua',
+        ['webui.graphql.resolvers.admin_data'] = 'backend/webui/graphql/resolvers/admin_data.lua',
         ['webui.audit.log']              = 'backend/webui/audit/log.lua',
         ['webui.audit.retention']        = 'backend/webui/audit/retention.lua',
         ['webui.graphql.types.audit']    = 'backend/webui/graphql/types/audit.lua',

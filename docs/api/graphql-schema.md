@@ -166,7 +166,7 @@ query {
 - **Task 26:** `Query.me`, `Mutation.login/logout` (REST), RBAC-фильтрация резолверов.
 - **Task 28a:** `Query.authParams`, `Mutation.updateAuthParams`.
 - **Task 34:** `Mutation.configPrepare/Commit/Abort`, `Query.configHistory`.
-- **Tasks 40, 41:** `Query.spaces`, `Query.users` + соответствующие mutations.
+- **Tasks 40, 41:** `Query.spaces`, `Query.users` (read-only части уже в схеме — резолверы в `graphql/resolvers/admin_data.lua`). Mutations (`createSpace`, `setUserRoles`) поедут через двухфазный коммит.
 - **Tasks 46, 47, 50, 51, 52:** failover, vshard, lifecycle mutations.
 
 Каждое расширение проходит проверку на breaking (см. `docs/api/deprecation.md` после Task 21).

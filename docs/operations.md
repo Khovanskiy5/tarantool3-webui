@@ -208,7 +208,8 @@ URL'ы:
 - `replication.failover: election` — встроенный raft (`election` mode); supervised/manual режимы — в Task 46.
 - `groups.default.replicasets.rs-1` — один replicaset c initial leader tt-1; raft при failover'е автоматически переизбирает.
 - `roles: [webui]` — наша Lua-роль активируется на каждом инстансе.
-- `roles_cfg.webui` — `listen: 0.0.0.0:8081`, `log_level: debug`, `graphiql_enabled: true` (только в dev), `console_enabled: false`.
+- `roles_cfg.webui` — `listen: 0.0.0.0:8081`, `log_level: debug`, `graphiql_enabled: true` (только в dev), `console_enabled: true` (dev включает консоль; production-манифесты обязаны держать `false`).
+- `credentials.users.*_dev` — четыре dev-фикстуры под все роли RBAC: `viewer_dev`, `operator_dev`, `admin_dev`, `superuser_dev` (последний нужен для /console и `POST /api/eval`).
 
 ### HAProxy (Task 10a) — `docker/haproxy/haproxy.dev.cfg`
 

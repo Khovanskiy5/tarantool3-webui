@@ -38,6 +38,9 @@ credentials:
     viewer_dev:
       password: 'viewer-dev-password'
       roles: [public]
+    superuser_dev:
+      password: 'superuser-dev-password'
+      roles: [public]
 
 iproto:
   advertise:
@@ -91,9 +94,8 @@ roles_cfg:
   webui:
     listen: '0.0.0.0:8081'
     log_level: debug
-    # Lua/SQL console is OFF by default. Dev compose flips it ON via
-    # an environment override (see compose env block) only for
-    # local debugging; production manifests keep it false.
-    console_enabled: false
+    # Lua/SQL console — ON in the dev compose only. Production
+    # manifests keep this `false`.
+    console_enabled: true
     # GraphiQL explorer is convenient in dev.
     graphiql_enabled: true

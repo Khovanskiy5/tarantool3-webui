@@ -39,6 +39,7 @@ local config_resolver      = require('webui.graphql.resolvers.config')
 local lifecycle_resolver   = require('webui.graphql.resolvers.lifecycle')
 local failover_resolver    = require('webui.graphql.resolvers.failover')
 local vshard_resolver      = require('webui.graphql.resolvers.vshard')
+local admin_data_resolver  = require('webui.graphql.resolvers.admin_data')
 
 local M = {}
 
@@ -229,6 +230,52 @@ local Query = types.object {
             description = 'Current cluster YAML and its etcd revision. ' ..
                 'Source = "etcd" when wired, "file" before.',
             resolve = config_resolver.query_current,
+        },
+        spaces = {
+            kind = types.object({
+                name = 'SpacesPayload',
+                fields = {
+                    spaces = types.list(types.object({
+                        name = 'SpaceInfo',
+                        fields = {
+                            id = types.long.nonNull,
+                            name = types.string.nonNull,
+                            engine = types.string,
+                            row_count = types.long,
+                            indexes = types.list(types.object({
+                                name = 'IndexInfo',
+                                fields = {
+                                    id = types.long.nonNull,
+                                    name = types.string.nonNull,
+                                    type = types.string,
+                                    unique = types.boolean,
+                                    parts = types.list(types.string.nonNull),
+                                },
+                            })),
+                        },
+                    })),
+                },
+            }).nonNull,
+            arguments = { include_system = types.boolean },
+            description = 'Local spaces with row counts and index definitions.',
+            resolve = admin_data_resolver.query_spaces,
+        },
+        users = {
+            kind = types.object({
+                name = 'UsersPayload',
+                fields = {
+                    users = types.list(types.object({
+                        name = 'UserInfo',
+                        fields = {
+                            name = types.string.nonNull,
+                            kind = types.string.nonNull,
+                            roles_app = types.list(types.string.nonNull),
+                        },
+                    })),
+                },
+            }).nonNull,
+            description = 'Tarantool users plus their WebUI RBAC roles. Admin only.',
+            resolve = admin_data_resolver.query_users,
         },
         audit = {
             kind = audit_types.AuditPage.nonNull,

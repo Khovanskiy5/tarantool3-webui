@@ -26,9 +26,10 @@ M.ROLES = {
 -- Dev-fixture mapping. Production deployments override via the
 -- cluster-wide `roles_cfg.webui.rbac.users` block.
 M.DEFAULT_USER_TO_ROLES = {
-    admin_dev    = { 'admin' },
-    operator_dev = { 'operator' },
-    viewer_dev   = { 'viewer' },
+    admin_dev     = { 'admin' },
+    operator_dev  = { 'operator' },
+    viewer_dev    = { 'viewer' },
+    superuser_dev = { 'superuser' },
 }
 
 local runtime_users = {}

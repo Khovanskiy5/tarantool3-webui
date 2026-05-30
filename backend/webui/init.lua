@@ -336,6 +336,7 @@ function M.start(opts)
         listen = opts.listen,
         allowed_origins = opts.allowed_origins,
         graphiql_enabled = opts.graphiql_enabled == true,
+        console_enabled = opts.console_enabled == true,
         ws_allowed_origins = opts.ws_allowed_origins,
         role_status_provider = function() return M.status() end,
     })

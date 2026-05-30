@@ -25,9 +25,15 @@ import { NETWORK_ERROR_ROUTE } from '@/pages/errors/network-error';
 import { NOT_FOUND_ROUTE } from '@/pages/errors/not-found';
 import { LOGIN_ROUTE } from '@/pages/login';
 import { AUDIT_ROUTE } from '@/pages/audit';
+import { CONFIG_EDITOR_ROUTE } from '@/pages/config-editor';
+import { SCHEMA_ROUTE } from '@/pages/schema';
+import { USERS_ROUTE } from '@/pages/users';
+import { FAILOVER_ROUTE } from '@/pages/failover';
+import { VSHARD_ROUTE } from '@/pages/vshard';
+import { METRICS_ROUTE } from '@/pages/metrics';
+import { SNAPSHOTS_ROUTE } from '@/pages/snapshots';
+import { CONSOLE_ROUTE } from '@/pages/console';
 import { useSessionStore, type Role } from '@/entities/session';
-
-const stub = () => import('@/pages/errors/not-found/ui/NotFound.vue');
 
 // Per-route role gating. Routes not listed inherit `viewer`
 // (the default for any logged-in user).
@@ -45,14 +51,14 @@ const routes: RouteRecordRaw[] = [
   LOGIN_ROUTE,
   CLUSTER_ROUTE,
   ISSUES_ROUTE,
-  { path: '/config-editor', name: 'config-editor', component: stub, meta: { role: 'operator' as Role } },
-  { path: '/schema',        name: 'schema',        component: stub, meta: { role: 'viewer' as Role } },
-  { path: '/users',         name: 'users',         component: stub, meta: { role: 'admin' as Role } },
-  { path: '/failover',      name: 'failover',      component: stub, meta: { role: 'admin' as Role } },
-  { path: '/vshard',        name: 'vshard',        component: stub, meta: { role: 'admin' as Role } },
-  { path: '/metrics',       name: 'metrics',       component: stub },
-  { path: '/snapshots',     name: 'snapshots',     component: stub, meta: { role: 'admin' as Role } },
-  { path: '/console',       name: 'console',       component: stub, meta: { role: 'superuser' as Role } },
+  CONFIG_EDITOR_ROUTE,
+  SCHEMA_ROUTE,
+  USERS_ROUTE,
+  FAILOVER_ROUTE,
+  VSHARD_ROUTE,
+  METRICS_ROUTE,
+  SNAPSHOTS_ROUTE,
+  CONSOLE_ROUTE,
   AUDIT_ROUTE,
   FORBIDDEN_ROUTE,
   NETWORK_ERROR_ROUTE,
