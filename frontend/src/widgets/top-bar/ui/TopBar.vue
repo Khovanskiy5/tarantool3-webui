@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
+import SelectButton from 'primevue/selectbutton';
 
-import { setLocale, type Locale } from '@/shared/i18n';
+import { SUPPORTED_LOCALES, setLocale, type Locale } from '@/shared/i18n';
 import { useHealth } from '@/shared/lib/health';
 
 const { t, locale } = useI18n();
@@ -17,10 +18,22 @@ const currentInstance = computed(() => {
   return name && name.length > 0 ? name : t('widgets.top_bar.no_instance');
 });
 
-const onLocaleChange = (event: Event) => {
-  const value = (event.target as HTMLSelectElement).value as Locale;
-  setLocale(value);
-};
+// SelectButton stays a segmented switch as long as the locale set is
+// small (≤ 4 entries fit comfortably). The day a fifth locale lands,
+// swap to PrimeVue's `Select`; the v-model contract is identical.
+const localeOptions = computed(() =>
+  SUPPORTED_LOCALES.map((code) => ({
+    value: code,
+    label: code.toUpperCase(),
+  })),
+);
+
+const localeModel = computed<Locale>({
+  get: () => locale.value as Locale,
+  set: (value) => {
+    if (value && value !== locale.value) setLocale(value);
+  },
+});
 </script>
 
 <template>
@@ -36,18 +49,19 @@ const onLocaleChange = (event: Event) => {
         </span>
         <span class="webui-top-bar__instance-name">{{ currentInstance }}</span>
       </span>
-      <label class="webui-top-bar__locale">
-        <span class="webui-sr-only">{{ t('app.language') }}</span>
-        <select
-          :value="locale"
-          aria-label="language"
-          class="webui-top-bar__locale-select"
-          @change="onLocaleChange"
-        >
-          <option value="ru">RU</option>
-          <option value="en">EN</option>
-        </select>
-      </label>
+      <!-- `allowEmpty="false"` is critical: SelectButton's default
+           lets the user click the active option to deselect, which
+           would leave the SPA with no locale. -->
+      <SelectButton
+        v-model="localeModel"
+        :options="localeOptions"
+        option-label="label"
+        option-value="value"
+        :allow-empty="false"
+        :aria-label="t('app.language')"
+        size="small"
+        class="webui-top-bar__locale-switch"
+      />
     </div>
   </header>
 </template>
@@ -108,51 +122,16 @@ const onLocaleChange = (event: Event) => {
   font-family: var(--webui-font-mono);
 }
 
-.webui-top-bar__locale {
-  display: inline-flex;
-}
-
-.webui-top-bar__locale-select {
-  background: rgba(255, 255, 255, 0.02);
-  color: var(--webui-text);
-  border: 1px solid var(--webui-border);
-  border-radius: var(--webui-radius);
-  /* Native arrow looks heavy against the dark theme; replace it with
-     a small SVG chevron so the control reads as a custom dropdown
-     while keeping native a11y semantics. */
-  appearance: none;
-  -webkit-appearance: none;
-  -moz-appearance: none;
-  padding: 0.3rem 1.6rem 0.3rem 0.65rem;
-  font: inherit;
+/* PrimeVue 4 / Aura paints SelectButton via the design-token system,
+   so most styling is inherited. The :deep selectors below only adjust
+   labels: the locale codes look stronger in our brand monospace and
+   slightly tighter than Aura's default. */
+.webui-top-bar__locale-switch :deep(.p-togglebutton),
+.webui-top-bar__locale-switch :deep(.p-button) {
+  font-family: var(--webui-font-mono);
   font-weight: 600;
-  letter-spacing: 0.03em;
-  cursor: pointer;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%238b949e' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5l5 5 5-5'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 0.55rem center;
-  background-size: 0.7rem 0.5rem;
-}
-
-.webui-top-bar__locale-select:hover,
-.webui-top-bar__locale-select:focus-visible {
-  border-color: var(--webui-accent);
-}
-
-.webui-top-bar__locale-select option {
-  background: var(--webui-bg-elevated);
-  color: var(--webui-text);
-}
-
-.webui-sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
+  letter-spacing: 0.04em;
+  padding: 0.3rem 0.6rem;
+  min-width: 2.5rem;
 }
 </style>
