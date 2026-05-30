@@ -133,11 +133,85 @@ log_util.info('boot done')
 - JSON-сериализация обёрнута в `pcall`. При сбое (несериализуемые userdata) выдаётся degraded-строка с `"_encode_error":true` — никаких throw'ов наружу.
 - Reserved keys (`ts`, `level`, `tag`, `instance`, `msg`) не могут быть перезаписаны полями из payload.
 
+## HTTP-сервер (Task 3)
+
+`backend/webui/http/server.lua` — обёртка над rock'ом `http >= 1.6`. Один экземпляр `http.server` на инстанс. Адрес — `roles_cfg.webui.listen` (default `0.0.0.0:8081`).
+
+### Структура запроса
+
+```
+client
+  │
+  ▼
+http.server (TCP + HTTP parsing)
+  │
+  ▼ hook before_dispatch → req._webui_seen_at = fiber.time()
+  ▼
+http.server.match(method, path) → endpoint
+  │
+  ▼  middleware.wrap(name, handler) [pcall around handler]
+  │   1. assign_request_id (header or generated UUID v4)
+  │   2. CORS preflight short-circuit (если 'OPTIONS' и origin разрешён)
+  │   3. pcall(handler, req)
+  │   4. response.headers['x-request-id']
+  │   5. apply_security_headers
+  │   6. structured log entry (debug/info/error по status)
+  │
+  ▼
+response → client
+```
+
+### Middleware (`http/middleware.lua`)
+
+Реализован composition-подход через wrapper `middleware.wrap(name, sub, opts)`:
+
+- **Request-ID** — заголовок `X-Request-Id` (валидация pattern и длины) или fresh UUID v4.
+- **CORS** — конфигурируется через `opts.allowed_origins` (по умолчанию nil → CORS-заголовки не добавляются). Wildcard `*` запрещён на credentialed endpoint'ах.
+- **Security headers** — обязательный набор (см. `docs/security.md`).
+- **Error envelope** — handler выполняется в `pcall`; на panic возвращается `INTERNAL` envelope, реальная ошибка логируется с request_id.
+- **Структурный лог** — debug на каждый ответ; info на 4xx; error на 5xx. Поля: `request_id`, `method`, `path`, `status`, `latency_ms`.
+
+Auth и CSRF middleware появятся в Task 26 как extensions того же wrapper'а.
+
+### Heartbeat-фибер
+
+Каждую секунду пульсирует `STATE.last_heartbeat_at = fiber.time()`. Используется `/api/health` для детекции TX-thread block: если `now - last_heartbeat > 5s`, фибер не мог запуститься → TX-тред застрял → `status: "unhealthy"` + HTTP 503 + `Retry-After: 5`.
+
+При остановке роли — cooperative stop с двухсекундным дедлайном; при превышении — warn в лог.
+
+### Регистрация роутов
+
+Другие модули вызывают:
+
+```lua
+local server = require('webui.http.server')
+server.register_route('GET', '/api/foo', 'foo_handler', function(req)
+    return { status = 200, body = '...' }
+end, { allowed_origins = {...} })
+```
+
+Wrapper применяется автоматически.
+
+### Error envelope (`http/error_envelope.lua`)
+
+Единый формат REST-ошибок:
+
+```json
+{ "error": { "code": "STABLE_CODE", "message": "human readable", "request_id": "uuid", "details": {...}? } }
+```
+
+Принимает на вход: error-rock объекты (`.class_name`, `.err`), plain string, table `{code,message,details}` или nil. Нормализует в стабильную структуру. Внутренние ошибки (`code == INTERNAL`) полностью маскируются: тело содержит только generic `"internal error"`, реальные данные — в structured-логе.
+
+HTTP-статус выводится из `errors.HTTP_STATUS[code]`, отсутствие → 500.
+
+### Health endpoint (`api/health.lua`)
+
+См. `docs/api/rest.md` — двухуровневый ответ ok/degraded/unhealthy с расширяемыми checks. Extension point — `health.register_check(name, fn)` для модулей, которые приходят позже (etcd → Task 30, peers → Task 17, config → Task 27).
+
 ## Дальнейшие разделы
 
 Появляются по мере реализации задач:
 
-- HTTP server + middleware + error envelope → Task 3.
 - Graceful shutdown sequence → Task 3a.
 - Frontend FSD структура → Task 4.
 - GraphQL skeleton + GraphiQL → Task 7.

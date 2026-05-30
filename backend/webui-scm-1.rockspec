@@ -23,11 +23,11 @@ description = {
 dependencies = {
     'lua >= 5.1',
     'checks',
+    'errors',
+    'http >= 1.6',
     -- Subsequent tasks pin additional dependencies as their code lands:
-    --   Task 3  (HTTP server):   'http >= 1.5'
     --   Task 7  (GraphQL):       'graphql'
     --   Task 10 (compose configs): 'lyaml'
-    --   Task 19 (issues):        'errors'
     --   Task 30 (etcd):          'etcd-client'
     --   Task 42a (self-metrics): 'metrics'
     --   Task 47 (vshard runtime, optional): 'vshard >= 0.1.27'
@@ -36,8 +36,13 @@ dependencies = {
 build = {
     type = 'builtin',
     modules = {
-        ['webui']          = 'backend/webui/init.lua',
-        ['webui.version']  = 'backend/webui/version.lua',
-        ['webui.log_util'] = 'backend/webui/log_util.lua',
+        ['webui']                    = 'backend/webui/init.lua',
+        ['webui.version']            = 'backend/webui/version.lua',
+        ['webui.log_util']           = 'backend/webui/log_util.lua',
+        ['webui.errors']             = 'backend/webui/errors.lua',
+        ['webui.http.server']        = 'backend/webui/http/server.lua',
+        ['webui.http.middleware']    = 'backend/webui/http/middleware.lua',
+        ['webui.http.error_envelope']= 'backend/webui/http/error_envelope.lua',
+        ['webui.api.health']         = 'backend/webui/api/health.lua',
     },
 }

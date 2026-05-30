@@ -23,9 +23,11 @@
 --  12. broadcast webui.started
 
 local checks = require('checks')
+local fiber = require('fiber')
 
-local log_util = require('webui.log_util')
-local version  = require('webui.version')
+local log_util  = require('webui.log_util')
+local version   = require('webui.version')
+local http_srv  = require('webui.http.server')
 
 local logger = log_util.with_tag('init')
 
@@ -162,15 +164,25 @@ function M.start(opts)
         graphiql_enabled = opts.graphiql_enabled,
     })
 
-    -- Subsequent M0/M1 tasks install their sub-systems here following the
-    -- ordering documented in the plan's "Lua module loading" contract.
-    --
-    -- Until Task 3 lands, start() simply transitions to "ready" so that the
-    -- role lifecycle is observable from tests and from config:info().
+    -- Step 9 in the role start sequence: HTTP server.
+    -- Steps 3–8 land in subsequent tasks (metrics, storage, peer cookie,
+    -- cluster.peers, state, fibers).
+    STATE.started_at = fiber.time()
 
-    STATE.started_at = os.time()
+    local http_ok, http_err = http_srv.start({
+        listen = opts.listen,
+        allowed_origins = opts.allowed_origins,
+        role_status_provider = function() return M.status() end,
+    })
+    if not http_ok then
+        STATE.status = 'uninitialized'
+        STATE.started_at = nil
+        STATE.config = nil
+        logger.error('http server start failed', { err = http_err })
+        return nil, http_err
+    end
+
     STATE.status = 'ready'
-
     logger.info('webui role ready', { started_at = STATE.started_at })
     return true
 end
@@ -184,15 +196,16 @@ function M.stop()
     end
 
     STATE.status = 'stopping'
-    local uptime = STATE.started_at and (os.time() - STATE.started_at) or 0
+    local uptime = STATE.started_at and (fiber.time() - STATE.started_at) or 0
     logger.info('webui role stopping', { uptime_sec = uptime })
 
-    -- Graceful shutdown sequence is implemented in Task 3a:
-    --   * mark role draining
-    --   * close WebSocket connections (code 1001)
-    --   * release etcd edit locks
-    --   * signal background fibers to exit
-    --   * drain in-flight HTTP, then stop the HTTP server
+    -- Graceful shutdown sequence is extended in Task 3a with WS connection
+    -- close, etcd lock release and HTTP drain. For now we stop the server
+    -- and the heartbeat fiber.
+    local ok, err = pcall(function() http_srv.stop() end)
+    if not ok then
+        logger.error('http server stop raised', { err = tostring(err) })
+    end
 
     STATE.status = 'stopped'
     STATE.started_at = nil
@@ -203,13 +216,14 @@ function M.stop()
 end
 
 function M.status()
+    local started = STATE.started_at
     return {
         state = STATE.status,
         version = version.SEMVER,
         tarantool = _TARANTOOL,
         instance = STATE.instance,
-        started_at = STATE.started_at,
-        uptime_sec = STATE.started_at and (os.time() - STATE.started_at) or 0,
+        started_at = started,
+        uptime_sec = started and (fiber.time() - started) or 0,
         log_level = log_util.current_level(),
     }
 end
