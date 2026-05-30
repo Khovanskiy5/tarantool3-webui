@@ -1,0 +1,130 @@
+# syntax=docker/dockerfile:1.7
+#
+# Tarantool 3.7 WebUI instance image.
+#
+# Multi-stage:
+#   1. frontend-build  — Bun-based Vite production build of the SPA.
+#   2. runtime         — Tarantool 3.7 with the webui role, embedded
+#                        SPA bundle, and external rocks installed.
+#
+# The image is intentionally minimal: only the runtime artefacts and
+# their dependencies are kept. The Bun toolchain, npm cache and frontend
+# source code never appear in the final image.
+#
+# Build context: the repository root (NOT docker/).
+#   docker build -f docker/Dockerfile.instance -t webui-instance:dev .
+#
+# Configuration is passed at run time via:
+#   * a cluster config file mounted into /opt/webui/etc/instance.yaml
+#     (or another path via TT_CONFIG)
+#   * env TT_INSTANCE_NAME (or INSTANCE_NAME) selecting the instance
+#   * env WEBUI_LOG_LEVEL / TT_LOG_LEVEL for diagnostics
+#   * env WEBUI_PORT for the HEALTHCHECK target
+#
+# All runtime processes execute as the non-root `tarantool` user (uid 1000).
+
+# ── stage 1 ────────────────────────────────────────────────────────────
+FROM oven/bun:1-alpine AS frontend-build
+
+WORKDIR /build
+
+# Dependency manifest first so bun install is cached when only sources change.
+COPY frontend/package.json frontend/bun.lock ./
+
+# Frozen-lockfile mirrors CI behaviour: any drift between package.json
+# and bun.lock fails the build instead of silently rewriting the lock.
+RUN bun install --frozen-lockfile
+
+# Source after install — Docker BuildKit reuses the install layer when
+# only sources change.
+COPY frontend/ ./
+
+# Production build: type-check + vite build. Output lands in /build/dist
+# with brotli + gzip companions emitted by vite-plugin-compression2.
+RUN bun run build
+
+# ── stage 2 ────────────────────────────────────────────────────────────
+FROM tarantool/tarantool:3.7.0 AS runtime
+
+# Runtime dependencies. curl is needed by the HEALTHCHECK below.
+# build-essential is required for compiling C rocks (e.g. the `http`
+# rock includes a small C component). git is required by some rocks
+# during `tt rocks install`.
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        git \
+        build-essential \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/webui
+
+# Tarantool's default package.path includes /usr/share/tarantool/?.lua
+# and /usr/share/tarantool/?/init.lua, so installing our backend modules
+# there makes `require('webui')` resolve without any LUA_PATH gymnastics.
+# This works for both `tarantool --config` and `tarantool -e` flows.
+COPY backend/webui /usr/share/tarantool/webui
+
+# Tools and the rockspec live alongside the runtime files so the image
+# can re-run embed-assets if a deploy ships a new SPA without rebuilding
+# the whole stack.
+COPY tools/dump-schema.lua  /opt/webui/tools/dump-schema.lua
+COPY tools/embed-assets.lua /opt/webui/tools/embed-assets.lua
+COPY backend/webui-scm-1.rockspec /opt/webui/webui-scm-1.rockspec
+
+# External rocks. Pinned to the same versions we develop against. The
+# tt CLI installs into ./.rocks by default, and Tarantool's package.path
+# already includes that location when running from WORKDIR.
+# checks ships with Tarantool 3.x core, no separate install required.
+RUN tt rocks install http 1.6.0 \
+ && tt rocks install graphql \
+ && tt rocks install errors
+
+# Copy the production SPA from stage 1 and pack it into a Lua module.
+# embed-assets reads from <source-dir> and writes to <output-file>; the
+# output sits next to the role's other modules so the static handler's
+# `require('webui.assets.bundle')` resolves with no special setup.
+COPY --from=frontend-build /build/dist /opt/webui/frontend/dist
+RUN tarantool /opt/webui/tools/embed-assets.lua \
+        /opt/webui/frontend/dist \
+        /usr/share/tarantool/webui/assets/bundle.lua \
+ && rm -rf /opt/webui/frontend/dist
+
+# Runtime directories used by tarantool for work_dir, snapshots, xlogs
+# and the instance config. Owned by the unprivileged user from now on.
+# Brace expansion is NOT used here because Docker's default RUN shell
+# is /bin/sh (dash on Ubuntu) which does not implement it.
+RUN mkdir -p \
+        /opt/webui/etc \
+        /opt/webui/var/run \
+        /opt/webui/var/log \
+        /opt/webui/var/lib \
+ && chown -R tarantool:tarantool /opt/webui
+
+# Entrypoint shell. Living in /usr/local/bin so the image runs the same
+# way no matter what WORKDIR a caller picks.
+COPY docker/entrypoint.sh /usr/local/bin/webui-entrypoint
+RUN chmod 0755 /usr/local/bin/webui-entrypoint
+
+# Drop privileges for everything below this line.
+USER tarantool
+
+# Default runtime configuration. Each value can be overridden per
+# container (compose, helm, docker run -e).
+ENV WEBUI_PORT=8081 \
+    WEBUI_LOG_LEVEL=info \
+    TT_CONFIG=/opt/webui/etc/instance.yaml \
+    TT_WORK_DIR=/opt/webui/var/lib
+
+EXPOSE 8081 3301
+
+# Healthcheck talks to the same endpoint HAProxy uses for cluster
+# membership decisions. Degraded (200) keeps the instance in rotation;
+# unhealthy (503) takes it out.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl --fail --silent --show-error \
+        "http://127.0.0.1:${WEBUI_PORT}/api/health" >/dev/null || exit 1
+
+ENTRYPOINT ["/usr/local/bin/webui-entrypoint"]

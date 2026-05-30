@@ -1,0 +1,55 @@
+# Files excluded from the Docker build context.
+#
+# Keep this tight: every megabyte sent to the daemon costs build time
+# and (with BuildKit's cache) cache-invalidation surface.
+
+# Vendored reference sources never end up in any image.
+cartridge-*/
+tarantool-*/
+
+# Local development tooling state.
+.git/
+.github/
+.idea/
+.vscode/
+.claude/
+.ai-factory/
+.mcp.json
+.ai-factory.json
+AGENTS.md
+CLAUDE.md
+
+# Build outputs / caches reproduced inside the image.
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/coverage/
+frontend/playwright-report/
+frontend/test-results/
+.rocks/
+backend/webui/assets/bundle.lua
+
+# Logs and OS noise.
+*.log
+.DS_Store
+Thumbs.db
+
+# Tarantool runtime artefacts that may litter the working tree.
+*.snap
+*.xlog
+*.vylog
+*.inprogress
+*.pid
+*.sock
+run/
+var/
+data/
+
+# Test artefacts.
+coverage/
+*.coverage
+
+# Documentation source — not needed inside the runtime image.
+docs/
+README.md
+LICENSE
