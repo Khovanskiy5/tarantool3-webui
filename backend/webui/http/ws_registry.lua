@@ -60,6 +60,7 @@ function M.register(meta)
         ip = '?string',
         ua = '?string',
         session_id = '?string',
+        user       = '?string',
         send_fn = '?function',
         close_fn = '?function',
     })
@@ -77,6 +78,7 @@ function M.register(meta)
     local entry = {
         id           = id,
         session_id   = meta.session_id,
+        user         = meta.user,
         ip           = meta.ip,
         ua           = meta.ua,
         created_at   = now,
@@ -184,6 +186,7 @@ function M.list()
         table.insert(out, {
             id           = id,
             session_id   = entry.session_id,
+            user         = entry.user,
             ip           = entry.ip,
             ua           = entry.ua,
             created_at   = entry.created_at,
@@ -202,6 +205,30 @@ function M.count()
 end
 
 function M.get(id) return STATE.by_id[id] end
+
+-- Walk every connection owned by `session_id`, run its close_fn
+-- (typically 1001 Going Away) and drop it from the registry.
+-- Used by auth.logout to enforce session revocation in real time.
+function M.close_by_session(session_id, reason)
+    if type(session_id) ~= 'string' or session_id == '' then return 0 end
+    local closed = 0
+    for id, entry in pairs(STATE.by_id) do
+        if entry.session_id == session_id then
+            if entry.close_fn ~= nil then
+                pcall(entry.close_fn, 1001, reason or 'logout')
+            end
+            entry.closed = true
+            STATE.by_id[id] = nil
+            closed = closed + 1
+        end
+    end
+    if closed > 0 then
+        logger.info('ws sessions force-closed', {
+            session_id = session_id, reason = reason, count = closed,
+        })
+    end
+    return closed
+end
 
 -- Test hook.
 function M._reset()

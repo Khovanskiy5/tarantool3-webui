@@ -34,7 +34,54 @@ local suggestions = require('webui.cluster.suggestions')
 local log_util = require('webui.log_util')
 local logger   = log_util.with_tag('ws')
 
+-- Configurable Origin allow-list; set via M.configure({...}).
+local ALLOWED_ORIGINS = nil
+
+-- Cookie parsing shared with the REST middleware.
+local SESSION_COOKIE = 'webui_session'
+
+local function lazy_session()
+    local ok, mod = pcall(require, 'webui.auth.session')
+    if ok then return mod end
+    return nil
+end
+
+local function parse_session_cookie(headers)
+    if headers == nil then return nil end
+    local raw = headers['cookie']
+    if type(raw) ~= 'string' then return nil end
+    for piece in raw:gmatch('([^; ]+)') do
+        local name, value = piece:match('^([^=]+)=(.+)$')
+        if name == SESSION_COOKIE then return value end
+    end
+    return nil
+end
+
+local function origin_allowed(headers)
+    if ALLOWED_ORIGINS == nil or next(ALLOWED_ORIGINS) == nil then
+        return true
+    end
+    local origin = headers and headers['origin']
+    if origin == nil or origin == '' then return true end
+    for _, allowed in ipairs(ALLOWED_ORIGINS) do
+        if allowed == origin or allowed == '*' then return true end
+    end
+    return false
+end
+
 local M = {}
+
+function M.configure(opts)
+    opts = opts or {}
+    if type(opts.allowed_origins) == 'table' then
+        ALLOWED_ORIGINS = {}
+        for _, o in ipairs(opts.allowed_origins) do
+            if type(o) == 'string' and o ~= '' then
+                table.insert(ALLOWED_ORIGINS, o)
+            end
+        end
+    end
+end
 
 M.PING_INTERVAL_SEC  = 30
 M.PONG_DEADLINE_SEC  = 60
@@ -261,10 +308,38 @@ function M.handler(req)
             allow = 'GET', ['content-type'] = 'text/plain' } }
     end
 
-    if not dev_anonymous_enabled() then
+    -- Origin allow-list. Reject early so a hostile page cannot
+    -- even reach the upgrade phase.
+    if not origin_allowed(req.headers) then
+        logger.warn('ws origin rejected', {
+            origin = req.headers and req.headers['origin'],
+        })
         return {
-            status = 503,
-            body = 'auth not wired yet — set WEBUI_DEV_ANONYMOUS_WS=1 for dev access',
+            status = 403,
+            body = 'origin not allowed',
+            headers = { ['content-type'] = 'text/plain' },
+        }
+    end
+
+    -- Authentication. Two paths:
+    --   * production / default: read cookie `webui_session` and
+    --     resolve it through the session storage.
+    --   * `WEBUI_DEV_ANONYMOUS_WS=1`: skip auth entirely. The flag
+    --     stays for the dev compose so contributors can browse the
+    --     SPA without a real login.
+    local auth_session
+    local sid = parse_session_cookie(req.headers)
+    if sid ~= nil then
+        local sess = lazy_session()
+        if sess ~= nil then
+            auth_session = sess.get(sid)
+        end
+    end
+    if auth_session == nil and not dev_anonymous_enabled() then
+        logger.info('ws auth rejected', { reason = 'no_session' })
+        return {
+            status = 401,
+            body = 'session required',
             headers = { ['content-type'] = 'text/plain' },
         }
     end
@@ -292,6 +367,8 @@ function M.handler(req)
     local entry, err = registry.register({
         ip = (req.peer and tostring(req.peer.host)) or nil,
         ua = req.headers and req.headers['user-agent'] or nil,
+        session_id = sid,
+        user       = auth_session and auth_session.user,
     })
     if entry == nil then
         local resp_body = 'too many connections'

@@ -162,11 +162,22 @@ local function register_builtin_routes(httpd, role_opts)
     -- log line.
     local ws_ok, ws = pcall(require, 'webui.http.ws')
     if ws_ok then
+        -- The middleware runs in `auth = 'public'` mode because the
+        -- WS handler does its own handshake-level cookie validation
+        -- (the SPA cannot set custom headers from
+        -- `new WebSocket(...)`, so middleware enforcement would
+        -- always 401 with `no session` before the cookie is read).
+        if ws.configure ~= nil then
+            ws.configure({ allowed_origins = role_opts.ws_allowed_origins })
+        end
         httpd:route(
             { path = '/ws', method = 'GET' },
-            middleware.wrap('ws', ws.handler)
+            middleware.wrap('ws', ws.handler, { auth = 'public' })
         )
-        logger.info('ws route registered', { path = '/ws' })
+        logger.info('ws route registered', {
+            path = '/ws',
+            allowed_origins = role_opts.ws_allowed_origins,
+        })
     else
         logger.warn('ws module load failed; /ws disabled', {
             err = tostring(ws),

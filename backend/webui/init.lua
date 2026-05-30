@@ -103,6 +103,17 @@ function M.validate(cfg)
     if cfg.graphiql_enabled ~= nil and type(cfg.graphiql_enabled) ~= 'boolean' then
         return nil, 'roles_cfg.webui.graphiql_enabled must be a boolean'
     end
+    if cfg.ws_allowed_origins ~= nil and type(cfg.ws_allowed_origins) ~= 'table' then
+        return nil, 'roles_cfg.webui.ws_allowed_origins must be a list of strings'
+    end
+    if cfg.rbac ~= nil then
+        if type(cfg.rbac) ~= 'table' then
+            return nil, 'roles_cfg.webui.rbac must be a table'
+        end
+        if cfg.rbac.users ~= nil and type(cfg.rbac.users) ~= 'table' then
+            return nil, 'roles_cfg.webui.rbac.users must be a {user = [roles]} table'
+        end
+    end
 
     return true
 end
@@ -285,10 +296,19 @@ function M.start(opts)
     -- Step 9 in the role start sequence: HTTP server.
     STATE.started_at = fiber.time()
 
+    -- RBAC user→roles map from cluster config (Task 26). The map
+    -- lives next to the rest of the role config so operators can
+    -- promote/demote without touching code.
+    if type(opts.rbac) == 'table' and type(opts.rbac.users) == 'table' then
+        local rbac_ok, rbac = pcall(require, 'webui.auth.rbac')
+        if rbac_ok then rbac.set_user_roles(opts.rbac.users) end
+    end
+
     local http_ok, http_err = http_srv.start({
         listen = opts.listen,
         allowed_origins = opts.allowed_origins,
         graphiql_enabled = opts.graphiql_enabled == true,
+        ws_allowed_origins = opts.ws_allowed_origins,
         role_status_provider = function() return M.status() end,
     })
     if not http_ok then

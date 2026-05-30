@@ -41,10 +41,10 @@ x-tarantool-common: &tarantool-common
     # needed. TT_WEBUI_PEER_PASSWORD remains a documented escape hatch
     # for installations that ship the secret out-of-band.
     #
-    # Dev-anonymous WebSocket: M1 ships /ws gated by this flag. The
-    # prod compose intentionally omits it so /ws answers 503 until
-    # session auth (Task 26a) wires in.
-    WEBUI_DEV_ANONYMOUS_WS: '1'
+    # WebSocket auth (Task 26a) is now wired through the cookie/session
+    # check at handshake time. Setting WEBUI_DEV_ANONYMOUS_WS=1 here keeps
+    # the legacy anonymous path open for engineers exploring /ws without
+    # logging in first. Production compose intentionally omits it.
   volumes:
     - ./configs/cluster.yaml:/opt/webui/etc/cluster.yaml:ro
   healthcheck:

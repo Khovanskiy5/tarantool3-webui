@@ -132,7 +132,18 @@ GraphQL-карта (для будущих резолверов, `GRAPHQL_FIELD`)
 - Audit-log + retention → Tasks 24, 27.
 - Edit-lock TTL и force-take → Tasks 30, 34.
 - Lua/SQL console: gating, audit, rate-limit → Task 44.
-- WebSocket auth + Origin check + force-close on logout → Tasks 21, 26a.
+- WebSocket auth + Origin check + force-close on logout → Tasks 21 ✅, 26a ✅ (см. ниже).
+
+## WebSocket аутентификация (Task 26a)
+
+На handshake `/ws` сервер:
+
+1. Проверяет `Origin` против `roles_cfg.webui.ws_allowed_origins` (пустой список = разрешить любой Origin).
+2. Читает cookie `webui_session` и валидирует через `auth.session.get`.
+3. Без сессии и без флага `WEBUI_DEV_ANONYMOUS_WS=1` (dev-режим) — `401`.
+4. Иначе — стандартный 101 Switching Protocols.
+
+Реестр WS (`ws_registry`) теперь хранит `session_id` и `user`. Хелпер `close_by_session(session_id, reason)` шлёт всем коннектам сессии RFC 6455 close `1001 Going Away`, что используется `/api/auth/logout` для немедленной отзыва доступа в момент logout.
 - Bruteforce mitigation → Task 25.
 - Supply chain (Bun lockfile, rock checksums) → Task 12.
 - Penetration testing checklist → Task 12 (OWASP ZAP в CI).
