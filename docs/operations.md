@@ -241,11 +241,99 @@ docker compose -f docker/docker-compose.dev.yml start tt-1
 - **HA для самого HAProxy** — единственный экземпляр. keepalived/VRRP опционально → Task 11.
 - **Frontend dev-server (Vite HMR)** — для текущего M0 не нужен (SPA уже включён в каждый инстанс через embed-assets). HMR-режим вернётся как опциональный сервис когда понадобится для активной разработки фронта (вне M0 scope).
 
+## Production deployment template (Task 11)
+
+`docker/docker-compose.prod.example.yml` — стартовая точка для production-развёртывания на одном узле. Шаблон вынесен в репозиторий именно с суффиксом `.example`: операторы копируют его в свою деплой-директорию и адаптируют под конкретное окружение.
+
+### Артефакты
+
+| Файл | Назначение |
+|---|---|
+| `docker/docker-compose.prod.example.yml` | 3 инстанса + HAProxy на 443. External etcd через env-vars. TLS-сертификаты через bind-mount. Resource limits, `restart: unless-stopped`, capability drops |
+| `docker/haproxy/haproxy.prod.example.cfg` | TLS termination на 443, HTTP→HTTPS redirect, HSTS, sticky cookie, stats UI с trusted-network ACL, TLS 1.3 only |
+| `docker/configs/cluster.prod.example.yaml` | Tarantool 3.x cluster config с config source = etcd + mTLS, secrets через `${ENV_VAR}`, `roles_cfg.webui.graphiql_enabled: false` |
+
+### Hard prerequisites
+
+Шаблон **не функционален** без следующих шагов на стороне оператора:
+
+1. **External etcd cluster** (≥3 нод, mTLS, RBAC). Single-node etcd из dev-compose недостаточен. Endpoints, username и password передаются через env vars / Docker secrets.
+2. **TLS bundle для HAProxy** — `tls/webui.pem` (полная chain + private key одним PEM-файлом).
+3. **mTLS material для iproto** — `tls/peer.{crt,key}` + `tls/peer-ca.crt`. Iproto-порты (3301) НЕ публикуются наружу — внутренний docker network single-host или production overlay/L3 fabric — единственный путь.
+4. **etcd-client rock в образе** — добавляется в Task 30. До этого `tt-*` стартуют только если cluster config доступен как файл, а etcd использовать не получится.
+5. **TLS material для etcd connections** — `tls/etcd-ca.crt`, `tls/etcd-client.{crt,key}` для mTLS клиента к etcd.
+
+### Production checklist
+
+Перед `docker compose up -d` пройдитесь по списку:
+
+- [ ] Скопировать `docker-compose.prod.example.yml` → `docker-compose.prod.yml` в деплой-директории.
+- [ ] Скопировать `cluster.prod.example.yaml` → `cluster.prod.yaml` и адаптировать `config.etcd.endpoints` под реальный etcd cluster.
+- [ ] Подготовить TLS-материал в `./tls/`:
+  - [ ] `webui.pem` — chain + key для HAProxy (получить от ACME / внутреннего CA).
+  - [ ] `peer.{crt,key}` + `peer-ca.crt` — mTLS между Tarantool-инстансами (issued локальным cluster CA).
+  - [ ] `etcd-client.{crt,key}` + `etcd-ca.crt` — mTLS к etcd.
+- [ ] Создать `.env` файл с секретами:
+  ```bash
+  WEBUI_VERSION=1.0.0
+  REPLICATOR_PASSWORD=<from secret manager>
+  WEBUI_PEER_PASSWORD=<from secret manager>
+  ETCD_PASSWORD=<from secret manager>
+  WEBUI_LOG_LEVEL=info
+  ```
+  Compose автоматически читает `.env` из текущей директории; для Docker Swarm используйте `docker secret create`.
+- [ ] Заменить placeholders `${REPLICATOR_PASSWORD}` etc в `cluster.prod.yaml` на ссылки на секреты (envsubst при деплое или Docker secrets).
+- [ ] Удалить или закомментировать `127.0.0.1:8404:8404` если stats UI не нужен на этом хосте, либо добавить SSH-туннель / VPN access.
+- [ ] Обновить `haproxy.prod.cfg`:
+  - [ ] `bind *:443 ssl crt /etc/haproxy/certs/webui.pem` — путь к bundle верный.
+  - [ ] `resolvers default_resolver { nameserver dns <IP>:53 }` — реальный DNS-сервер.
+  - [ ] ACL `trusted` для stats UI — добавить нужные CIDR / удалить лишние.
+- [ ] Настроить tarantool snapshots: рекомендуется `snapshot.by.interval: 86400` (раз в сутки) + remote rsync/S3 push (см. раздел Backup в `docs/architecture.md` контракт «Backup и DR»).
+- [ ] Подключить Prometheus к `/api/metrics/webui` (Task 42a) когда оно появится.
+- [ ] Настроить log-shipper (vector / fluent-bit / journald) для контейнерных stdout/stderr.
+- [ ] Проверить firewall: 443 (public), 80 (public, only for redirect), 8404 (private/VPN), 3301 (internal cluster network only, mTLS), 2379 (etcd, mTLS).
+
+### HAProxy high availability
+
+Шаблон описывает один экземпляр HAProxy — single point of failure. Для production-grade развёртывания:
+
+- Запустить **две** HAProxy ноды (active/standby) с одинаковым конфигом.
+- Управлять floating IP через **keepalived + VRRP**:
+  - Master priority 110, backup priority 100.
+  - Track HAProxy через `vrrp_script` (например `pidof haproxy`).
+  - Floating IP — публичный, на нём слушает `bind *:443 ssl crt …`.
+- DNS A-record указывает на floating IP.
+
+Альтернативы: AWS NLB / GCP TCP LB перед двумя HAProxy с собственной health check логикой; Anycast IP в собственной AS.
+
+### Sizing guidelines
+
+| Размер кластера | Per `tt-N` контейнер | HAProxy |
+|---|---|---|
+| 3–10 инстансов (small) | 1 vCPU, 512 MB | 0.5 vCPU, 128 MB |
+| 10–50 (medium) | 2 vCPU, 1 GB | 1 vCPU, 256 MB |
+| 50–256 (large) | 4 vCPU, 2 GB | 2 vCPU, 512 MB |
+
+Текущие limits в `docker-compose.prod.example.yml` сделаны под medium baseline. Tune `deploy.resources.limits` под профиль.
+
+### Rolling upgrade
+
+Процедура подробно описана в `docs/architecture.md` → раздел «Release pipeline» (см. Task 55). Кратко:
+
+1. `git pull` новой ревизии в деплой-директории.
+2. `docker compose build` нового образа.
+3. Поочерёдно по одному инстансу: `docker compose stop tt-X` → `docker compose up -d tt-X` → дождаться healthy → следующий.
+4. HAProxy сам выводит из ротации через healthcheck.
+
+### Не входит в шаблон
+
+- **Multiple HAProxy nodes + keepalived** — упомянуто выше как опция, не разворачивается шаблоном.
+- **External etcd cluster setup** — выходит за scope; операторы используют свой etcd (на baremetal, k8s через etcd-operator, или managed как DigitalOcean Managed etcd / AWS DocumentDB).
+- **Сам Prometheus / Grafana / Vector** — `webui-instance` экспортирует метрики, оператор разворачивает сборщик в своём observability-стеке.
+
 ## Дальнейшие разделы
 
 Появляются по мере реализации задач:
-
-- `docker/docker-compose.prod.example.yml` → Task 11.
 - Kubernetes Helm chart → Task 11a.
 - CI Pipeline → Task 12.
 - Rolling upgrade процедура → Task 55.

@@ -1,0 +1,207 @@
+#
+# Production deployment template for the Tarantool 3.7 WebUI.
+#
+# Copy to docker-compose.prod.yml in your deployment directory and
+# adapt as needed. See docs/operations.md, section "Production
+# deployment checklist" for the full adaptation guide.
+#
+# Hard requirements before this compose is functional:
+#   1. External etcd cluster (≥3 nodes, mTLS, RBAC) — endpoints,
+#      username and password are provided via env vars / Docker secrets.
+#      The single-node etcd from docker-compose.dev.yml is NOT
+#      production-grade.
+#   2. TLS certificate bundle for HAProxy at ./tls/webui.pem (or any
+#      path you bind-mount). The bundle must contain the full chain +
+#      private key in a single PEM file.
+#   3. mTLS certificates for peer-to-peer iproto traffic at
+#      ./tls/peer.{crt,key} and ./tls/peer-ca.crt. The iproto port
+#      (3301) must not be exposed to the public internet.
+#   4. The webui-instance image must be built with the etcd-client rock
+#      installed (added in Task 30). For the M0 image this is not yet
+#      the case; tt-N services will start with file-only config and
+#      etcd integration kicks in once Task 30 lands.
+#
+# Image policy: only official upstream images.
+#   * haproxy:3.3.4-alpine
+#   * webui-instance:<release-tag>   (built from docker/Dockerfile.instance)
+# No bitnami / community derivatives.
+name: webui-prod
+
+# Common settings shared by tt-1/tt-2/tt-3. Override per instance
+# below only where genuinely needed (INSTANCE_NAME, ports).
+x-tarantool-common: &tarantool-common
+  image: webui-instance:${WEBUI_VERSION:-latest}
+  restart: unless-stopped
+  # Production logs ship to a host-level collector. The json-file
+  # driver keeps the last ~100 MB on disk for debugging fallback.
+  logging:
+    driver: json-file
+    options:
+      max-size: '20m'
+      max-file: '5'
+  environment: &tarantool-env
+    TT_CONFIG: /opt/webui/etc/cluster.yaml
+    WEBUI_PORT: '8081'
+    WEBUI_LOG_LEVEL: ${WEBUI_LOG_LEVEL:-info}
+    # Secrets resolved from the env file or from Docker secrets:
+    REPLICATOR_PASSWORD: ${REPLICATOR_PASSWORD:?required}
+    WEBUI_PEER_PASSWORD: ${WEBUI_PEER_PASSWORD:?required}
+    ETCD_PASSWORD: ${ETCD_PASSWORD:?required}
+  volumes:
+    # Cluster config — mounted read-only, contents read via env subst
+    # on role start (Task 30+ supplies the etcd integration that
+    # replaces the file contents at runtime).
+    - ./configs/cluster.prod.yaml:/opt/webui/etc/cluster.yaml:ro
+    # mTLS material for iproto peer connections.
+    - ./tls/peer.crt:/etc/tarantool/tls/peer.crt:ro
+    - ./tls/peer.key:/etc/tarantool/tls/peer.key:ro
+    - ./tls/peer-ca.crt:/etc/tarantool/tls/peer-ca.crt:ro
+    # TLS material for talking to external etcd.
+    - ./tls/etcd-ca.crt:/etc/tarantool/tls/etcd-ca.crt:ro
+    - ./tls/etcd-client.crt:/etc/tarantool/tls/etcd-client.crt:ro
+    - ./tls/etcd-client.key:/etc/tarantool/tls/etcd-client.key:ro
+  healthcheck:
+    test: ['CMD', 'curl', '-fsS', 'http://127.0.0.1:8081/api/health']
+    interval: 5s
+    timeout: 3s
+    retries: 6
+    start_period: 60s
+  # Resource caps. Tune to your workload — see docs/operations.md
+  # → "Sizing guidelines" for the recommended baseline per cluster size.
+  deploy:
+    resources:
+      limits:
+        cpus: '2.0'
+        memory: 2g
+      reservations:
+        cpus: '0.5'
+        memory: 512m
+  # Drop all Linux capabilities not required by tarantool. NET_BIND_*
+  # is unnecessary because the unprivileged tarantool user listens on
+  # ports ≥ 1024 only.
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  networks:
+    - webui-net
+
+services:
+  # ── tarantool instances ───────────────────────────────────────────
+  tt-1:
+    <<: *tarantool-common
+    container_name: webui-tt-1
+    hostname: tt-1
+    environment:
+      <<: *tarantool-env
+      INSTANCE_NAME: tt-1
+    volumes:
+      - ./configs/cluster.prod.yaml:/opt/webui/etc/cluster.yaml:ro
+      - ./tls/peer.crt:/etc/tarantool/tls/peer.crt:ro
+      - ./tls/peer.key:/etc/tarantool/tls/peer.key:ro
+      - ./tls/peer-ca.crt:/etc/tarantool/tls/peer-ca.crt:ro
+      - ./tls/etcd-ca.crt:/etc/tarantool/tls/etcd-ca.crt:ro
+      - ./tls/etcd-client.crt:/etc/tarantool/tls/etcd-client.crt:ro
+      - ./tls/etcd-client.key:/etc/tarantool/tls/etcd-client.key:ro
+      - tt-1-data:/opt/webui/var/lib
+    # iproto port intentionally NOT published. The internal docker
+    # network (webui-net) and any production overlay/L3 fabric is the
+    # only path peers should reach 3301 over.
+
+  tt-2:
+    <<: *tarantool-common
+    container_name: webui-tt-2
+    hostname: tt-2
+    environment:
+      <<: *tarantool-env
+      INSTANCE_NAME: tt-2
+    volumes:
+      - ./configs/cluster.prod.yaml:/opt/webui/etc/cluster.yaml:ro
+      - ./tls/peer.crt:/etc/tarantool/tls/peer.crt:ro
+      - ./tls/peer.key:/etc/tarantool/tls/peer.key:ro
+      - ./tls/peer-ca.crt:/etc/tarantool/tls/peer-ca.crt:ro
+      - ./tls/etcd-ca.crt:/etc/tarantool/tls/etcd-ca.crt:ro
+      - ./tls/etcd-client.crt:/etc/tarantool/tls/etcd-client.crt:ro
+      - ./tls/etcd-client.key:/etc/tarantool/tls/etcd-client.key:ro
+      - tt-2-data:/opt/webui/var/lib
+
+  tt-3:
+    <<: *tarantool-common
+    container_name: webui-tt-3
+    hostname: tt-3
+    environment:
+      <<: *tarantool-env
+      INSTANCE_NAME: tt-3
+    volumes:
+      - ./configs/cluster.prod.yaml:/opt/webui/etc/cluster.yaml:ro
+      - ./tls/peer.crt:/etc/tarantool/tls/peer.crt:ro
+      - ./tls/peer.key:/etc/tarantool/tls/peer.key:ro
+      - ./tls/peer-ca.crt:/etc/tarantool/tls/peer-ca.crt:ro
+      - ./tls/etcd-ca.crt:/etc/tarantool/tls/etcd-ca.crt:ro
+      - ./tls/etcd-client.crt:/etc/tarantool/tls/etcd-client.crt:ro
+      - ./tls/etcd-client.key:/etc/tarantool/tls/etcd-client.key:ro
+      - tt-3-data:/opt/webui/var/lib
+
+  # ── HAProxy ───────────────────────────────────────────────────────
+  haproxy:
+    image: haproxy:3.3.4-alpine
+    container_name: webui-haproxy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: '20m'
+        max-file: '5'
+    volumes:
+      - ./haproxy/haproxy.prod.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      # TLS bundle: server cert chain + private key concatenated.
+      - ./tls/webui.pem:/etc/haproxy/certs/webui.pem:ro
+    ports:
+      # Public HTTPS — terminate TLS here.
+      - '443:443'
+      # Public HTTP — redirects to HTTPS.
+      - '80:80'
+      # Stats UI bound on the management network only. Adjust the
+      # binding IP to the actual management interface (or use a
+      # docker network alias on a separate management overlay).
+      - '127.0.0.1:8404:8404'
+    depends_on:
+      tt-1:
+        condition: service_healthy
+      tt-2:
+        condition: service_healthy
+      tt-3:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 256m
+        reservations:
+          cpus: '0.25'
+          memory: 64m
+    cap_drop:
+      - ALL
+    # net_bind_service is required because HAProxy binds 80/443.
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - webui-net
+
+# ── network ───────────────────────────────────────────────────────────
+networks:
+  webui-net:
+    driver: bridge
+    name: webui-prod-net
+
+# ── persistent data ──────────────────────────────────────────────────
+# Per-instance volumes. For real production these are usually backed by
+# a CSI driver (Longhorn / Ceph / EBS) or a host bind-mount on a
+# dedicated SSD. The named volume below is a sensible single-node
+# default that survives container recreation.
+volumes:
+  tt-1-data:
+  tt-2-data:
+  tt-3-data:
