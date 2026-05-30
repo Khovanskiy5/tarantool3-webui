@@ -1,0 +1,70 @@
+#
+# Suggestions query + apply mutations.
+#
+# The Suggestions field returns every suggestion category in one
+# round-trip — the cluster page renders all of them as a single
+# banner above the topology.
+#
+
+query SuggestionsOverview {
+  suggestions {
+    forceApply {
+      ...ForceApplyFields
+    }
+    restartReplication {
+      ...RestartReplicationFields
+    }
+    refreshVshard {
+      id
+    }
+    disableServer {
+      id
+    }
+    refineUri {
+      id
+    }
+    restartFailover {
+      id
+    }
+    bootstrapVshard {
+      id
+    }
+  }
+}
+
+mutation ApplyForceApply($instanceUuids: [String!]!) {
+  applyForceApply(instanceUuids: $instanceUuids) {
+    ...SuggestionApplyFields
+  }
+}
+
+mutation ApplyRestartReplication($instanceUuids: [String!]!) {
+  applyRestartReplication(instanceUuids: $instanceUuids) {
+    ...SuggestionApplyFields
+  }
+}
+
+fragment ForceApplyFields on ForceApplySuggestion {
+  id
+  instanceAlias
+  instanceUuid
+  reason
+}
+
+fragment RestartReplicationFields on RestartReplicationSuggestion {
+  id
+  instanceAlias
+  instanceUuid
+  reason
+}
+
+fragment SuggestionApplyFields on SuggestionApplyResult {
+  ok
+  message
+  unknown
+  results {
+    peer
+    ok
+    err
+  }
+}

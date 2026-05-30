@@ -46,4 +46,11 @@ installUrql(app);
 
 app.mount('#app');
 
-info('webui SPA mounted', { app_version: APP_VERSION });
+// Start the live cluster subscription right after mount. The client
+// has its own backoff loop; if /ws is unreachable (production
+// without WEBUI_DEV_ANONYMOUS_WS) the stores keep working via
+// network-only urql refetches.
+import('@/shared/api/ws').then(({ wsClient }) => {
+  wsClient.connect();
+  info('webui SPA mounted', { app_version: APP_VERSION });
+});

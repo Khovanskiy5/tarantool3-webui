@@ -1,0 +1,56 @@
+#
+# Issues query family.
+#
+# IssuesPage drives the /issues page and the TopBar badge.
+# Filters are passed through the GraphQL surface as-is — backend
+# enforces severity / scope / category whitelists via enums.
+#
+# IssuesSummary is intentionally a separate query so the badge can
+# subscribe to it without paying for the full list payload.
+#
+
+query IssuesPage(
+  $severity: IssueSeverity
+  $scope: IssueScope
+  $category: IssueCategory
+  $instance: String
+  $replicaset: String
+  $after: String
+  $limit: Int
+) {
+  issues(
+    severity: $severity
+    scope: $scope
+    category: $category
+    instance: $instance
+    replicaset: $replicaset
+    after: $after
+    limit: $limit
+  ) {
+    items {
+      ...IssueCardFields
+    }
+    nextCursor
+    totalCount
+  }
+}
+
+query IssuesSummary {
+  issuesSummary {
+    warning
+    critical
+    total
+  }
+}
+
+fragment IssueCardFields on Issue {
+  id
+  severity
+  category
+  scope
+  message
+  instance
+  replicaset
+  createdAt
+  updatedAt
+}

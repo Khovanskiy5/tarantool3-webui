@@ -22,7 +22,6 @@
 
 import {
   createClient,
-  cacheExchange,
   fetchExchange,
   type Client,
   type AnyVariables,
@@ -164,7 +163,14 @@ export const createWebuiClient = (handlers: ErrorHandlers = {}): Client => {
       },
     },
     exchanges: [
-      cacheExchange,
+      // cacheExchange (the default document cache) injects a
+      // `__typename` selection into every fragment alongside the
+      // top-level one that already requests it; the backend
+      // graphql rock 0.x rejects `two selections into the one
+      // field: __typename` instead of merging per the GraphQL
+      // spec. Skip the cache for now — live state arrives over
+      // WS so the cache buys little — and revisit once the rock
+      // implements field-selection merging.
       csrfExchange,
       tapErrorCodes(merged),
       fetchExchange,

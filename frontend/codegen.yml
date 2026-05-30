@@ -22,6 +22,15 @@ generates:
       # @urql/vue (NOT the React-flavoured urql package). It is the
       # correct flavour for our app/providers/urql wiring.
       - typescript-vue-urql
+    hooks:
+      # codegen emits IssueSeverity / IssueScope / IssueCategory
+      # twice because the operations plugin re-declares enum types
+      # used as $variable kinds. None of the official knobs
+      # (preResolveTypes, onlyOperationTypes, inlineFragmentTypes)
+      # suppress the duplicate, so a post-write script strips the
+      # later copy. See tools/dedup-generated.mjs for the regex.
+      afterOneFileWrite:
+        - 'node tools/dedup-generated.mjs'
     config:
       avoidOptionals: true
       maybeValue: 'T | null'

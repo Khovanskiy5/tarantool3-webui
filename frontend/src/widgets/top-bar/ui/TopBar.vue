@@ -5,6 +5,7 @@ import SelectButton from 'primevue/selectbutton';
 
 import { SUPPORTED_LOCALES, setLocale, type Locale } from '@/shared/i18n';
 import { useHealth } from '@/shared/lib/health';
+import { IssuesBadge } from '@/widgets/issues-badge';
 
 const { t, locale } = useI18n();
 const { snapshot } = useHealth();
@@ -43,6 +44,7 @@ const localeModel = computed<Locale>({
       <span class="webui-top-bar__subtitle">{{ t('app.subtitle') }}</span>
     </div>
     <div class="webui-top-bar__right">
+      <IssuesBadge />
       <span class="webui-top-bar__instance">
         <span class="webui-top-bar__instance-label">
           {{ t('widgets.top_bar.instance_label') }}

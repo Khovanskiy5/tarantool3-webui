@@ -9,9 +9,9 @@
 import { provideClient } from '@urql/vue';
 import type { App } from 'vue';
 
-import { createWebuiClient } from '@/shared/api/graphql';
+import { getClient } from '@/shared/api/graphql';
 
 export const installUrql = (app: App): void => {
-  const client = createWebuiClient();
+  const client = getClient();
   app.runWithContext(() => provideClient(client));
 };

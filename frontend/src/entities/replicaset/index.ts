@@ -5,3 +5,4 @@ export {
   getMemberAliases,
   asRollup,
 } from './model/selectors';
+export { default as ReplicasetCard } from './ui/ReplicasetCard.vue';
