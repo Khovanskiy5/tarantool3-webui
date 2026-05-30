@@ -24,6 +24,20 @@ credentials:
     webui_peer:
       password: 'webui-peer-dev-password'
       roles: [super]
+    # Human accounts for the dev cluster. WebUI RBAC mapping
+    # (viewer / operator / admin) is set in `roles_cfg.webui.rbac`
+    # below; the Tarantool privileges below are only the minimum
+    # `box.schema.user.auth_password` needs to validate the
+    # credentials at login time.
+    admin_dev:
+      password: 'admin-dev-password'
+      roles: [public]
+    operator_dev:
+      password: 'operator-dev-password'
+      roles: [public]
+    viewer_dev:
+      password: 'viewer-dev-password'
+      roles: [public]
 
 iproto:
   advertise:

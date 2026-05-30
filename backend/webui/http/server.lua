@@ -102,6 +102,23 @@ local function register_builtin_routes(httpd, role_opts)
         middleware.wrap('health', health_api.make_handler(enriched_status_provider))
     )
 
+    -- Auth surface (Task 25). Lazy require so a misconfigured
+    -- session storage does not block the rest of the role.
+    local auth_ok, auth_api = pcall(require, 'webui.api.auth')
+    if auth_ok then
+        httpd:route({ path = '/api/auth/login',  method = 'POST' },
+            middleware.wrap('auth_login',  auth_api.handler_login))
+        httpd:route({ path = '/api/auth/logout', method = 'POST' },
+            middleware.wrap('auth_logout', auth_api.handler_logout))
+        httpd:route({ path = '/api/auth/me',     method = 'GET' },
+            middleware.wrap('auth_me',     auth_api.handler_me))
+        logger.info('auth routes registered')
+    else
+        logger.warn('auth module load failed; /api/auth disabled', {
+            err = tostring(auth_api),
+        })
+    end
+
     -- GraphQL surface. Loaded inside pcall so a broken schema does not
     -- prevent the rest of the role from starting; the failure surfaces
     -- as 503 UNAVAILABLE on /admin/api requests and a warn log line.

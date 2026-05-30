@@ -13,6 +13,7 @@
 --
 
 local checks = require('checks')
+local digest = require('digest')
 
 local storage  = require('webui.storage.spaces')
 local log_util = require('webui.log_util')
@@ -75,6 +76,18 @@ function M.delete(id)
         return true
     end
     return false
+end
+
+-- Generate a fresh opaque session id (256-bit entropy, url-safe).
+function M.new_id()
+    return digest.base64_encode(digest.urandom(32),
+        { nowrap = true, urlsafe = true })
+end
+
+-- Generate a CSRF token paired with the session cookie.
+function M.new_csrf()
+    return digest.base64_encode(digest.urandom(32),
+        { nowrap = true, urlsafe = true })
 end
 
 -- Sweep expired sessions. Called from a periodic fiber once the

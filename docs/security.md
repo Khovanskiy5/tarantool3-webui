@@ -49,11 +49,47 @@ REST-ошибки никогда не отдают stack-trace или внутр
 
 Класс ошибки `INTERNAL` (единственный с `capture_stack=true`) полностью маскируется во внешнем ответе: тело содержит `"message": "internal error"`, а реальные данные пишутся в structured-лог с тем же `request_id` — оператор находит их через `grep`.
 
+## Аутентификация (REST `/api/auth/*`, Task 25)
+
+Сессионная аутентификация реализована на REST. Канал — `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`.
+
+Контракт `/login`:
+
+- Тело: `{ "user": "...", "password": "..." }` (`application/json`).
+- Проверка: `box.schema.user.password(password)` сравнивается с `_user[5]['chap-sha1']` (Tarantool 3.x не экспортирует `auth_password`). Системные пользователи (`webui_peer`, `replicator`) явно запрещены — `403 FORBIDDEN`.
+- На успех — `200`, тело `{ user, csrf, expiresIn }`, заголовок `X-Csrf-Token`, cookie `webui_session=<id>` со флагами `Path=/; HttpOnly; SameSite=Strict; Max-Age=<ttl>`.
+- Флаг `Secure` добавляется только если запрос пришёл через HTTPS (по `x-forwarded-proto: https`, которое выставляет HAProxy перед инстансом).
+- На неуспех — `401 LOGIN_FAILED`.
+
+Контракт `/logout`:
+
+- Cookie `webui_session` удаляется (Set-Cookie с `Max-Age=0` + просроченным `Expires`).
+- Сессия в `_webui_sessions` удаляется.
+- Если зарегистрирован реестр WebSocket-подключений (`webui.http.ws_registry.close_by_session`), все WS-сессии этого пользователя закрываются (полноценное закрытие — Task 26a).
+- Audit-log: запись с `action = "auth.logout"`.
+
+Контракт `/me`:
+
+- Требует cookie `webui_session`. Без cookie или с просроченной сессией → `401 UNAUTHORIZED`.
+- Тело: `{ user, roles, expiresAt, csrf }`. Поле `roles` сейчас пустой массив — RBAC-резолвинг подключается в Task 26.
+
+Rate-limit (anti-bruteforce):
+
+- `auth/rate_limit.lua` — in-memory sliding window: 5 неуспешных попыток / минута / IP / action.
+- Успешный login сбрасывает счётчик для (IP, action).
+- 6-я попытка возвращает `429 RATE_LIMITED` и логирует error.
+- Хранилище локальное на инстансе — стоимость синхронизации между пирами не оправдывает столь маленький бюджет.
+
+Audit-log:
+
+- `auth.login` (scope = `session`, payload = `{ ip }`) — на успешный вход.
+- `auth.logout` (scope = `session`) — на выход.
+
 ## Дальнейшие разделы
 
 Появляются по мере реализации задач:
 
-- Аутентификация (sessions, cookie, CSRF) → Tasks 25, 26.
+- Аутентификация (sessions, cookie, CSRF) → Tasks 25 ✅, 26.
 - RBAC (`viewer/operator/admin/superuser`) → Task 26 + `docs/rbac-matrix.md`.
 - TLS: HAProxy на 443 + mTLS на peer net.box → Task 11, 16.
 - Peer-cookie (`webui_peer` system user) → Task 15.
