@@ -91,7 +91,9 @@ local Query = types.object {
         },
         configJsonSchema = {
             kind = types.string,
-            description = 'JSON-encoded JSON Schema of the Tarantool cluster config, taken from `config:jsonschema()`. Null when the config module is unavailable.',
+            description = 'JSON-encoded JSON Schema of the Tarantool cluster ' ..
+                'config, taken from `config:jsonschema()`. Null when the ' ..
+                'config module is unavailable.',
             resolve = resolve_config_jsonschema,
         },
     },

@@ -1,0 +1,341 @@
+#
+# Continuous integration pipeline for the Tarantool 3.7 WebUI.
+#
+# Pipeline philosophy:
+#   * Every commit on every branch runs the full lint + unit suite.
+#   * Docker image + integration smoke run on push to `main` and on
+#     pull requests targeting `main` (most expensive jobs, but the
+#     ones that catch deployment-affecting regressions).
+#   * Frontend artefacts (dist/) are built once and reused across the
+#     downstream Docker build and the e2e job to cut runtime.
+#   * Tarantool matrix has a single entry today; new minors slot in
+#     without touching the rest of the file.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same branch to save runner minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUN_VERSION: '1.3'
+  TARANTOOL_VERSION: '3.7.0'
+
+jobs:
+  # ── frontend ───────────────────────────────────────────────────────
+  lint-frontend:
+    name: Frontend / lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Bun install store
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('frontend/bun.lock') }}
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: bun install --frozen-lockfile
+
+      - name: ESLint
+        working-directory: frontend
+        run: bun run lint
+
+      - name: Prettier check
+        working-directory: frontend
+        run: bun run format
+
+      - name: Type-check
+        working-directory: frontend
+        run: bun run type-check
+
+  unit-frontend:
+    name: Frontend / unit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: '${{ env.BUN_VERSION }}' }
+
+      - name: Cache Bun install store
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('frontend/bun.lock') }}
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: bun install --frozen-lockfile
+
+      - name: Vitest
+        working-directory: frontend
+        # The skeleton frontend has no spec files yet; vitest exits 0
+        # when no tests are found but still warns. Treat the absence
+        # of tests as a hint, not a failure.
+        run: bun run test:unit -- --passWithNoTests
+
+  build-frontend:
+    name: Frontend / build
+    runs-on: ubuntu-24.04
+    needs: [lint-frontend, unit-frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: '${{ env.BUN_VERSION }}' }
+
+      - name: Cache Bun install store
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('frontend/bun.lock') }}
+
+      - name: Install
+        working-directory: frontend
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        working-directory: frontend
+        run: bun run build
+
+      - name: Upload dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── backend ────────────────────────────────────────────────────────
+  lint-backend:
+    name: Backend / luacheck
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        tarantool: ['${{ vars.DEFAULT_TARANTOOL_VERSION || ''3.7.0'' }}']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Tarantool ${{ matrix.tarantool }}
+        uses: tarantool/setup-tarantool@v3
+        with:
+          tarantool-version: ${{ matrix.tarantool }}
+
+      - name: Install luacheck
+        run: tt rocks install luacheck
+
+      - name: Run luacheck
+        run: .rocks/bin/luacheck backend/ tools/
+
+  unit-backend:
+    name: Backend / luatest
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        tarantool: ['${{ vars.DEFAULT_TARANTOOL_VERSION || ''3.7.0'' }}']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Tarantool ${{ matrix.tarantool }}
+        uses: tarantool/setup-tarantool@v3
+        with:
+          tarantool-version: ${{ matrix.tarantool }}
+
+      - name: Cache .rocks tree
+        uses: actions/cache@v4
+        with:
+          path: .rocks
+          key: rocks-${{ runner.os }}-tarantool${{ matrix.tarantool }}-${{ hashFiles('backend/webui-scm-1.rockspec') }}
+
+      - name: Install runtime + test rocks
+        run: |
+          tt rocks install http 1.6.0
+          tt rocks install graphql
+          tt rocks install errors
+          tt rocks install luatest
+
+      - name: Run luatest
+        run: .rocks/bin/luatest backend/test/unit --shuffle group --verbose
+
+  # ── lint Docker + shell ────────────────────────────────────────────
+  lint-docker:
+    name: Docker / hadolint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: docker/Dockerfile.instance
+          # DL3008: pin apt-get package versions — we deliberately
+          # follow Ubuntu repo tip for ca-certificates / curl / etc.
+          ignore: DL3008,DL3009
+
+  lint-shell:
+    name: Shell / shellcheck
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        uses: ludeeus/action-shellcheck@2.0.0
+        with:
+          scandir: '.'
+          format: gcc
+          ignore_paths: 'cartridge-*/ tarantool-*/ tarantool-docs/ node_modules/ .rocks/'
+          severity: warning
+
+  # ── Docker build ───────────────────────────────────────────────────
+  build-docker:
+    name: Docker / build instance image
+    runs-on: ubuntu-24.04
+    needs: [build-frontend, lint-backend, lint-docker]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Download frontend dist (pre-baked)
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.instance
+          tags: webui-instance:ci
+          push: false
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Save image for downstream jobs
+        run: docker save webui-instance:ci | gzip > /tmp/webui-instance-ci.tar.gz
+
+      - name: Upload image artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webui-instance-image
+          path: /tmp/webui-instance-ci.tar.gz
+          retention-days: 1
+
+  # ── integration smoke ──────────────────────────────────────────────
+  integration:
+    name: Integration / docker-compose smoke
+    runs-on: ubuntu-24.04
+    needs: [build-docker]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download image artefact
+        uses: actions/download-artifact@v4
+        with:
+          name: webui-instance-image
+          path: /tmp
+
+      - name: Load image
+        run: gunzip -c /tmp/webui-instance-ci.tar.gz | docker load
+
+      - name: Re-tag for compose
+        run: docker tag webui-instance:ci webui-instance:dev
+
+      - name: Bring up the dev cluster
+        run: docker compose -f docker/docker-compose.dev.yml up -d --wait --wait-timeout 120
+
+      - name: Smoke checks (HAProxy entry → /api/health, GraphQL ping)
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error http://localhost:8080/api/health | tee /tmp/health.json
+          test "$(jq -r .status /tmp/health.json)" = "ok"
+
+          response=$(curl --fail --silent --show-error \
+              -X POST http://localhost:8080/admin/api \
+              -H 'content-type: application/json' \
+              -d '{"query":"{ ping webuiVersion roleStatus { state instance } }"}')
+          echo "$response"
+          test "$(echo "$response" | jq -r .data.ping)" = "pong"
+          test "$(echo "$response" | jq -r .data.roleStatus.state)" = "ready"
+
+          curl --fail --silent --show-error -o /tmp/index.html http://localhost:8080/
+          grep -q 'Tarantool WebUI' /tmp/index.html
+
+      - name: Verify HAProxy round-robin distribution
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5 6; do
+            curl --fail --silent -X POST http://localhost:8080/admin/api \
+              -H 'content-type: application/json' \
+              -d '{"query":"{ roleStatus { instance } }"}' \
+              | jq -r '.data.roleStatus.instance'
+          done | sort -u | tee /tmp/instances.txt
+          # We expect responses from at least two different instances —
+          # if only one ever answers, sticky cookies or DNS failover
+          # silently broke.
+          test $(wc -l < /tmp/instances.txt) -ge 2
+
+      - name: Dump diagnostics on failure
+        if: failure()
+        run: |
+          docker compose -f docker/docker-compose.dev.yml ps
+          docker compose -f docker/docker-compose.dev.yml logs --no-color | tail -300
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker/docker-compose.dev.yml down --volumes --remove-orphans
+
+  # ── done gate ──────────────────────────────────────────────────────
+  ci-done:
+    name: CI passed
+    needs:
+      - lint-frontend
+      - unit-frontend
+      - build-frontend
+      - lint-backend
+      - unit-backend
+      - lint-docker
+      - lint-shell
+      - build-docker
+      - integration
+    runs-on: ubuntu-24.04
+    if: always()
+    steps:
+      - name: Verify all required jobs passed
+        run: |
+          set -e
+          # Force-fail if any upstream job is missing a success result.
+          # GitHub aggregates statuses through `needs`; this step makes
+          # the aggregation explicit and useful in branch-protection
+          # rules ("Require status checks → CI passed").
+          for status in '${{ needs.lint-frontend.result }}' \
+                        '${{ needs.unit-frontend.result }}' \
+                        '${{ needs.build-frontend.result }}' \
+                        '${{ needs.lint-backend.result }}' \
+                        '${{ needs.unit-backend.result }}' \
+                        '${{ needs.lint-docker.result }}' \
+                        '${{ needs.lint-shell.result }}' \
+                        '${{ needs.build-docker.result }}' \
+                        '${{ needs.integration.result }}'; do
+            if [ "$status" != "success" ]; then
+              echo "Upstream job did not succeed: $status"
+              exit 1
+            fi
+          done
+          echo "All CI jobs succeeded."

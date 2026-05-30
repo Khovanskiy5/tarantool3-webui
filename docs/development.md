@@ -90,6 +90,26 @@ make check-all
 
 Этот таргет должен быть зелёным **перед каждым PR**.
 
+## Локальный линт и тесты
+
+Используются те же команды, что и в CI (см. `.github/workflows/ci.yml`), так что зелёный локальный прогон практически гарантирует зелёный CI.
+
+| Команда | Что проверяет | Время |
+|---|---|---|
+| `.rocks/bin/luacheck backend/ tools/` | Backend Lua-стиль и сложность | ~1с |
+| `.rocks/bin/luatest backend/test/unit/` | Unit-тесты модулей backend | ~2с |
+| `cd frontend && bun run lint` | ESLint + plugin-vue + FSD boundaries | ~3с |
+| `cd frontend && bun run format` | Prettier (check-only) | ~1с |
+| `cd frontend && bun run type-check` | `vue-tsc --noEmit` | ~5с |
+| `cd frontend && bun run test:unit` | Vitest + happy-dom | секунды |
+| `cd frontend && bun run build` | Production Vite build | ~2с |
+| `hadolint docker/Dockerfile.instance` | Dockerfile стиль/best practices | ~1с |
+| `shellcheck docker/entrypoint.sh tools/gen-types.sh` | Shell-скрипты | <1с |
+| `haproxy -c -f docker/haproxy/haproxy.dev.cfg` | HAProxy конфиг (с сертификатами) | <1с |
+| `make dev` + `curl http://localhost:8080/api/health` | Integration smoke (полный стек) | ~30с |
+
+Полный pre-PR прогон одной командой: `make check-all` (зависит от установленных rocks `luacheck` и `luatest`).
+
 ## Запуск отдельных тестов
 
 ```bash
