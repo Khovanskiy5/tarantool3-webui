@@ -59,14 +59,10 @@ end
 
 -- ── public surface ──────────────────────────────────────────────────
 
--- map_call returns one result entry per peer, never raises.
--- Options:
---   * timeout  — per-call deadline; default 1s.
---   * peers    — optional whitelist of peer names; default all.
---   * args     — call arguments; default `{}`.
-function M.map_call(fn_name, args, opts)
-    checks('string', '?table', '?table')
-    args = args or {}
+-- Shared fan-out plumbing for map_call (conn:call) and map_eval
+-- (conn:eval). The only differences live in how the per-peer future
+-- is issued and what label rides into the logs.
+local function fanout(label, payload, issue_future, opts)
     opts = opts or {}
     local timeout = tonumber(opts.timeout) or M.DEFAULT_TIMEOUT_SEC
     local whitelist
@@ -83,15 +79,16 @@ function M.map_call(fn_name, args, opts)
             local connected = false
             local s_ok, s = pcall(function() return conn.state end)
             if s_ok then
-                -- net.box states: 'initial', 'active', 'graceful_shutdown',
-                -- 'error', 'error_reconnect', 'closed', 'fetch_schema'.
+                -- net.box states: 'initial', 'active',
+                -- 'graceful_shutdown', 'error', 'error_reconnect',
+                -- 'closed', 'fetch_schema'.
                 connected = (s == 'active' or s == 'fetch_schema')
             end
             if not connected then
                 results[name] = { ok = false, err = 'not connected' }
             else
                 local fut_ok, fut = pcall(function()
-                    return conn:call(fn_name, args, { is_async = true })
+                    return issue_future(conn)
                 end)
                 if not fut_ok then
                     results[name] = { ok = false, err = tostring(fut) }
@@ -110,20 +107,45 @@ function M.map_call(fn_name, args, opts)
         end)
         results[name] = M.interpret_result(ok, value, err)
         if not results[name].ok then
-            logger.warn('map_call peer failed', {
-                fn   = fn_name,
-                peer = name,
-                err  = results[name].err,
+            logger.warn(label .. ' peer failed', {
+                target = payload,
+                peer   = name,
+                err    = results[name].err,
             })
         else
-            logger.debug('map_call peer ok', {
-                fn   = fn_name,
-                peer = name,
+            logger.debug(label .. ' peer ok', {
+                target = payload,
+                peer   = name,
             })
         end
     end
 
     return results
+end
+
+-- map_call returns one result entry per peer, never raises.
+-- Options:
+--   * timeout — per-call deadline; default 1s.
+--   * peers   — optional whitelist of peer names; default all.
+function M.map_call(fn_name, args, opts)
+    checks('string', '?table', '?table')
+    args = args or {}
+    return fanout('map_call', fn_name, function(conn)
+        return conn:call(fn_name, args, { is_async = true })
+    end, opts)
+end
+
+-- map_eval ships a Lua expression to every peer; useful when the
+-- caller wants `box.info` / `box.stat()` / `config:info()` shapes
+-- without registering a global function on every instance. The
+-- expression body executes under the `execute on universe` grant
+-- the peer cookie sets up (Task 15).
+function M.map_eval(expr, args, opts)
+    checks('string', '?table', '?table')
+    args = args or {}
+    return fanout('map_eval', '<expr>', function(conn)
+        return conn:eval(expr, args, { is_async = true })
+    end, opts)
 end
 
 return M

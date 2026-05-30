@@ -359,6 +359,40 @@ API:
 
 Логи: INFO `peer connection opened`/`closed`/`peer URI changed; reconnecting`, WARN `no peer URI advertised`/`initial peer pool refresh failed`/`map_call peer failed`, DEBUG `map_call peer ok`.
 
+## Cluster state cache + poller
+
+`cluster/state.lua` — единственный источник правды для GraphQL-резолверов и WS-broadcaster. Поллер `cluster/poller.lua` — единственный writer.
+
+**state.lua** держит per-instance запись:
+
+```
+{
+  alias, uri, uuid, status, message, lag, uptime, vclock, version,
+  replicaset_name, group_name, labels, zone,
+  config_status, alerts, electable, is_ro, ro_reason,
+  reachable, last_seen, last_error, next_retry_at,
+}
+```
+
+Запись — атомарный swap всего state'а на каждом тике (`apply_tick`). Чтения через `snapshot()` возвращают deep-copy (`table.deepcopy`), так что читатели держат данные через `fiber.sleep` без гонки. Pure helpers `blank_server`, `merge_probe`, `group_by_replicaset`, `build_next_state` — unit-тестируемые.
+
+**poller.lua** — daemon-fibre, тикает каждые `POLL_INTERVAL_SEC=1.5s`:
+
+1. `peers.refresh()` (синхронизация с cluster config).
+2. `rpc.map_eval(PROBE_SRC, {}, {timeout=1.0s, peers=active})` — inline Lua expression в `conn:eval()` забирает `box.info`/`box.slab.info()`/`box.info.election`/`config:info()` с каждого active-peer.
+3. `update_backoff(...)` — только для actually-probed peer'ов. Backoff экспоненциальный: `1.5s, 3s, 6s, 12s, 24s, 30s, 30s, …` (cap = 30s). Skipped peer'ы (в backoff-окне) НЕ инкрементят attempt.
+4. `state.apply_tick(...)` — merge локального probe + per-peer результатов + topology из `config:instances()` + backoff в новый snapshot.
+
+`box.watch('config.info', cb)` зарегистрирован для immediate-poll при изменении конфига. Тик в-flight защищён через `tick_in_progress` re-entrancy guard.
+
+Логи:
+
+- INFO `poller started`/`poller stopped`/`config.info changed; scheduling immediate poll`
+- WARN `peer probe failed` — ТОЛЬКО на свежий fail (раз в `attempt=1` для каждого peer), не на каждый skip. `peers.refresh raised`/`poller tick raised`/`failed to register config.info watcher`
+- DEBUG `state tick applied` + `poller tick` со счётчиками active/skipped/generation
+
+`poller.status()` для debug: `{running, last_tick_at, generation, backoff_count}`. `_reset()` — test hook.
+
 ## Добавление нового backend-резолвера
 
 ```bash

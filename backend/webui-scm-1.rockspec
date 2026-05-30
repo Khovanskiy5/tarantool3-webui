@@ -53,6 +53,8 @@ build = {
         ['webui.cluster.peer_cookie']    = 'backend/webui/cluster/peer_cookie.lua',
         ['webui.cluster.peers']          = 'backend/webui/cluster/peers.lua',
         ['webui.cluster.rpc']            = 'backend/webui/cluster/rpc.lua',
+        ['webui.cluster.state']          = 'backend/webui/cluster/state.lua',
+        ['webui.cluster.poller']         = 'backend/webui/cluster/poller.lua',
         ['internal.config.extras']       = 'backend/internal/config/extras.lua',
     },
 }

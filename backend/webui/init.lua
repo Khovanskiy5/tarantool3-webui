@@ -30,6 +30,7 @@ local version     = require('webui.version')
 local http_srv    = require('webui.http.server')
 local peer_cookie = require('webui.cluster.peer_cookie')
 local peers       = require('webui.cluster.peers')
+local poller      = require('webui.cluster.poller')
 
 local logger = log_util.with_tag('init')
 
@@ -223,6 +224,18 @@ function M.start(opts)
         logger.warn('initial peer pool refresh failed', { err = tostring(pp_err) })
     end
 
+    -- Step 7 + 8: cluster state cache + peer poller fiber. The
+    -- poller is the single producer; HTTP / GraphQL resolvers will
+    -- read snapshots from cluster.state. Starting the fiber here
+    -- (before HTTP) means the first GraphQL query never sees an
+    -- empty state — the poller has had at least one immediate
+    -- iteration via `box.watch('config.info', ...)` by the time the
+    -- server accepts connections.
+    local pl_ok, pl_err = pcall(poller.start)
+    if not pl_ok then
+        logger.warn('poller start failed', { err = tostring(pl_err) })
+    end
+
     -- Step 9 in the role start sequence: HTTP server.
     STATE.started_at = fiber.time()
 
@@ -263,6 +276,15 @@ function M.stop()
     local ok, err = pcall(function() http_srv.stop() end)
     if not ok then
         logger.error('http server stop raised', { err = tostring(err) })
+    end
+
+    -- Stop the poller before closing the pool: in-flight ticks
+    -- still want to read connection state. The cluster.state cache
+    -- itself does not need teardown — module-local tables are GC'd
+    -- when require() drops them.
+    local pl_ok, pl_err = pcall(function() poller.stop() end)
+    if not pl_ok then
+        logger.warn('poller stop raised', { err = tostring(pl_err) })
     end
 
     -- Close every outbound net.box connection before declaring stop.
