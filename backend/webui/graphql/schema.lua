@@ -24,7 +24,10 @@ local types = require('graphql.types')
 local schema_mod = require('graphql.schema')
 
 local version = require('webui.version')
-local health_types = require('webui.graphql.types.health')
+local health_types     = require('webui.graphql.types.health')
+local server_types     = require('webui.graphql.types.server')
+local replicaset_types = require('webui.graphql.types.replicaset')
+local cluster_resolver = require('webui.graphql.resolvers.cluster')
 
 local M = {}
 
@@ -63,6 +66,49 @@ local function resolve_config_jsonschema()
     return json.encode(js)
 end
 
+-- ── Cluster query payload ─────────────────────────────────────────────
+--
+-- `cluster` returns an object that exposes self / servers /
+-- replicasets / knownRoles / vshardGroups. The wrapper carries the
+-- snapshot taken at the top-level resolver call so every sub-field
+-- below sees the same state, even if the poller runs between fields.
+
+local ClusterPayload = types.object {
+    name = 'Cluster',
+    description = 'Aggregated cluster view derived from cluster.state.snapshot().',
+    fields = {
+        self = {
+            kind = server_types.Server,
+            description = 'The instance answering this query. Null before bootstrap.',
+            resolve = cluster_resolver.cluster_self,
+        },
+        servers = {
+            kind = server_types.ServerPage.nonNull,
+            description = 'Cursor-paginated list of servers (default page 50, max 500).',
+            arguments = {
+                after = types.string,
+                limit = types.int,
+            },
+            resolve = cluster_resolver.cluster_servers,
+        },
+        replicasets = {
+            kind = types.list(replicaset_types.Replicaset.nonNull).nonNull,
+            description = 'All replicasets, sorted by name.',
+            resolve = cluster_resolver.cluster_replicasets,
+        },
+        knownRoles = {
+            kind = types.list(types.string.nonNull).nonNull,
+            description = 'Role identifiers configurable on a replicaset. Populated in M2.',
+            resolve = cluster_resolver.cluster_known_roles,
+        },
+        vshardGroups = {
+            kind = types.list(types.string.nonNull).nonNull,
+            description = 'Names of configured vshard groups. Populated in Task 47.',
+            resolve = cluster_resolver.cluster_vshard_groups,
+        },
+    },
+}
+
 -- ── Query root ────────────────────────────────────────────────────────
 
 local Query = types.object {
@@ -95,6 +141,12 @@ local Query = types.object {
                 'config, taken from `config:jsonschema()`. Null when the ' ..
                 'config module is unavailable.',
             resolve = resolve_config_jsonschema,
+        },
+        cluster = {
+            kind = ClusterPayload.nonNull,
+            description = 'Aggregated cluster view (self, servers, replicasets, '
+                .. 'knownRoles, vshardGroups). Source: cluster.state.snapshot().',
+            resolve = cluster_resolver.cluster,
         },
     },
 }

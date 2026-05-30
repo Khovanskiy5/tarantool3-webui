@@ -1,0 +1,106 @@
+#
+# Cluster overview query.
+#
+# Drives the `/cluster` page and the TopBar instance banner. The
+# query is intentionally chatty up front — replicasets + the first
+# server page in one round-trip — because the page renders both
+# above the fold. Subsequent pages are fetched on demand via
+# `ClusterServersPage`.
+#
+# `after` cursor follows the backend contract (UUID of the last
+# item from the previous page). `limit` defaults to 50 server-side
+# but is exposed so the page can request a tighter slice (table
+# pagination) or a bulk dump (CSV export).
+#
+
+query ClusterOverview($limit: Int) {
+  cluster {
+    self {
+      ...ServerCardFields
+    }
+    servers(limit: $limit) {
+      items {
+        ...ServerCardFields
+      }
+      nextCursor
+      totalCount
+    }
+    replicasets {
+      ...ReplicasetCardFields
+    }
+    knownRoles
+    vshardGroups
+  }
+}
+
+#
+# Pagination follow-up. Reuses the same fragment so the table can
+# refresh incrementally without rebuilding rows.
+#
+query ClusterServersPage($after: String, $limit: Int) {
+  cluster {
+    servers(after: $after, limit: $limit) {
+      items {
+        ...ServerCardFields
+      }
+      nextCursor
+      totalCount
+    }
+  }
+}
+
+fragment ServerCardFields on Server {
+  alias
+  uri
+  uuid
+  status
+  message
+  electable
+  replicasetName
+  groupName
+  zone
+  reachable
+  lastSeen
+  lastError
+  nextRetryAt
+  configStatus
+  labels {
+    name
+    value
+  }
+  boxInfo {
+    uuid
+    version
+    uptime
+    status
+    ro
+    roReason
+    vclock
+    replicasetUuid
+  }
+  statistics {
+    arenaUsedRatio
+    itemsUsedRatio
+    quotaUsedRatio
+  }
+}
+
+fragment ReplicasetCardFields on Replicaset {
+  name
+  alias
+  uuid
+  groupName
+  status
+  roles
+  weight
+  leader
+  activeLeader
+  allRw
+  vshardGroup
+  servers {
+    alias
+    uuid
+    status
+    reachable
+  }
+}
