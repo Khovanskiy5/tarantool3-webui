@@ -37,6 +37,12 @@ const meta: Meta<typeof TopBar> = {
 
 export default meta;
 
+// TopBar background is `--webui-bg-elevated`, which sits only a few
+// brightness points above the page background `--webui-bg`. Without a
+// visible "content area" below, the bar visually blends into the
+// Storybook canvas and is easy to miss. The shell wrapper below adds
+// a dashed border-top + a labelled placeholder so the bar's
+// boundaries are obvious in both light and dark themes.
 const makeStory = (locale: 'ru' | 'en'): Story => ({
   render: () => ({
     components: { TopBar },
@@ -47,7 +53,20 @@ const makeStory = (locale: 'ru' | 'en'): Story => ({
       });
       return {};
     },
-    template: '<TopBar />',
+    template: `
+      <div style="display: flex; flex-direction: column; min-height: 100vh; background: var(--webui-bg);">
+        <TopBar />
+        <main style="
+          flex: 1;
+          padding: 1.5rem;
+          color: var(--webui-text-muted);
+          border-top: 1px dashed var(--webui-border);
+          font-family: var(--webui-font);
+        ">
+          (story content area — TopBar is the strip above)
+        </main>
+      </div>
+    `,
   }),
 });
 

@@ -37,7 +37,10 @@ export default meta;
 
 // Helper component that swaps the router to a chosen route before
 // rendering Sidebar. Each story can then ask for a specific active
-// segment without duplicating router wiring.
+// segment without duplicating router wiring. The placeholder main
+// area to the right makes the rail's boundary obvious — without it
+// Sidebar appears to "leak" into the Storybook canvas because the
+// surrounding background is the same dark colour.
 const makeStory = (initialRoute: string): Story => ({
   render: () => ({
     components: { Sidebar },
@@ -51,6 +54,15 @@ const makeStory = (initialRoute: string): Story => ({
     template: `
       <div style="display: flex; min-height: 100vh; background: var(--webui-bg);">
         <Sidebar />
+        <main style="
+          flex: 1;
+          padding: 1.5rem;
+          color: var(--webui-text-muted);
+          border-left: 1px dashed var(--webui-border);
+          font-family: var(--webui-font);
+        ">
+          (story content area — Sidebar is the rail on the left)
+        </main>
       </div>
     `,
   }),
