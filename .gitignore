@@ -1,0 +1,120 @@
+# ──────────────────────────────────────────────────────────────
+# Tarantool runtime artefacts
+# ──────────────────────────────────────────────────────────────
+*.snap
+*.xlog
+*.vylog
+*.inprogress
+*.run
+*.control
+*.pid
+*.log
+*.sock
+.tarantoolctl
+run/
+var/
+data/
+work_dir/
+
+# LuaRocks
+.rocks/
+.luarocks/
+lua_modules/
+luarocks-tree/
+
+# Lua coverage
+luacov.stats.out
+luacov.report.out
+
+# ──────────────────────────────────────────────────────────────
+# Node / frontend
+# ──────────────────────────────────────────────────────────────
+node_modules/
+dist/
+build/
+.cache/
+.parcel-cache/
+.vite/
+.turbo/
+.nuxt/
+.output/
+
+# Test artefacts
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+.last-run.json
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ──────────────────────────────────────────────────────────────
+# Generated assets
+# ──────────────────────────────────────────────────────────────
+# Embedded SPA bundle, produced by tools/embed-assets
+backend/webui/assets/bundle.lua
+backend/webui/assets/bundle/
+
+# GraphQL TS types, produced by graphql-codegen
+frontend/src/api/generated.ts
+frontend/src/api/generated/
+
+# ──────────────────────────────────────────────────────────────
+# Secrets / local env
+# ──────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+secrets/
+
+# ──────────────────────────────────────────────────────────────
+# Docker / local infrastructure
+# ──────────────────────────────────────────────────────────────
+docker-compose.override.yml
+docker/data/
+docker/volumes/
+
+# ──────────────────────────────────────────────────────────────
+# Editor / OS
+# ──────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ──────────────────────────────────────────────────────────────
+# Build / packaging
+# ──────────────────────────────────────────────────────────────
+*.tar.gz
+*.rock
+*.src.rock
+*.tgz
+
+# ──────────────────────────────────────────────────────────────
+# Vendored reference sources (local research only, not committed)
+# ──────────────────────────────────────────────────────────────
+cartridge-*/
+tarantool-*/
+
+# ──────────────────────────────────────────────────────────────
+# Local tooling state (not part of the project)
+# ──────────────────────────────────────────────────────────────
+.claude/
+.ai-factory/
+.ai-factory.json
+.mcp.json
+AGENTS.md
+CLAUDE.md
