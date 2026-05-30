@@ -67,6 +67,7 @@
     "vite": "^5.4.0",
     "vite-plugin-compression2": "^2.5.3",
     "vitest": "^2.0.0",
+    "vitest-websocket-mock": "^0.5.0",
     "vue-tsc": "^2.0.21",
     "wonka": "^6.3.6"
   },
