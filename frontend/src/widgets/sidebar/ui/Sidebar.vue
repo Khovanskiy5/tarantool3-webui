@@ -26,7 +26,7 @@ const items: SidebarItem[] = [
   { key: 'vshard',        to: '/vshard',        iconClass: 'pi pi-th-large',    labelKey: 'widgets.sidebar.vshard' },
   { key: 'metrics',       to: '/metrics',       iconClass: 'pi pi-chart-line',  labelKey: 'widgets.sidebar.metrics' },
   { key: 'snapshots',     to: '/snapshots',     iconClass: 'pi pi-database',    labelKey: 'widgets.sidebar.snapshots' },
-  { key: 'console',       to: '/console',       iconClass: 'pi pi-terminal',    labelKey: 'widgets.sidebar.console' },
+  { key: 'console',       to: '/console',       iconClass: 'pi pi-microchip',   labelKey: 'widgets.sidebar.console' },
   { key: 'audit',         to: '/audit',         iconClass: 'pi pi-list',        labelKey: 'widgets.sidebar.audit' },
 ];
 
