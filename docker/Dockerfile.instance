@@ -69,6 +69,15 @@ WORKDIR /opt/webui
 # This works for both `tarantool --config` and `tarantool -e` flows.
 COPY backend/webui /usr/share/tarantool/webui
 
+# Community-Edition shim for `internal.config.extras`. This is the
+# proprietary EE hook that registers the etcd / config.storage sources;
+# our implementation supplies the same surface. Installing the file at
+# the same path the EE binary expects makes `config.etcd:` accepted by
+# the cluster_config schema and routed through our HTTP-based etcd
+# source. See docs/operations.md (section "config.etcd on Community
+# Edition") for the deliberate trade-offs of this approach.
+COPY backend/internal /usr/share/tarantool/internal
+
 # Tools and the rockspec live alongside the runtime files so the image
 # can re-run embed-assets if a deploy ships a new SPA without rebuilding
 # the whole stack.

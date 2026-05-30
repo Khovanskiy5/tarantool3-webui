@@ -55,15 +55,12 @@ credentials:
 iproto:
   advertise:
     peer:
+      # Login is the only top-level peer setting that travels to every
+      # instance. mTLS params are paired with a concrete `uri` in
+      # Tarantool's schema; they therefore live in each instance's
+      # `iproto.advertise.peer` block (with the `uri` and matching
+      # `params`) and inside `iproto.listen.params`.
       login: replicator
-      # mTLS between peers. Each instance presents a client cert
-      # signed by the cluster CA; peers verify the chain and accept
-      # the connection.
-      params:
-        transport: 'ssl'
-        ssl_ca_file:   '/etc/tarantool/tls/peer-ca.crt'
-        ssl_cert_file: '/etc/tarantool/tls/peer.crt'
-        ssl_key_file:  '/etc/tarantool/tls/peer.key'
 
 replication:
   failover: election
@@ -88,6 +85,11 @@ groups:
               advertise:
                 peer:
                   uri: 'tt-1:3301'
+                  params:
+                    transport: 'ssl'
+                    ssl_ca_file:   '/etc/tarantool/tls/peer-ca.crt'
+                    ssl_cert_file: '/etc/tarantool/tls/peer.crt'
+                    ssl_key_file:  '/etc/tarantool/tls/peer.key'
           tt-2:
             iproto:
               listen:
@@ -100,6 +102,11 @@ groups:
               advertise:
                 peer:
                   uri: 'tt-2:3301'
+                  params:
+                    transport: 'ssl'
+                    ssl_ca_file:   '/etc/tarantool/tls/peer-ca.crt'
+                    ssl_cert_file: '/etc/tarantool/tls/peer.crt'
+                    ssl_key_file:  '/etc/tarantool/tls/peer.key'
           tt-3:
             iproto:
               listen:
@@ -112,6 +119,11 @@ groups:
               advertise:
                 peer:
                   uri: 'tt-3:3301'
+                  params:
+                    transport: 'ssl'
+                    ssl_ca_file:   '/etc/tarantool/tls/peer-ca.crt'
+                    ssl_cert_file: '/etc/tarantool/tls/peer.crt'
+                    ssl_key_file:  '/etc/tarantool/tls/peer.key'
 
 roles:
   - webui

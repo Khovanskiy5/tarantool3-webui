@@ -331,6 +331,85 @@ docker compose -f docker/docker-compose.dev.yml start tt-1
 - **External etcd cluster setup** — выходит за scope; операторы используют свой etcd (на baremetal, k8s через etcd-operator, или managed как DigitalOcean Managed etcd / AWS DocumentDB).
 - **Сам Prometheus / Grafana / Vector** — `webui-instance` экспортирует метрики, оператор разворачивает сборщик в своём observability-стеке.
 
+## `config.etcd` на Community Edition
+
+Tarantool 3.7 принимает блок `config.etcd:` в cluster YAML только в **Enterprise** сборке: схема в `instance_config.lua` помечает узел `enterprise_edition` и без EE возвращает ошибку «available only in Tarantool Enterprise Edition». Для CE-инсталляций мы поставляем open-source аналог в виде модуля `internal.config.extras` — Tarantool сам подгружает его при старте, если файл лежит в `package.path`.
+
+### Что делает наш `internal.config.extras`
+
+`backend/internal/config/extras.lua` устанавливается образом в `/usr/share/tarantool/internal/config/extras.lua` (см. Dockerfile.instance). При вызове `config:_initialize()`:
+
+1. Подменяет `tarantool.package` с `'Tarantool'` на `'Tarantool Enterprise'`. Все EE-валидаторы схемы (`enterprise_edition_validate`) пропускают проверку.
+2. Регистрирует источник `webui.config_source.etcd_source` через `config:_register_source(...)`. Источник реализует контракт `name='etcd'`, `type='cluster'`, `sync(self, config, iconfig)`, `get(self)`.
+3. На каждом `sync` источник:
+   - Читает `config.etcd.{endpoints, prefix, username, password, ssl}` из текущего iconfig.
+   - При наличии username — выполняет `POST /v3/auth/authenticate`, получает JWT.
+   - `POST /v3/kv/range` для ключа `<prefix>/config/all` (canonical) → fallback на `<prefix>/config` (legacy).
+   - Перебирает endpoints до первого успеха (sticky failover).
+   - Декодирует value из base64, парсит YAML.
+   - Возвращает результат как cluster config.
+
+### Конфигурация в YAML
+
+Та же, что и в EE-документации Tarantool:
+
+```yaml
+config:
+  etcd:
+    prefix: '/tarantool/cluster-a'
+    endpoints:
+      - 'https://etcd-0.example.com:2379'
+      - 'https://etcd-1.example.com:2379'
+      - 'https://etcd-2.example.com:2379'
+    username: 'webui'
+    password: '${ETCD_PASSWORD}'   # env substitution
+    ssl:
+      ca_file:   '/etc/tarantool/tls/etcd-ca.crt'
+      ssl_cert:  '/etc/tarantool/tls/etcd-client.crt'
+      ssl_key:   '/etc/tarantool/tls/etcd-client.key'
+      verify_peer: true
+    http:
+      request:
+        timeout: 5
+```
+
+### Tradeoffs нашего подхода
+
+Подмена `tarantool.package` глобальна на процесс. Это **безопасно** для:
+- Узлов схемы с EE-флагом (валидаторы становятся no-op'ами). Конкретно: `config.etcd`, `config.storage`, `iproto.advertise.peer.params.ssl_*`, `iproto.listen.params.ssl_*`.
+
+Это **НЕ означает** что становятся доступны другие EE-функции:
+- Лицензированные C-модули (`audit_log` встроенный, `integrity`, флаги в `box.cfg`) сами по себе не появляются — они отсутствуют в Community-бинарнике. Если в YAML включить `audit_log: yes`, схема валидируется, но box.cfg упадёт на C-уровне с unknown option.
+
+Документируйте этот контракт явно в своих ops-runbook'ах: **наш extras расширяет только config-source surface**. Использование других EE-функций не поддерживается и не рекомендуется.
+
+### Что поддержано / что в backlog
+
+| Feature | Текущая M0-версия | Planned |
+|---|---|---|
+| Multi-endpoint failover (первый успех) | ✅ | — |
+| Basic auth (JWT через `/v3/auth/authenticate`) | ✅ | — |
+| TLS (CA, client cert, verify_peer) | ✅ | — |
+| Canonical `<prefix>/config/all` + legacy `<prefix>/config` fallback | ✅ | — |
+| Per-request timeout (из `config.etcd.http.request.timeout`) | ✅ | — |
+| Live updates через etcd watch | ❌ | Task 30 |
+| Edit-lock через etcd lease | ❌ | Task 30 |
+| CAS-write через txn | ❌ | Task 30 |
+| Self-metrics (`webui_etcd_request_*`) | ❌ | Task 42a |
+
+### Проверка работы (без поднятого etcd)
+
+```bash
+# С нашим extras и фиктивными endpoint'ами:
+tarantool --name tt-1 --config docker/configs/cluster.prod.example.yaml
+# stderr показывает:
+#   [webui.config.extras] etcd source registered { package: "Tarantool Enterprise" }
+#   [webui.config_source.etcd] cannot fetch cluster config from etcd: ...
+#     (HTTP 595 — endpoints не резолвятся, что и должно быть в этой пробе)
+```
+
+При поднятом etcd с правильно загруженным ключом cluster config — Tarantool запускает кластер штатно.
+
 ## Дальнейшие разделы
 
 Появляются по мере реализации задач:
