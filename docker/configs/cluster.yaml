@@ -1,0 +1,83 @@
+# Tarantool 3.7 cluster configuration for the local dev compose.
+#
+# A single YAML file describes all three instances and is mounted into
+# every container. The instance to bring up inside a given container is
+# selected via `tarantool --name <name>` (the entrypoint passes
+# INSTANCE_NAME).
+#
+# This config is file-based for fast bootstrap. The etcd service in the
+# same compose is intentionally NOT consulted at startup — it becomes
+# the source of truth for cluster-wide config only after Task 30 lands
+# the etcd-client integration. Until then it stays empty and is used
+# by integration tests that exercise the etcd adapter.
+
+credentials:
+  users:
+    # Replication account — used by Tarantool itself between peers.
+    replicator:
+      password: 'replicator-dev-password'
+      roles: [replication]
+    # WebUI peer account — used by the role's net.box pool to query
+    # box.info on neighbours (Task 15). Privileges will be narrowed
+    # to read-only specific functions once Task 15 actually wires up
+    # the pool. For M0 it gets super so the role can stand on its own.
+    webui_peer:
+      password: 'webui-peer-dev-password'
+      roles: [super]
+
+iproto:
+  advertise:
+    peer:
+      login: replicator
+
+replication:
+  # Built-in raft-based leader election. Failover modes (off/manual/
+  # supervised) ship in Task 46.
+  failover: election
+
+groups:
+  default:
+    replicasets:
+      rs-1:
+        # Initial leader hint; raft re-elects automatically on failure.
+        leader: tt-1
+        instances:
+          tt-1:
+            iproto:
+              listen:
+                - uri: '0.0.0.0:3301'
+              advertise:
+                peer:
+                  uri: 'tt-1:3301'
+          tt-2:
+            iproto:
+              listen:
+                - uri: '0.0.0.0:3301'
+              advertise:
+                peer:
+                  uri: 'tt-2:3301'
+          tt-3:
+            iproto:
+              listen:
+                - uri: '0.0.0.0:3301'
+              advertise:
+                peer:
+                  uri: 'tt-3:3301'
+
+# The webui role wakes up on every instance once roles_cfg.webui is
+# applied. The role module lives at /usr/share/tarantool/webui/init.lua
+# inside the image (see docker/Dockerfile.instance) so package.path
+# finds it.
+roles:
+  - webui
+
+roles_cfg:
+  webui:
+    listen: '0.0.0.0:8081'
+    log_level: debug
+    # Lua/SQL console is OFF by default. Dev compose flips it ON via
+    # an environment override (see compose env block) only for
+    # local debugging; production manifests keep it false.
+    console_enabled: false
+    # GraphiQL explorer is convenient in dev.
+    graphiql_enabled: true

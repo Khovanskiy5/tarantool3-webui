@@ -112,12 +112,131 @@ HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=3 \
 - **Контейнер выходит с кодом 65**: `TT_CONFIG`-путь не существует в контейнере — проверить bind-mount.
 - **Контейнер выходит с кодом 66**: config-файл не readable.
 
+## Локальное dev-окружение (Tasks 10 + 10a)
+
+`docker/docker-compose.dev.yml` поднимает полностью рабочий кластер из 3 инстансов Tarantool 3.7 с одной HAProxy перед ними и одиночным etcd для будущей интеграции.
+
+### Image policy
+
+Используются **только официальные upstream-образы**, без bitnami / community-derivatives:
+
+| Сервис | Образ | Источник |
+|---|---|---|
+| etcd | `quay.io/coreos/etcd:v3.5.18` | официальный (Red Hat hosted) |
+| HAProxy | `haproxy:2.9-alpine` | официальный Docker Hub |
+| Tarantool инстансы | `webui-instance:dev` | сборка из `docker/Dockerfile.instance` (Task 9) |
+
+### Запуск
+
+```bash
+make dev
+# или явно:
+docker compose -f docker/docker-compose.dev.yml up --build -d
+```
+
+После healthy-сигнала все шесть контейнеров:
+
+```
+NAME              STATUS                  PORTS
+webui-etcd        Up X seconds (healthy)  0.0.0.0:2379->2379/tcp
+webui-tt-1        Up X seconds (healthy)  0.0.0.0:8081->8081/tcp, 0.0.0.0:3301->3301/tcp
+webui-tt-2        Up X seconds (healthy)  0.0.0.0:8082->8081/tcp, 0.0.0.0:3302->3301/tcp
+webui-tt-3        Up X seconds (healthy)  0.0.0.0:8083->8081/tcp, 0.0.0.0:3303->3301/tcp
+webui-haproxy     Up X seconds            0.0.0.0:8080->8080/tcp, 0.0.0.0:8404->8404/tcp
+```
+
+URL'ы:
+
+- **http://localhost:8080** — основная точка входа (HAProxy → один из tt-N).
+- **http://localhost:8081/2/3** — прямой доступ к каждому инстансу (для debug).
+- **http://localhost:8404** — HAProxy stats UI (live view backend health, rates, sticky cookies).
+- **http://localhost:2379** — etcd (через `etcdctl` для интеграционных тестов).
+
+### Cluster YAML (`docker/configs/cluster.yaml`)
+
+Один файл, описывающий все три инстанса. `tarantool --name $INSTANCE_NAME` выбирает per-instance секцию во время старта.
+
+- `credentials.users.replicator` — встроенный replication account.
+- `credentials.users.webui_peer` — будущий peer-cookie account (Task 15). В M0 имеет роль `super` чтобы стартануть; в Task 15 будет урезан.
+- `replication.failover: election` — встроенный raft (`election` mode); supervised/manual режимы — в Task 46.
+- `groups.default.replicasets.rs-1` — один replicaset c initial leader tt-1; raft при failover'е автоматически переизбирает.
+- `roles: [webui]` — наша Lua-роль активируется на каждом инстансе.
+- `roles_cfg.webui` — `listen: 0.0.0.0:8081`, `log_level: debug`, `graphiql_enabled: true` (только в dev), `console_enabled: false`.
+
+### HAProxy (Task 10a) — `docker/haproxy/haproxy.dev.cfg`
+
+| Аспект | Конфигурация |
+|---|---|
+| Frontend | `bind *:8080` (HTTP) |
+| Backend | round-robin между tt-1/2/3, `init-addr last,libc,none` + `resolvers docker_dns` (127.0.0.11:53) для compose DNS |
+| Healthcheck | `option httpchk` + `GET /api/health` + `expect status 200` — degraded (200) держит в ротации, unhealthy (503) выводит |
+| Sticky session | Cookie `SRVID` insert indirect nocache postonly + `SameSite=Strict` (приклеивается на mutations, статика остаётся round-robin) |
+| Таймауты | client/server/tunnel 1h — для WebSocket |
+| Stats | `stats_in` на 8404 |
+| Логирование | stdout, `log-format` с unique-id |
+| Request-Id | НЕ генерируется HAProxy — backend middleware (Task 3) делает это сам |
+
+### Шаги healthy-старта
+
+```
+etcd: started → 5s → healthy
+  tt-1: started → start_period 30s → role lifecycle uninitialized→starting→ready → 5s → healthy
+    tt-2: started → … → healthy
+    tt-3: started → … → healthy
+      haproxy: started (depends_on=service_healthy всех tt-*) → ready
+```
+
+Полный bootstrap из чистого состояния — порядка 45–60 секунд.
+
+### Volumes
+
+| Volume | Назначение |
+|---|---|
+| `etcd-data` | etcd `/var/lib/etcd` |
+| `tt-1-data`, `tt-2-data`, `tt-3-data` | per-instance work_dir (`/opt/webui/var/lib`) — snap/xlog |
+
+`make dev-down` (или `docker compose down --volumes`) удаляет всё чисто.
+
+### Network
+
+`webui-dev-net` (bridge, user-defined). Контейнеры резолвят друг друга по имени (`tt-1`, `etcd`, `haproxy`).
+
+### Failover smoke
+
+```bash
+# Остановить лидера
+docker compose -f docker/docker-compose.dev.yml stop tt-1
+
+# Через 1-2 сек:
+curl http://localhost:8080/api/health        # 200 — HAProxy маршрутизирует на tt-2 или tt-3
+curl http://localhost:8080/admin/api -X POST \
+  -H 'content-type: application/json' \
+  -d '{"query":"{ roleStatus { state instance } }"}'
+# → data.roleStatus.instance: "tt-2" (новый лидер после raft re-election)
+
+# Восстановить
+docker compose -f docker/docker-compose.dev.yml start tt-1
+```
+
+### Конфигурируется через env
+
+В `x-tarantool-common.environment`:
+
+- `WEBUI_LOG_LEVEL=debug` (можно override на конкретный контейнер).
+- `TT_CONFIG=/opt/webui/etc/cluster.yaml` — путь внутри контейнера.
+- `INSTANCE_NAME=tt-N` — задан per-service.
+
+### Что НЕ включено в dev compose
+
+- **TLS** — HAProxy слушает HTTP (8080). Production-конфиг с TLS termination на 443 → Task 11.
+- **External etcd cluster** — embedded etcd single-node. Production manifests подключают внешний etcd → Task 11.
+- **HA для самого HAProxy** — единственный экземпляр. keepalived/VRRP опционально → Task 11.
+- **Frontend dev-server (Vite HMR)** — для текущего M0 не нужен (SPA уже включён в каждый инстанс через embed-assets). HMR-режим вернётся как опциональный сервис когда понадобится для активной разработки фронта (вне M0 scope).
+
 ## Дальнейшие разделы
 
 Появляются по мере реализации задач:
 
-- `docker/docker-compose.dev.yml` (3 инстанса + etcd + HAProxy + dev-vite) → Task 10.
-- HAProxy конфиги (dev + prod) → Task 10a.
 - `docker/docker-compose.prod.example.yml` → Task 11.
 - Kubernetes Helm chart → Task 11a.
 - CI Pipeline → Task 12.
