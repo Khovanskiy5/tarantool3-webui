@@ -221,6 +221,15 @@ function M.start(opts)
         sess_mod.install_remote()
     end
 
+    -- Expose the vshard bootstrap helper over net.box for the same
+    -- reason: when the SPA calls `bootstrapVshard(group)` from a
+    -- follower, the resolver routes the call to a router-flagged
+    -- peer via this function.
+    local vsh_ok, vsh_mod = pcall(require, 'webui.graphql.resolvers.vshard')
+    if vsh_ok and type(vsh_mod.install_remote) == 'function' then
+        vsh_mod.install_remote()
+    end
+
     -- Step 5 in the role start sequence: peer cookie (system user
     -- `webui_peer` + per-instance secret persistence). Steps 3,
     -- 7, 8 land in subsequent tasks (metrics, cluster state,

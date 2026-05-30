@@ -168,5 +168,7 @@ query {
 - **Task 34:** `Mutation.configPrepare/Commit/Abort`, `Query.configHistory`.
 - **Tasks 40, 41:** `Query.spaces`, `Query.users` (read-only части уже в схеме — резолверы в `graphql/resolvers/admin_data.lua`). Mutations (`createSpace`, `setUserRoles`) поедут через двухфазный коммит.
 - **Tasks 46, 47, 50, 51, 52:** failover, vshard, lifecycle mutations.
+- **Task 46a:** `Query.failoverStateProviderStatus { kind, mode, endpoints[], lease_active, coordinator }` — пингует endpoints state-provider'а (etcd по `/version` с таймаутом 1с), возвращает `kind: 'none'` для election/manual/off.
+- **Task 47a:** `Query.vshardKnownGroups`, `Query.canBootstrapVshard(group)`, `Mutation.bootstrapVshard(group)` — bootstrap surface, RPC через peer pool на router-инстанс группы.
 
 Каждое расширение проходит проверку на breaking (см. `docs/api/deprecation.md` после Task 21).

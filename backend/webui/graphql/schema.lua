@@ -206,6 +206,29 @@ local Query = types.object {
             description = 'Failover mode + per-server election state.',
             resolve = failover_resolver.query_failover,
         },
+        failoverStateProviderStatus = {
+            kind = types.object({
+                name = 'FailoverStateProviderStatus',
+                fields = {
+                    kind = types.string.nonNull,
+                    mode = types.string.nonNull,
+                    endpoints = types.list(types.object({
+                        name = 'FailoverStateProviderEndpoint',
+                        fields = {
+                            uri        = types.string.nonNull,
+                            status     = types.string.nonNull,
+                            latency_ms = types.float,
+                            last_error = types.string,
+                        },
+                    })),
+                    lease_active = types.boolean,
+                    coordinator  = types.string,
+                },
+            }).nonNull,
+            description = 'Per-endpoint probe of the supervised-failover state '
+                .. 'provider. Returns kind=none for election/manual/off clusters.',
+            resolve = failover_resolver.query_state_provider_status,
+        },
         vshard = {
             kind = types.object({
                 name = 'VshardSummary',
@@ -224,6 +247,30 @@ local Query = types.object {
             }).nonNull,
             description = 'Vshard groups summary. Empty until vshard wiring lands.',
             resolve = vshard_resolver.query_vshard,
+        },
+        vshardKnownGroups = {
+            kind = types.object({
+                name = 'VshardKnownGroups',
+                fields = {
+                    groups = types.list(types.string.nonNull),
+                },
+            }).nonNull,
+            description = 'Names of vshard groups declared in cluster config.',
+            resolve = vshard_resolver.query_known_groups,
+        },
+        canBootstrapVshard = {
+            kind = types.object({
+                name = 'VshardBootstrapCheck',
+                fields = {
+                    ok      = types.boolean.nonNull,
+                    group   = types.string.nonNull,
+                    reasons = types.list(types.string.nonNull),
+                },
+            }).nonNull,
+            arguments = { group = types.string },
+            description = 'Whether vshard.router.bootstrap() can succeed for the group '
+                .. '(router + storage present and reachable).',
+            resolve = vshard_resolver.query_can_bootstrap,
         },
         config = {
             kind = config_types.ConfigCurrent.nonNull,
@@ -363,6 +410,22 @@ local Mutation = types.object {
                 instanceUuids = types.list(types.string.nonNull).nonNull,
             },
             resolve = suggestions_resolver.apply_bootstrap_vshard,
+        },
+        bootstrapVshard = {
+            kind = types.object({
+                name = 'VshardBootstrapResult',
+                fields = {
+                    ok         = types.boolean.nonNull,
+                    group      = types.string.nonNull,
+                    router     = types.string,
+                    latency_ms = types.float,
+                    message    = types.string,
+                },
+            }).nonNull,
+            arguments = { group = types.string },
+            description = 'Invoke vshard.router.bootstrap() on a router instance '
+                .. 'of the group. Admin only.',
+            resolve = vshard_resolver.mutation_bootstrap,
         },
         exportAudit = {
             kind = audit_types.AuditExport.nonNull,

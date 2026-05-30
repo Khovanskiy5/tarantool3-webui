@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue';
 import DataTable from 'primevue/datatable';
 import Column from 'primevue/column';
 import Tag from 'primevue/tag';
+import Message from 'primevue/message';
 
 import { getClient } from '@/shared/api/graphql';
 
@@ -13,8 +14,24 @@ interface Election {
   leader_uuid: string | null;
 }
 
+interface SPEndpoint {
+  uri: string;
+  status: string;
+  latency_ms: number | null;
+  last_error: string | null;
+}
+
+interface SPStatus {
+  kind: 'etcd' | 'none' | string;
+  mode: string;
+  endpoints: SPEndpoint[] | null;
+  lease_active: boolean | null;
+  coordinator: string | null;
+}
+
 const mode = ref<string>('');
 const elections = ref<Election[]>([]);
+const sp = ref<SPStatus | null>(null);
 const error = ref<string | null>(null);
 const loading = ref(false);
 
@@ -24,20 +41,29 @@ const FAILOVER_Q = /* GraphQL */ `
       mode
       elections { instance state term leader_uuid }
     }
+    failoverStateProviderStatus {
+      kind mode lease_active coordinator
+      endpoints { uri status latency_ms last_error }
+    }
   }
 `;
 
 const load = async () => {
   loading.value = true;
   error.value = null;
-  const res = await getClient().query<{ failover: { mode: string; elections: Election[] } }>(FAILOVER_Q, {}).toPromise();
+  const res = await getClient().query<{
+    failover: { mode: string; elections: Election[] };
+    failoverStateProviderStatus: SPStatus;
+  }>(FAILOVER_Q, {}).toPromise();
   if (res.error) { error.value = res.error.message; loading.value = false; return; }
   mode.value = res.data?.failover?.mode ?? 'unknown';
   elections.value = res.data?.failover?.elections ?? [];
+  sp.value = res.data?.failoverStateProviderStatus ?? null;
   loading.value = false;
 };
 
 const sev = (state: string | null) => state === 'leader' ? 'success' : state === 'follower' ? 'info' : 'warn';
+const epSev = (status: string) => status === 'ok' ? 'success' : 'danger';
 
 onMounted(load);
 </script>
@@ -49,6 +75,7 @@ onMounted(load);
       <Tag :value="`mode: ${mode}`" severity="info" />
     </header>
     <p v-if="error" class="webui-failover__error">{{ error }}</p>
+
     <DataTable :value="elections" :loading="loading" data-key="instance" size="small" striped-rows>
       <Column field="instance" header="Instance" />
       <Column header="State">
@@ -63,6 +90,39 @@ onMounted(load);
         </template>
       </Column>
     </DataTable>
+
+    <section v-if="sp" class="webui-failover__sp">
+      <header class="webui-failover__sp-head">
+        <h2>State provider</h2>
+        <Tag :value="`kind: ${sp.kind}`" :severity="sp.kind === 'etcd' ? 'info' : 'secondary'" />
+      </header>
+      <Message v-if="sp.kind === 'none'" severity="info" :closable="false">
+        Failover mode is <code>{{ sp.mode }}</code> — no external state provider is required.
+        Raft election (or operator decisions) drives leader selection.
+      </Message>
+      <DataTable v-else :value="sp.endpoints ?? []" data-key="uri" size="small">
+        <Column field="uri" header="Endpoint">
+          <template #body="{ data }"><code>{{ data.uri }}</code></template>
+        </Column>
+        <Column header="Status">
+          <template #body="{ data }">
+            <Tag :value="data.status" :severity="epSev(data.status)" />
+          </template>
+        </Column>
+        <Column header="Latency">
+          <template #body="{ data }">
+            <span v-if="data.latency_ms !== null">{{ data.latency_ms.toFixed(1) }} ms</span>
+            <span v-else>—</span>
+          </template>
+        </Column>
+        <Column header="Error">
+          <template #body="{ data }">
+            <code v-if="data.last_error" class="webui-failover__err">{{ data.last_error }}</code>
+            <span v-else>—</span>
+          </template>
+        </Column>
+      </DataTable>
+    </section>
   </section>
 </template>
 
@@ -72,4 +132,8 @@ onMounted(load);
 .webui-failover__head h1 { margin: 0; }
 .webui-failover__error { color: var(--p-message-error-color, #d83535); }
 .webui-failover__mono { font-family: var(--webui-font-mono); font-size: 0.8rem; }
+.webui-failover__sp { background: var(--webui-bg-elevated); border: 1px solid var(--webui-border); border-radius: var(--webui-radius); padding: 1rem; display: flex; flex-direction: column; gap: 0.75rem; }
+.webui-failover__sp-head { display: flex; align-items: center; gap: 0.75rem; }
+.webui-failover__sp-head h2 { margin: 0; font-size: 1.05rem; }
+.webui-failover__err { font-family: var(--webui-font-mono); font-size: 0.75rem; color: var(--p-message-error-color, #d83535); }
 </style>

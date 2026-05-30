@@ -32,7 +32,11 @@ CSRF: cookie `webui_csrf` (не HttpOnly) дублируется в заголо
 | Query     | `issues`            | session    | Live-issues, severity/category-фильтры.       |
 | Query     | `suggestions`       | session    | Восстановительные suggestions.                |
 | Query     | `failover`          | admin      | Mode + per-server election state.             |
+| Query     | `failoverStateProviderStatus` | admin | etcd-state-provider endpoint probe (kind=none для election/manual/off). |
 | Query     | `vshard`            | session    | Groups summary (если sharding включён).        |
+| Query     | `vshardKnownGroups` | session    | Имена vshard-групп, объявленных в cluster config. |
+| Query     | `canBootstrapVshard(group)` | session | Pre-check на bootstrap (members реачебельны).   |
+| Mutation  | `bootstrapVshard(group)`    | admin   | Вызов `vshard.router.bootstrap()` через peer pool. |
 | Query     | `config`            | viewer     | Текущий YAML + source (`file`/`memory`/`etcd`).|
 | Query     | `audit`             | admin      | Paginated audit-log с фильтрами.              |
 | Mutation  | `validateConfig`    | operator   | Schema + cross-validate YAML.                 |

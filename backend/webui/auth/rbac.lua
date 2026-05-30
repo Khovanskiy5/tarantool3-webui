@@ -122,6 +122,7 @@ M.GRAPHQL_FIELD = {
     setLabels     = 'operator',
     setVshardWeight = 'admin',
     setVshardGroup  = 'admin',
+    bootstrapVshard = 'admin',
     exportAudit   = 'admin',
     runEval       = 'superuser',
     runSql        = 'superuser',
