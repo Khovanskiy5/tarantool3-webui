@@ -1,6 +1,53 @@
 # Operations
 
-Документ описывает оперативные процедуры для администраторов кластера: развёртывание, обновление, мониторинг, бэкап, troubleshooting. Документ растёт по мере реализации задач — на данный момент покрыт M0 раздел «Docker-образ инстанса».
+Документ описывает оперативные процедуры для администраторов кластера: развёртывание, обновление, мониторинг, бэкап, troubleshooting. Документ растёт по мере реализации задач.
+
+## Каталог HTTP-эндпоинтов (M2 + M3 + M4 + M6)
+
+| Метод | Путь                       | RBAC       | Назначение                                        |
+|-------|----------------------------|------------|---------------------------------------------------|
+| GET   | `/api/health`              | public     | Liveness + TX-heartbeat.                          |
+| GET   | `/api/metrics`             | public     | Prometheus marker `webui_up=1` + рок `metrics`.   |
+| GET   | `/api/metrics/webui`       | public     | Self-metrics (WS, audit, peers).                  |
+| POST  | `/api/auth/login`          | public     | Сессионный логин + cookie `webui_session` + `webui_csrf`. |
+| POST  | `/api/auth/logout`         | public     | Удаление сессии + force-close WS.                 |
+| GET   | `/api/auth/me`             | session    | Текущий user + roles.                             |
+| GET   | `/api/snapshots`           | admin      | Список .snap-файлов на инстансе.                  |
+| POST  | `/api/snapshots/take`      | admin      | `box.snapshot()`.                                 |
+| GET   | `/api/config/download`     | admin      | Скачать текущий cluster YAML.                     |
+| POST  | `/api/config/upload`       | admin      | Загрузить YAML → `proposeConfig` (dry-run).        |
+| POST  | `/api/eval`                | superuser  | Lua/SQL консоль (gating `console_enabled`).       |
+| GET   | `/api/diagnostics/bundle`  | admin      | JSON-бандл состояния для тикетов.                 |
+| GET   | `/ws`                      | session    | WebSocket подписка (Origin + cookie + force-close на logout). |
+| POST  | `/admin/api`               | session    | GraphQL endpoint, RBAC на уровне резолверов.      |
+| GET   | `/admin/api/explore`       | admin      | GraphiQL.                                         |
+
+CSRF: cookie `webui_csrf` (не HttpOnly) дублируется в заголовке `X-Csrf-Token` для всех POST/PUT/PATCH/DELETE.
+
+## Каталог GraphQL операций
+
+| Тип       | Имя                 | RBAC       | Назначение                                    |
+|-----------|---------------------|------------|-----------------------------------------------|
+| Query     | `cluster`           | session    | Self / servers / replicasets / knownRoles.    |
+| Query     | `issues`            | session    | Live-issues, severity/category-фильтры.       |
+| Query     | `suggestions`       | session    | Восстановительные suggestions.                |
+| Query     | `failover`          | admin      | Mode + per-server election state.             |
+| Query     | `vshard`            | session    | Groups summary (если sharding включён).        |
+| Query     | `config`            | viewer     | Текущий YAML + source (`file`/`memory`/`etcd`).|
+| Query     | `audit`             | admin      | Paginated audit-log с фильтрами.              |
+| Mutation  | `validateConfig`    | operator   | Schema + cross-validate YAML.                 |
+| Mutation  | `proposeConfig`     | operator   | Two-phase prepare → возвращает diff.          |
+| Mutation  | `commitConfig`      | admin      | Применить prepared YAML.                      |
+| Mutation  | `abortConfig`       | operator   | Отменить prepared.                            |
+| Mutation  | `probeUri`          | admin      | net.box probe внешнего инстанса.              |
+| Mutation  | `forceReapplyConfig`| admin      | `config:reload()` на peer'ах.                 |
+| Mutation  | `reloadRoles`       | superuser  | Hotreload ролевых модулей.                    |
+| Mutation  | `exportAudit`       | admin      | JSON-дамп аудит-лога.                          |
+| Mutation  | `applyForceApply` / `applyRestartReplication` / ... | admin | Apply-handlers для suggestions. |
+
+## Аудит и retention
+
+`_webui_audit` — replicated space. Фибер `audit.retention` раз в час свипает записи старше `roles_cfg.webui.audit_retention_days` (default 90, минимум 1) на лидере. Бюджет одного тика — 5000 удалений.
 
 ## Docker-образ инстанса (Task 9)
 
