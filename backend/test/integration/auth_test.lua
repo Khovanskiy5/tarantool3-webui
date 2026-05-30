@@ -11,9 +11,9 @@
 local t = require('luatest')
 local fio = require('fio')
 
-local repo_root = fio.abspath(fio.dirname(fio.dirname(fio.dirname(
+local repo_root = fio.abspath(fio.dirname(fio.dirname(fio.dirname(fio.dirname(
     debug.getinfo(1, 'S').source:sub(2)
-))))
+)))))
 package.path = repo_root .. '/backend/?.lua;' .. package.path
 
 local socket = require('socket')
