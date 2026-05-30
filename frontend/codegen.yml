@@ -13,24 +13,33 @@ documents:
   - ./src/**/*.graphql
   - ./src/**/*.{ts,vue}
 
+#
+# `client-preset` is the modern codegen flow. It emits a tree
+# under src/shared/api/generated/:
+#
+#   - graphql.ts  schema types (every Type/Enum/Input). Single
+#                 source of truth for enums; nothing else
+#                 redeclares them.
+#   - gql.ts      tagged-template helper that resolves operation
+#                 strings to TypedDocumentNode instances at build
+#                 time.
+#   - fragment-masking.ts  optional fragment-masking helpers.
+#
+# Each operation referenced via `gql(...)` keeps a fully typed
+# TypedDocumentNode so urql's client.query / client.mutation get
+# their `result.data` shape for free without re-declaring schema
+# types. The urql composables we used before are replaced by
+# generated `useFragment` / direct client.query calls.
+#
 generates:
-  ./src/shared/api/generated.ts:
-    plugins:
-      - typescript
-      - typescript-operations
-      # typescript-vue-urql emits composables that import from
-      # @urql/vue (NOT the React-flavoured urql package). It is the
-      # correct flavour for our app/providers/urql wiring.
-      - typescript-vue-urql
-    hooks:
-      # codegen emits IssueSeverity / IssueScope / IssueCategory
-      # twice because the operations plugin re-declares enum types
-      # used as $variable kinds. None of the official knobs
-      # (preResolveTypes, onlyOperationTypes, inlineFragmentTypes)
-      # suppress the duplicate, so a post-write script strips the
-      # later copy. See tools/dedup-generated.mjs for the regex.
-      afterOneFileWrite:
-        - 'node tools/dedup-generated.mjs'
+  # Codegen output goes into __generated/ so the index.ts the
+  # client-preset auto-emits (re-exports only `./gql`) cannot
+  # shadow the hand-written barrel below. See
+  # src/shared/api/generated.ts for the public re-exports.
+  ./src/shared/api/__generated/:
+    preset: client
+    presetConfig:
+      fragmentMasking: false
     config:
       avoidOptionals: true
       maybeValue: 'T | null'
@@ -38,11 +47,6 @@ generates:
         DateTime: string
         UUID: string
         JSON: 'Record<string, unknown>'
-      # withCompositionFunctions emits useFooQuery / useFooMutation
-      # using @urql/vue's composition API.
-      withCompositionFunctions: true
-      vueCompositionApiImportFrom: vue
-      preResolveTypes: true
       enumsAsTypes: true
       namingConvention:
         typeNames: keep

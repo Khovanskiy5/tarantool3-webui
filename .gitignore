@@ -64,6 +64,8 @@ backend/webui/assets/bundle/
 # GraphQL TS types, produced by graphql-codegen
 frontend/src/api/generated.ts
 frontend/src/api/generated/
+# graphql-codegen output (client-preset)
+frontend/src/shared/api/__generated/
 
 # ──────────────────────────────────────────────────────────────
 # Secrets / local env

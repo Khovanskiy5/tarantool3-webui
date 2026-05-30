@@ -7,9 +7,10 @@ test-results/
 .turbo/
 
 # Generated artefacts (regenerated from sources)
-src/shared/api/generated.ts
-src/shared/api/generated/
+src/shared/api/__generated/
 src/shared/api/schema.graphql
+# src/shared/api/generated.ts is the hand-written barrel that
+# re-exports __generated; it is checked in deliberately.
 
 # Editor
 *.swp
