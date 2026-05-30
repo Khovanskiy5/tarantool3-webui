@@ -275,11 +275,23 @@ end
 local function run_one_scan()
     local snap = state.snapshot()
     local result = M.scan(snap)
-    SCANNER.last_result = result
-    SCANNER.last_at     = fiber.clock()
+    local prev_total = 0
+    for _, list in pairs(SCANNER.last_result or {}) do
+        prev_total = prev_total + #list
+    end
     local total = 0
     for _, list in pairs(result) do total = total + #list end
+    SCANNER.last_result = result
+    SCANNER.last_at     = fiber.clock()
     logger.debug('suggestions tick', { total = total })
+
+    -- Notify WS subscribers when the total changed; redundant
+    -- broadcasts are cheap (no connections → no-op) but skipping
+    -- silent ticks keeps the wire chatter down.
+    if total ~= prev_total then
+        local ws_ok, ws = pcall(require, 'webui.http.ws')
+        if ws_ok then pcall(ws.broadcast) end
+    end
 end
 
 function M.start(opts)

@@ -398,6 +398,14 @@ local function run_one_scan()
         appeared    = appeared,
         disappeared = disappeared,
     })
+
+    -- Nudge WS subscribers on every scan that produced an
+    -- appeared/disappeared transition. Lazy require keeps the
+    -- scanner standalone for unit tests.
+    if appeared > 0 or disappeared > 0 then
+        local ws_ok, ws = pcall(require, 'webui.http.ws')
+        if ws_ok then pcall(ws.broadcast) end
+    end
 end
 
 function M.start(opts)

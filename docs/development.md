@@ -444,6 +444,31 @@ GraphQL:
 
 `suggestions.current()` — deep-copy кеша (resolver безопасно). `status()` — `{running, last_scan_at}`. Audit (Task 26) подхватит INFO применённого действия как security-relevant event.
 
+## WebSocket-инфраструктура (`/ws`)
+
+Дельты от поллера / issues / suggestions / config-watcher уезжают клиенту через одиночный `/ws` endpoint. В M1 — dev-anonymous: соединение принимается без проверки сессии при `WEBUI_DEV_ANONYMOUS_WS=1` (dev compose). В prod compose флаг отсутствует — endpoint отвечает `503 "auth not wired yet"` до Task 26a.
+
+Архитектура:
+
+- **`backend/webui/http/ws_frame.lua`** — pure RFC 6455 codec. Опкоды: text/binary/close/ping/pong. Длина 7/16/64-bit. Mask validation (client→server обязан mask'ировать). `MAX_FRAME_BYTES=16MiB`. `compute_accept(key)` через `digest.sha1` + base64 magic.
+- **`backend/webui/http/ws_registry.lua`** — реестр live-коннектов. Per-entry: id (sequential), session_id (placeholder для M2), ip, ua, created_at, last_pong, backlog_size, queue, close_fn. `register(meta)` отказывает с `'limit_reached'` при `max_connections=100`. `enqueue(id, msg)` отказывает `'backlog_overflow'` при `backlog_limit=1000` → `broadcast` дропает + close_fn(1008). `close_all(code,reason)` для shutdown.
+- **`backend/webui/http/ws.lua`** — endpoint + lifecycle.
+  - **Handshake**: GET /ws + Upgrade headers → 101 Switching Protocols. Невалидные headers → 400, без env flag → 503.
+  - **Lifecycle**: handler регистрирует connection, выставляет close_fn, спавнит reader fiber (parse client frames: pong→update_pong, ping→encode_pong, close→close, text→log+ignore), запускает writer LOOP внутри handler'а (важно: tcp_server закрывает socket когда handler возвращается; держим socket alive держа writer в handler-fiber'е). После выхода writer'а — `sock:close()` + unregister, возврат DETACHED.
+  - **Initial frame**: сразу после handshake'а кладём `{type:'initial', connection_id, cluster, issues, suggestions, ts}` в queue.
+  - **Broadcast**: `M.broadcast()` собирает `project_snapshot()` (state.snapshot + issues.current + suggestions.current + generation/ts) → JSON encode → `registry.broadcast()` → `notify_cond:broadcast()`. Хуки в `poller.tick`, `issues.run_one_scan` (на appeared/disappeared), `suggestions.run_one_scan` (на изменение total).
+- **Heartbeat fiber** `webui_ws_heartbeat` (1 на процесс) — каждые `HEARTBEAT_TICK_SEC=5s` сканирует реестр. `now - last_pong > PONG_DEADLINE_SEC=60s` → close_fn(1008, "pong_timeout"). Иначе если прошло `PING_INTERVAL_SEC=30s` — enqueue `'__ping__'` (writer обработает как PING frame).
+- **Graceful shutdown** (`webui.stop()`): `ws.shutdown()` → `registry.close_all(1001, 'shutdown')`.
+
+Лимиты:
+
+- `max_connections=100` (`registry.DEFAULT_MAX_CONNECTIONS`).
+- `backlog_limit=1000` (`registry.DEFAULT_BACKLOG_LIMIT`) — slow consumer закрывается с code 1008.
+
+Логи: INFO на connect/disconnect (с reason), WARN на slow-consumer/no pong/decode error/limit reached, DEBUG на каждое сообщение (bytes count, не содержимое).
+
+Ручная проверка: `python3 -c "import socket, base64, hashlib; s=socket.create_connection(...)"` + decode WS frame (см. `/tmp/ws_probe.py` пример в репо history).
+
 ## Добавление нового backend-резолвера
 
 ```bash

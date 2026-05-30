@@ -163,6 +163,22 @@ function M.wrap(name, sub, opts)
             response = error_envelope.respond_internal(request_id)
         end
 
+        -- The http rock interprets a numeric return as a special
+        -- signal. The only one we use is DETACHED (101) — the
+        -- WebSocket handler returns it after successfully owning
+        -- the raw socket. Pass it through without wrapping so the
+        -- rock leaves the connection alone.
+        if type(response) == 'number' then
+            handler_logger.info('handler detached', {
+                request_id = request_id,
+                handler = name,
+                method = req.method,
+                path = req.path,
+                latency_ms = latency_ms,
+            })
+            return response
+        end
+
         if type(response) ~= 'table' then
             handler_logger.error('handler returned non-table', {
                 request_id = request_id,

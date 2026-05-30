@@ -297,6 +297,14 @@ function M.stop()
         logger.error('http server stop raised', { err = tostring(err) })
     end
 
+    -- Close every WebSocket subscriber with 1001 "Going Away"
+    -- before stopping the producers. The shutdown call walks the
+    -- registry and tells each per-connection fiber to drop. We
+    -- swallow errors because the SPA is already disconnected
+    -- by the time this runs in practice.
+    local ws_ok_mod, ws_mod = pcall(require, 'webui.http.ws')
+    if ws_ok_mod then pcall(function() ws_mod.shutdown() end) end
+
     -- Stop the suggestions scanner first — it reads state.snapshot()
     -- which the poller produces.
     local sg_ok, sg_err = pcall(function() suggestions_engine.stop() end)

@@ -337,6 +337,12 @@ local function tick()
         now          = now,
     })
 
+    -- Wake WebSocket subscribers. The module is loaded lazily so
+    -- the poller stays operational even if the WS layer fails to
+    -- build (no rock dependency hard-coded into the poll loop).
+    local ws_ok, ws = pcall(require, 'webui.http.ws')
+    if ws_ok then pcall(ws.broadcast) end
+
     -- Log fresh probe failures only — skipped peers already have a
     -- backoff window and are not interesting to re-warn every tick.
     for name, res in pairs(probed) do

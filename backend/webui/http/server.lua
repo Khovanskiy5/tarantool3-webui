@@ -134,6 +134,23 @@ local function register_builtin_routes(httpd, role_opts)
         })
     end
 
+    -- WebSocket endpoint /ws. The module is loaded lazily so a
+    -- broken WS framing layer cannot prevent the REST surface from
+    -- coming up; the failure surfaces as a 404 on /ws and a warn
+    -- log line.
+    local ws_ok, ws = pcall(require, 'webui.http.ws')
+    if ws_ok then
+        httpd:route(
+            { path = '/ws', method = 'GET' },
+            middleware.wrap('ws', ws.handler)
+        )
+        logger.info('ws route registered', { path = '/ws' })
+    else
+        logger.warn('ws module load failed; /ws disabled', {
+            err = tostring(ws),
+        })
+    end
+
     -- Static SPA. The module is always loadable: when the bundle has
     -- not been produced (unit-test runs without `make embed-assets`),
     -- the handler returns 404 for every path while leaving the rest
@@ -270,5 +287,11 @@ end
 
 -- Internal: expose error_envelope so route handlers can fail cleanly.
 M.envelope = error_envelope
+
+-- Re-export the http rock's DETACHED sentinel so the WebSocket
+-- handler can return it without importing the rock directly. The
+-- middleware passes numbers through verbatim — see
+-- backend/webui/http/middleware.lua.
+M.DETACHED = http_server.DETACHED
 
 return M
