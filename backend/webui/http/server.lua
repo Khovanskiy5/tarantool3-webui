@@ -107,11 +107,14 @@ local function register_builtin_routes(httpd, role_opts)
     local auth_ok, auth_api = pcall(require, 'webui.api.auth')
     if auth_ok then
         httpd:route({ path = '/api/auth/login',  method = 'POST' },
-            middleware.wrap('auth_login',  auth_api.handler_login))
+            middleware.wrap('auth_login',  auth_api.handler_login,
+                { auth = 'public' }))
         httpd:route({ path = '/api/auth/logout', method = 'POST' },
-            middleware.wrap('auth_logout', auth_api.handler_logout))
+            middleware.wrap('auth_logout', auth_api.handler_logout,
+                { auth = 'public' }))
         httpd:route({ path = '/api/auth/me',     method = 'GET' },
-            middleware.wrap('auth_me',     auth_api.handler_me))
+            middleware.wrap('auth_me',     auth_api.handler_me,
+                { auth = 'session' }))
         logger.info('auth routes registered')
     else
         logger.warn('auth module load failed; /api/auth disabled', {
@@ -130,11 +133,13 @@ local function register_builtin_routes(httpd, role_opts)
         if init_ok then
             httpd:route(
                 { path = '/admin/api', method = 'POST' },
-                middleware.wrap('graphql', graphql_srv.handler)
+                middleware.wrap('graphql', graphql_srv.handler,
+                    { auth = 'session' })
             )
             httpd:route(
                 { path = '/admin/api/explore', method = 'GET' },
-                middleware.wrap('graphql_explorer', graphql_srv.graphiql_handler)
+                middleware.wrap('graphql_explorer', graphql_srv.graphiql_handler,
+                    { auth = 'admin' })
             )
             local s = graphql_srv.status()
             logger.info('graphql routes registered', {

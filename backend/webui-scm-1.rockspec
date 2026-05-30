@@ -68,6 +68,7 @@ build = {
         ['webui.storage.migrations']     = 'backend/webui/storage/migrations.lua',
         ['webui.auth.session']           = 'backend/webui/auth/session.lua',
         ['webui.auth.rate_limit']        = 'backend/webui/auth/rate_limit.lua',
+        ['webui.auth.rbac']              = 'backend/webui/auth/rbac.lua',
         ['webui.api.auth']               = 'backend/webui/api/auth.lua',
         ['webui.audit.log']              = 'backend/webui/audit/log.lua',
         ['webui.cluster.peers']          = 'backend/webui/cluster/peers.lua',

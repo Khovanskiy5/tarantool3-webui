@@ -85,11 +85,47 @@ Audit-log:
 - `auth.login` (scope = `session`, payload = `{ ip }`) — на успешный вход.
 - `auth.logout` (scope = `session`) — на выход.
 
+## RBAC (Task 26)
+
+Четыре роли, ранжированные снизу вверх: `viewer` < `operator` < `admin` < `superuser`. Запрос проходит, если *любая* роль пользователя имеет ранг не ниже требуемого.
+
+Карта user → roles в dev-фикстуре:
+
+| Пользователь  | Пароль                  | Роли      |
+|---------------|-------------------------|-----------|
+| `admin_dev`    | `admin-dev-password`     | `admin`    |
+| `operator_dev` | `operator-dev-password`  | `operator` |
+| `viewer_dev`   | `viewer-dev-password`    | `viewer`   |
+
+Production-маппинг подкладывается через `roles_cfg.webui.rbac.users` cluster-wide config'а (хук в `applier`, ландит в Task 30).
+
+REST-карта (`backend/webui/auth/rbac.lua` → `REST_AUTH`):
+
+| Маршрут                        | Требование |
+|--------------------------------|------------|
+| `GET  /api/health`             | `public`   |
+| `POST /api/auth/login`         | `public`   |
+| `POST /api/auth/logout`        | `public`   |
+| `GET  /api/auth/me`            | `session`  |
+| `POST /api/eval`               | `superuser`|
+| `GET  /ws`                     | `public` (своё рукопожатие в Task 26a) |
+| `POST /admin/api` (GraphQL)    | `session` (per-field RBAC в резолверах) |
+| `GET  /admin/api/explore`      | `admin`    |
+
+CSRF: на каждом state-changing методе (POST/PUT/PATCH/DELETE) middleware читает заголовок `X-Csrf-Token`. Несовпадение с CSRF-токеном из `_webui_sessions` → `403 CSRF_MISMATCH`. Login/logout исключены (auth=`public`), потому что на /login токен ещё не существует.
+
+GraphQL-карта (для будущих резолверов, `GRAPHQL_FIELD`): см. модуль `webui.auth.rbac`. Резолверы вызывают `rbac.allowed(req.session.roles, rbac.GRAPHQL_FIELD[field_name])` перед выполнением и возвращают ошибку `FORBIDDEN` при неуспехе.
+
+При отказе доступа middleware:
+
+- логирует `info` (`rbac denied` или `csrf mismatch`),
+- пишет в `_webui_audit` запись `action = "rbac.denied"` с `scope = required-role`, `payload = { handler, path }`.
+
 ## Дальнейшие разделы
 
 Появляются по мере реализации задач:
 
-- Аутентификация (sessions, cookie, CSRF) → Tasks 25 ✅, 26.
+- Аутентификация (sessions, cookie, CSRF) → Tasks 25 ✅, 26 ✅.
 - RBAC (`viewer/operator/admin/superuser`) → Task 26 + `docs/rbac-matrix.md`.
 - TLS: HAProxy на 443 + mTLS на peer net.box → Task 11, 16.
 - Peer-cookie (`webui_peer` system user) → Task 15.

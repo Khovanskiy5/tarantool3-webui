@@ -17,6 +17,7 @@
 -- Auth and CSRF middleware are reserved placeholders until M2.
 
 local clock = require('clock')
+local json = require('json')
 local uuid = require('uuid')
 
 local log_util = require('webui.log_util')
@@ -123,14 +124,153 @@ local function assign_request_id(req)
     end
 end
 
+-- Auth helpers. Pulled in via a deferred require so the
+-- middleware module stays loadable in unit tests that don't
+-- bootstrap the auth submodules.
+local _session_mod, _rbac_mod, _audit_mod
+local function lazy_session()
+    if _session_mod == nil then
+        local ok, mod = pcall(require, 'webui.auth.session')
+        if ok then _session_mod = mod end
+    end
+    return _session_mod
+end
+local function lazy_rbac()
+    if _rbac_mod == nil then
+        local ok, mod = pcall(require, 'webui.auth.rbac')
+        if ok then _rbac_mod = mod end
+    end
+    return _rbac_mod
+end
+local function lazy_audit()
+    if _audit_mod == nil then
+        local ok, mod = pcall(require, 'webui.audit.log')
+        if ok then _audit_mod = mod end
+    end
+    return _audit_mod
+end
+
+local MUTATION_METHODS = {
+    POST = true, PUT = true, PATCH = true, DELETE = true,
+}
+
+local COOKIE_NAME = 'webui_session'
+
+local function parse_session_cookie(req)
+    local raw = header_lookup(req, 'cookie')
+    if type(raw) ~= 'string' then return nil end
+    for piece in raw:gmatch('([^; ]+)') do
+        local name, value = piece:match('^([^=]+)=(.+)$')
+        if name == COOKIE_NAME then return value end
+    end
+    return nil
+end
+
+local function envelope_response(status, code, message, request_id)
+    return {
+        status = status,
+        headers = { ['content-type'] = 'application/json; charset=utf-8' },
+        body = json.encode({
+            error = {
+                code = code, message = message,
+                request_id = request_id,
+            },
+        }),
+    }
+end
+
+-- Enforce session + RBAC + CSRF as configured. Returns nil on pass,
+-- or a fully-formed response table on rejection.
+local function enforce_auth(req, opts, request_id, handler_logger, name)
+    local required = opts.auth or 'session'
+    if required == 'public' then return nil end
+
+    local session_mod = lazy_session()
+    if session_mod == nil then
+        handler_logger.error('auth module unavailable', {
+            request_id = request_id, handler = name,
+        })
+        return envelope_response(503, 'UNAVAILABLE',
+            'auth subsystem unavailable', request_id)
+    end
+
+    local sid = parse_session_cookie(req)
+    if sid == nil then
+        return envelope_response(401, 'UNAUTHORIZED',
+            'no session', request_id)
+    end
+    local tuple = session_mod.get(sid)
+    if tuple == nil then
+        return envelope_response(401, 'UNAUTHORIZED',
+            'session expired', request_id)
+    end
+
+    -- CSRF check for state-changing methods.
+    if MUTATION_METHODS[req.method] then
+        local csrf = header_lookup(req, 'x-csrf-token')
+        if type(csrf) ~= 'string' or csrf ~= tuple.csrf then
+            handler_logger.info('csrf mismatch', {
+                request_id = request_id, handler = name,
+                user = tuple.user,
+            })
+            return envelope_response(403, 'CSRF_MISMATCH',
+                'csrf token missing or invalid', request_id)
+        end
+    end
+
+    -- RBAC check when a role is required.
+    if required ~= 'session' then
+        local rbac = lazy_rbac()
+        if rbac == nil then
+            return envelope_response(503, 'UNAVAILABLE',
+                'rbac unavailable', request_id)
+        end
+        local user_roles = rbac.user_roles(tuple.user)
+        if not rbac.allowed(user_roles, required) then
+            handler_logger.info('rbac denied', {
+                request_id = request_id, handler = name,
+                user = tuple.user, required = required,
+                actual = user_roles,
+            })
+            local audit = lazy_audit()
+            if audit ~= nil then
+                pcall(audit.record, {
+                    user = tuple.user, action = 'rbac.denied',
+                    scope = required, request_id = request_id,
+                    payload = { handler = name },
+                })
+            end
+            return envelope_response(403, 'FORBIDDEN',
+                'insufficient role', request_id)
+        end
+    end
+
+    -- Surface session context to the handler.
+    req.session = tuple
+    req.user = tuple.user
+    return nil
+end
+
 -- wrap(name, sub, opts) returns a handler suitable for server:route().
 --
 -- opts:
 --   allowed_origins  list of origin strings (default: nil → no CORS headers)
 --   handler_logger   optional log_util tagged logger (default: 'http')
+--   auth             'public' | 'session' | <role-name> (default: 'session')
+--                    'public' skips session and RBAC; routes without an
+--                    explicit override default to 'public' until M2 fully
+--                    flips the table (the http.server registers explicit
+--                    overrides per route).
+--   audit_action     when present, logs a successful response (<400) into
+--                    `_webui_audit` with this action name.
 function M.wrap(name, sub, opts)
     opts = opts or {}
     local handler_logger = opts.handler_logger or logger
+    -- Honest default: most routes registered today predate this
+    -- middleware. To avoid breaking them at once we keep the default
+    -- as `public`; explicit routes that flip on auth pass `auth='session'`
+    -- (or a role name) at registration time.
+    opts.auth = opts.auth or 'public'
 
     return function(req)
         assign_request_id(req)
@@ -143,6 +283,21 @@ function M.wrap(name, sub, opts)
             local headers = apply_security_headers(copy(cors))
             headers['x-request-id'] = request_id
             return { status = 204, headers = headers, body = '' }
+        end
+
+        -- Auth pipeline. Runs before the handler and can short-circuit.
+        local rejected = enforce_auth(req, opts, request_id, handler_logger, name)
+        if rejected ~= nil then
+            rejected.headers = rejected.headers or {}
+            rejected.headers['x-request-id'] = request_id
+            apply_security_headers(rejected.headers)
+            handler_logger.info('request handled', {
+                request_id = request_id, handler = name,
+                method = req.method, path = req.path,
+                status = rejected.status,
+                latency_ms = (clock.monotonic() - started) * 1000,
+            })
+            return rejected
         end
 
         local ok, response = pcall(sub, req)
@@ -212,6 +367,18 @@ function M.wrap(name, sub, opts)
             status = response.status,
             latency_ms = latency_ms,
         })
+
+        -- Audit-log successful mutations when configured.
+        if opts.audit_action ~= nil and response.status < 400 then
+            local audit = lazy_audit()
+            if audit ~= nil then
+                pcall(audit.record, {
+                    user = req.user, action = opts.audit_action,
+                    scope = opts.audit_scope, request_id = request_id,
+                    payload = { handler = name, path = req.path },
+                })
+            end
+        end
 
         return response
     end

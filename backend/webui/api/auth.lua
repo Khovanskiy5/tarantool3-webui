@@ -239,9 +239,8 @@ function M.handler_me(req)
             error = { code = 'UNAUTHORIZED', message = 'session expired' },
         })
     end
-    -- RBAC role resolution lands in Task 26; expose the empty
-    -- contract for now so the SPA can already render the gate.
-    local roles = {}
+    local rbac_ok, rbac = pcall(require, 'webui.auth.rbac')
+    local roles = rbac_ok and rbac.user_roles(tuple.user) or {}
     return json_response(200, {
         user      = tuple.user,
         roles     = roles,
