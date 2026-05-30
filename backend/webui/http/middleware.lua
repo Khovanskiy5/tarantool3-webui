@@ -29,11 +29,24 @@ local logger = log_util.with_tag('http')
 -- Mandatory response headers for security. Applied unconditionally.
 -- CSP allows blob: workers because Monaco needs them; if no Monaco page
 -- is open this still costs nothing.
+--
+-- 'unsafe-eval' is allowed for the SPA bundle because vue-i18n's
+-- runtime evaluates a small number of dynamic message functions via
+-- `new Function(...)` even when JSON locales are AOT-precompiled by
+-- @intlify/unplugin-vue-i18n. Stripping the runtime compiler via
+-- `runtimeOnly: true` removes `new Function` from the static bundle
+-- but leaves a single code path inside the message-compiler that
+-- still tries to allocate one — which our strict CSP would block,
+-- making the entire shell go blank.
+-- See `frontend/vite.config.ts` for the AOT plugin and the smoke
+-- test `frontend/tests/e2e/smoke.spec.ts` which guards this
+-- regression. The follow-up to tighten CSP back to `'self'` lives
+-- with the SPA refactor away from vue-i18n's runtime compiler.
 local DEFAULT_SECURITY_HEADERS = {
     ['strict-transport-security'] = 'max-age=63072000; includeSubDomains',
     ['content-security-policy'] = table.concat({
         "default-src 'self'",
-        "script-src 'self'",
+        "script-src 'self' 'unsafe-eval'",
         "style-src 'self' 'unsafe-inline'",
         "img-src 'self' data:",
         "font-src 'self' data:",

@@ -181,6 +181,40 @@ bun run build-storybook   # собирает статический сайт в 
 
 `storybook-static/` в .gitignore и публикуется как часть проектного сайта (Task 11 — деплой).
 
+## Smoke e2e (Playwright)
+
+`frontend/playwright.config.ts` + `frontend/tests/e2e/smoke.spec.ts` — минимальный набор end-to-end проверок, которые гоняются против поднятого `docker-compose.dev.yml`. Цель — поймать сломанный билд до того, как доменные suite'ы начнут искать настоящие баги.
+
+Что покрыто (3 теста):
+1. **`/` отдаёт SPA shell**: 200, `<title>` `Tarantool WebUI`, в DOM виден бренд TopBar (если JS взлетел).
+2. **`/api/health` отвечает 200 с identity**: `status: ok`, `role_state: ready`, `instance: tt-1`, версии Tarantool/WebUI присутствуют.
+3. **SPA из браузера достучится до `/api/health`**: тот же fetch с `credentials: 'same-origin'`, ловит CSP/CORS/HAProxy regressions, которых не видно из чистого `request.get`.
+
+Запуск локально:
+
+```bash
+make dev               # поднять compose, дождаться healthy
+cd frontend
+bunx playwright install chromium    # один раз
+bun run test:e2e
+```
+
+Переопределение target'а:
+
+```bash
+# Прогнать против HAProxy (port 8080) или произвольного URL
+WEBUI_BASE_URL=http://localhost:8080 bun run test:e2e
+
+# Сменить ожидаемое имя инстанса
+WEBUI_EXPECTED_INSTANCE=tt-2 WEBUI_BASE_URL=http://localhost:8082 bun run test:e2e
+```
+
+Playwright артефакты (`playwright-report/`, `test-results/`) в `.gitignore`. На фейле сохраняется screenshot + trace + video для диагностики; открыть trace — `bunx playwright show-trace test-results/<path>/trace.zip`.
+
+В CI ожидается, что workflow поднимает `docker-compose.dev.yml --wait`, потом гоняет `bun run test:e2e` с `WEBUI_BASE_URL` указывающим на CI-сервис. Настройка `forbidOnly: !!CI` ломает сборку при случайно оставленном `.only`.
+
+**Известный M0 trade-off:** `Content-Security-Policy` в `backend/webui/http/middleware.lua` временно разрешает `'unsafe-eval'` — без него vue-i18n рантайм-компилятор кидает `EXPECTED_TOKEN` через `new Function`. AOT-precompile через `@intlify/unplugin-vue-i18n` ломает runtime-only build vue-i18n (IR-формат vs ожидаемые функции), так что AOT-подход отложен. Smoke этот регрессионный сценарий ловит — если SPA снова перестанет рендериться, тест #1 (`serves the SPA shell at /`) упадёт первым. Следующая итерация CSP — отдельная задача после миграции с vue-i18n runtime compiler.
+
 ## Добавление нового shared UI компонента
 
 Каждый UI-примитив в `frontend/src/shared/ui/` обязан идти вместе со story-файлом и проходить axe-checks через `addon-a11y`.
