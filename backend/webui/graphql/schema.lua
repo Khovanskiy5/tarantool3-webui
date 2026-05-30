@@ -34,6 +34,8 @@ local issues_resolver  = require('webui.graphql.resolvers.issues')
 local suggestions_resolver = require('webui.graphql.resolvers.suggestions')
 local audit_types          = require('webui.graphql.types.audit')
 local audit_resolver       = require('webui.graphql.resolvers.audit')
+local config_types         = require('webui.graphql.types.config')
+local config_resolver      = require('webui.graphql.resolvers.config')
 
 local M = {}
 
@@ -181,6 +183,12 @@ local Query = types.object {
                 .. 'cluster state. Empty lists when no suggestion applies.',
             resolve = suggestions_resolver.suggestions,
         },
+        config = {
+            kind = config_types.ConfigCurrent.nonNull,
+            description = 'Current cluster YAML and its etcd revision. ' ..
+                'Source = "etcd" when wired, "file" before.',
+            resolve = config_resolver.query_current,
+        },
         audit = {
             kind = audit_types.AuditPage.nonNull,
             description = 'Paginated audit log filtered by user/action/scope/time. '
@@ -274,6 +282,29 @@ local Mutation = types.object {
                 .. 'Requires the `admin` role.',
             arguments = { filter = audit_types.AuditFilter },
             resolve = audit_resolver.mutation_export_audit,
+        },
+        validateConfig = {
+            kind = types.object({
+                name = 'ConfigValidationResult',
+                fields = { issues = types.list(config_types.ConfigValidationIssue.nonNull).nonNull },
+            }).nonNull,
+            arguments = { yaml = types.string.nonNull },
+            resolve = config_resolver.mutation_validate,
+        },
+        proposeConfig = {
+            kind = config_types.ConfigPrepareResult.nonNull,
+            arguments = { yaml = types.string.nonNull },
+            resolve = config_resolver.mutation_prepare,
+        },
+        commitConfig = {
+            kind = config_types.ConfigCommitResult.nonNull,
+            arguments = { prepared_id = types.string.nonNull },
+            resolve = config_resolver.mutation_commit,
+        },
+        abortConfig = {
+            kind = config_types.ConfigCommitResult.nonNull,
+            arguments = { prepared_id = types.string.nonNull },
+            resolve = config_resolver.mutation_abort,
         },
     },
 }
