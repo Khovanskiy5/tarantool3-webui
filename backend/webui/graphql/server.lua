@@ -155,9 +155,20 @@ function M.handler(req)
     -- There is no separate "context" argument; per-request data
     -- (request_id, future user) rides on rootValue and is reachable
     -- to resolvers via the parent argument at root.
+    -- Inject the authenticated session into the root value so
+    -- resolvers can enforce per-field RBAC. The middleware already
+    -- validated the session and populated `req.session` /
+    -- `req.user`.
+    local user, roles
+    if req.session ~= nil then
+        user = req.session.user
+        local rbac_ok, rbac = pcall(require, 'webui.auth.rbac')
+        roles = rbac_ok and rbac.user_roles(user) or {}
+    end
     local root_value = {
         request_id = req.request_id,
-        -- A user object will be plumbed in once Task 26 lands auth.
+        user       = user,
+        roles      = roles or {},
     }
     local ok_exec, exec_result = pcall(
         execute.execute, STATE.schema, doc, root_value, variables, operation_name

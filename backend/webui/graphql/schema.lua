@@ -32,6 +32,8 @@ local suggestion_types = require('webui.graphql.types.suggestion')
 local cluster_resolver = require('webui.graphql.resolvers.cluster')
 local issues_resolver  = require('webui.graphql.resolvers.issues')
 local suggestions_resolver = require('webui.graphql.resolvers.suggestions')
+local audit_types          = require('webui.graphql.types.audit')
+local audit_resolver       = require('webui.graphql.resolvers.audit')
 
 local M = {}
 
@@ -179,6 +181,17 @@ local Query = types.object {
                 .. 'cluster state. Empty lists when no suggestion applies.',
             resolve = suggestions_resolver.suggestions,
         },
+        audit = {
+            kind = audit_types.AuditPage.nonNull,
+            description = 'Paginated audit log filtered by user/action/scope/time. '
+                .. 'Requires the `admin` role.',
+            arguments = {
+                filter = audit_types.AuditFilter,
+                limit  = types.int,
+                after  = types.long,
+            },
+            resolve = audit_resolver.query_audit,
+        },
     },
 }
 
@@ -254,6 +267,13 @@ local Mutation = types.object {
                 instanceUuids = types.list(types.string.nonNull).nonNull,
             },
             resolve = suggestions_resolver.apply_bootstrap_vshard,
+        },
+        exportAudit = {
+            kind = audit_types.AuditExport.nonNull,
+            description = 'Returns the filtered audit log as a JSON blob. '
+                .. 'Requires the `admin` role.',
+            arguments = { filter = audit_types.AuditFilter },
+            resolve = audit_resolver.mutation_export_audit,
         },
     },
 }

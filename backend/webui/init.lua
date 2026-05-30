@@ -106,6 +106,11 @@ function M.validate(cfg)
     if cfg.ws_allowed_origins ~= nil and type(cfg.ws_allowed_origins) ~= 'table' then
         return nil, 'roles_cfg.webui.ws_allowed_origins must be a list of strings'
     end
+    if cfg.audit_retention_days ~= nil
+        and (type(cfg.audit_retention_days) ~= 'number'
+        or cfg.audit_retention_days < 1) then
+        return nil, 'roles_cfg.webui.audit_retention_days must be a positive number'
+    end
     if cfg.rbac ~= nil then
         if type(cfg.rbac) ~= 'table' then
             return nil, 'roles_cfg.webui.rbac must be a table'
@@ -304,6 +309,20 @@ function M.start(opts)
         if rbac_ok then rbac.set_user_roles(opts.rbac.users) end
     end
 
+    -- Audit-log retention fiber (Task 27).
+    local retention_ok, retention = pcall(require, 'webui.audit.retention')
+    if retention_ok then
+        local r_ok, r_err = pcall(retention.start, {
+            retention_days = opts.audit_retention_days,
+        })
+        if not r_ok then
+            logger.warn('audit retention failed to start', {
+                err = tostring(r_err),
+            })
+        end
+        STATE.audit_retention = retention
+    end
+
     local http_ok, http_err = http_srv.start({
         listen = opts.listen,
         allowed_origins = opts.allowed_origins,
@@ -351,6 +370,12 @@ function M.stop()
     -- by the time this runs in practice.
     local ws_ok_mod, ws_mod = pcall(require, 'webui.http.ws')
     if ws_ok_mod then pcall(function() ws_mod.shutdown() end) end
+
+    -- Stop the audit retention fiber.
+    if STATE.audit_retention ~= nil then
+        pcall(function() STATE.audit_retention.stop() end)
+        STATE.audit_retention = nil
+    end
 
     -- Stop the suggestions scanner first — it reads state.snapshot()
     -- which the poller produces.
