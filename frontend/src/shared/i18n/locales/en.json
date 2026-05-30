@@ -1,0 +1,77 @@
+{
+  "common": {
+    "yes": "Yes",
+    "no": "No",
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "save": "Save",
+    "delete": "Delete",
+    "edit": "Edit",
+    "loading": "Loading…",
+    "error": "Error: {message}",
+    "retry": "Retry",
+    "back_to_dashboard": "Back to dashboard"
+  },
+  "app": {
+    "title": "Tarantool WebUI",
+    "subtitle": "Tarantool 3.7 cluster administration",
+    "language": "Language",
+    "theme": {
+      "label": "Theme",
+      "dark": "Dark",
+      "light": "Light"
+    }
+  },
+  "widgets": {
+    "top_bar": {
+      "instance_label": "Instance",
+      "logout": "Sign out",
+      "settings": "Settings",
+      "no_instance": "—"
+    },
+    "sidebar": {
+      "cluster": "Cluster",
+      "issues": "Issues",
+      "config_editor": "Config editor",
+      "schema": "Schema",
+      "users": "Users",
+      "failover": "Failover",
+      "vshard": "Vshard",
+      "metrics": "Metrics",
+      "snapshots": "Snapshots",
+      "console": "Console",
+      "audit": "Audit"
+    }
+  },
+  "pages": {
+    "not_found": {
+      "title": "Page not found",
+      "description": "The requested page does not exist."
+    },
+    "forbidden": {
+      "title": "Access denied",
+      "description": "Your role does not have permission to view this page. Contact an administrator if you believe this is an error."
+    },
+    "network_error": {
+      "title": "Connection lost",
+      "description": "We cannot reach the instance. The cluster may be overloaded or a network failure occurred. The UI will reconnect automatically.",
+      "reconnecting": "Reconnecting…"
+    }
+  },
+  "errors": {
+    "UNAUTHORIZED": "Authentication required",
+    "FORBIDDEN": "Access denied",
+    "NOT_FOUND": "Resource not found",
+    "VALIDATION_ERROR": "Validation error",
+    "CONFLICT": "State conflict",
+    "CAS_CONFLICT": "Configuration changed — reload the page",
+    "RATE_LIMITED": "Too many requests. Retry in {seconds} s.",
+    "TIMEOUT": "Operation timed out",
+    "UNAVAILABLE": "Service temporarily unavailable",
+    "INTERNAL": "Internal error. Request: {request_id}",
+    "ETCD_UNAVAILABLE": "etcd is unreachable — UI is read-only",
+    "TX_THREAD_BLOCKED": "Instance is not responding",
+    "SHUTDOWN_IN_PROGRESS": "Graceful shutdown is in progress",
+    "UNKNOWN": "Unknown error: {code}"
+  }
+}

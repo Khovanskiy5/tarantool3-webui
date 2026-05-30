@@ -1,0 +1,21 @@
+[install]
+registry = "https://registry.npmjs.org"
+# Binary lockfile (bun.lockb) is the source of truth and is committed.
+# Keep dependency resolution deterministic across machines.
+exact = false
+optional = true
+dev = true
+peer = true
+production = false
+
+[install.cache]
+# Default cache location ~/.bun/install/cache — left as default for CI shareability.
+
+[test]
+# We use vitest, not bun:test, for richer Vue 3 + jsdom support.
+# Keep bun test disabled to avoid accidental conflicts.
+preload = []
+
+[run]
+# bun run quirks: do not auto-bundle scripts; let vite/vitest own bundling.
+bun = false

@@ -1,0 +1,77 @@
+{
+  "common": {
+    "yes": "Да",
+    "no": "Нет",
+    "confirm": "Подтвердить",
+    "cancel": "Отмена",
+    "save": "Сохранить",
+    "delete": "Удалить",
+    "edit": "Изменить",
+    "loading": "Загрузка…",
+    "error": "Ошибка: {message}",
+    "retry": "Повторить",
+    "back_to_dashboard": "Вернуться на главную"
+  },
+  "app": {
+    "title": "Tarantool WebUI",
+    "subtitle": "Управление кластером Tarantool 3.7",
+    "language": "Язык",
+    "theme": {
+      "label": "Тема",
+      "dark": "Тёмная",
+      "light": "Светлая"
+    }
+  },
+  "widgets": {
+    "top_bar": {
+      "instance_label": "Инстанс",
+      "logout": "Выход",
+      "settings": "Настройки",
+      "no_instance": "—"
+    },
+    "sidebar": {
+      "cluster": "Кластер",
+      "issues": "Проблемы",
+      "config_editor": "Редактор конфигурации",
+      "schema": "Схема",
+      "users": "Пользователи",
+      "failover": "Failover",
+      "vshard": "Vshard",
+      "metrics": "Метрики",
+      "snapshots": "Снапшоты",
+      "console": "Консоль",
+      "audit": "Аудит"
+    }
+  },
+  "pages": {
+    "not_found": {
+      "title": "Страница не найдена",
+      "description": "Запрошенная страница не существует."
+    },
+    "forbidden": {
+      "title": "Доступ запрещён",
+      "description": "У вас недостаточно прав для просмотра этой страницы. Обратитесь к администратору, если считаете, что произошла ошибка."
+    },
+    "network_error": {
+      "title": "Соединение потеряно",
+      "description": "Не удаётся связаться с инстансом. Возможно, кластер перегружен или произошёл сетевой сбой. UI попытается переподключиться автоматически.",
+      "reconnecting": "Переподключение…"
+    }
+  },
+  "errors": {
+    "UNAUTHORIZED": "Требуется авторизация",
+    "FORBIDDEN": "Доступ запрещён",
+    "NOT_FOUND": "Ресурс не найден",
+    "VALIDATION_ERROR": "Ошибка валидации",
+    "CONFLICT": "Конфликт состояния",
+    "CAS_CONFLICT": "Конфигурация изменилась — обновите страницу",
+    "RATE_LIMITED": "Слишком много запросов. Повторите через {seconds} сек.",
+    "TIMEOUT": "Превышено время ожидания",
+    "UNAVAILABLE": "Сервис временно недоступен",
+    "INTERNAL": "Внутренняя ошибка. Запрос: {request_id}",
+    "ETCD_UNAVAILABLE": "etcd недоступен — UI в режиме «только чтение»",
+    "TX_THREAD_BLOCKED": "Инстанс не отвечает",
+    "SHUTDOWN_IN_PROGRESS": "Идёт graceful shutdown",
+    "UNKNOWN": "Неизвестная ошибка: {code}"
+  }
+}

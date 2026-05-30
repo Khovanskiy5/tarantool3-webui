@@ -208,12 +208,84 @@ HTTP-статус выводится из `errors.HTTP_STATUS[code]`, отсут
 
 См. `docs/api/rest.md` — двухуровневый ответ ok/degraded/unhealthy с расширяемыми checks. Extension point — `health.register_check(name, fn)` для модулей, которые приходят позже (etcd → Task 30, peers → Task 17, config → Task 27).
 
+## Frontend каркас (Task 4)
+
+Frontend живёт в `frontend/` и собирается через **Bun + Vite + Vue 3 + TypeScript**. Архитектурно — Feature-Sliced Design.
+
+### Слои FSD
+
+```
+src/
+├── app/         инициализация (main.ts, App.vue), router, providers, глобальные стили
+├── pages/       роутовые слайсы (errors/{not-found,forbidden,network-error} на момент Task 4)
+├── widgets/     композитные блоки (sidebar, top-bar)
+├── features/    пользовательские сценарии (появляются по мере задач)
+├── entities/    бизнес-сущности (появляются по мере задач)
+└── shared/      инфраструктура без знания домена (api, ui, lib, config, i18n)
+```
+
+Направление импортов: `app → pages → widgets → features → entities → shared`. Импорт только через публичный `index.ts` каждого слайса. Контроль — `eslint-plugin-boundaries`, конфиг в `frontend/.eslintrc.cjs` (правило `boundaries/element-types` и `boundaries/no-private`).
+
+`tsconfig.paths` и `vite.config.resolve.alias` зеркалируют слои через алиасы `@/app`, `@/pages`, `@/widgets`, `@/features`, `@/entities`, `@/shared`. Алиасы обязаны быть побайтово идентичны в обоих файлах.
+
+### Bun-runtime
+
+- Менеджер пакетов и runtime — **Bun ≥ 1.1**, не Node/npm.
+- Lockfile — `bun.lockb` (бинарный, коммитится).
+- Vite, vue-tsc, ESLint, vitest, Playwright работают под Bun без модификаций.
+- `bunfig.toml` фиксирует registry, отключает встроенный `bun test` (используем vitest для лучшей Vue-интеграции).
+
+### Vite-сборка
+
+- `base: './'` — относительные пути ассетов работают за HAProxy и sub-path-деплоями.
+- `vite-plugin-compression2` — pre-compressed brotli+gzip за один проход (двойной вызов плагина гонится на одном rollup-output).
+- Manual chunks: `vendor-vue`, `vendor-urql`, `vendor-primevue`, `vendor-misc`, `monaco-editor`.
+- Target `es2022`, `cssCodeSplit: true`, `sourcemap: 'hidden'` (карты не ссылаются из HTML — пригодны для приватной загрузки в error-tracker).
+- Monaco workers будут подключаться через native Vite `?worker`-импорт по месту использования (Task 38), а не через legacy `vite-plugin-monaco-editor` (несовместим с Vite 5+).
+
+### Initial bundle и бюджет
+
+На пустом каркасе:
+- `vendor-vue` (vue+router+pinia+vue-i18n): ~57 КБ gzipped.
+- `vendor-primevue`: ~11 КБ gzipped.
+- `vendor-urql`: ~10 КБ gzipped.
+- `index` (app shell + widgets): ~21 КБ gzipped.
+- Initial total ≈ **99 КБ gzipped** (бюджет initial — 350 КБ, см. Performance budgets).
+
+Lazy chunks страниц ошибок — < 1 КБ каждая.
+
+### i18n
+
+`vue-i18n@^9` с `legacy: false`. Инстанс — `@/shared/i18n`, bootstrap — `@/app/providers/i18n`. Локали:
+
+- `ru` (default), `en` — оба полностью покрыты ключами `common/app/widgets/pages/errors`.
+- Стратегия определения: localStorage `webui:locale` → `navigator.language` → default `ru`.
+- Missing-key: warning в dev, silent fallback на `en` в prod.
+- Плюрализация — built-in pipe syntax `vue-i18n`.
+
+Полная стратегия — `docs/development.md`, секция i18n.
+
+### Клиентский логгер
+
+`@/shared/lib/log` — пара функций + `withTag(tag)` для тегированных логгеров. Уровень из `VITE_LOG_LEVEL`, дефолт — `debug` в dev, `warn` в prod. Pretty-print в dev, JSON в prod. Hook `subscribeSink(sink)` позволит forward'ить critical errors на backend в одной из следующих задач.
+
+### Error boundary
+
+`@/app/providers/error-boundary` устанавливает `app.config.errorHandler`, `window.onerror`, `unhandledrejection` — все три путь логирования. Toast UX добавится вместе с shared/ui toast-утилитой.
+
+### Страницы ошибок
+
+`pages/errors/{not-found, forbidden, network-error}` — каждая со своим `index.ts`, экспортирующим Vue-компонент и `ROUTE`-константу. Router собирает все ROUTE в `@/app/router`. Все три страницы — accessibility-ready (`role="alert"`, `aria-live="polite"`, keyboard-focusable action).
+
+### Сетевые прокси (dev)
+
+`vite.config.server.proxy` направляет `/admin/api`, `/api/*`, `/ws` на `VITE_BACKEND_URL` (default `http://localhost:8081`). В compose-окружении это `tt-1`.
+
 ## Дальнейшие разделы
 
 Появляются по мере реализации задач:
 
 - Graceful shutdown sequence → Task 3a.
-- Frontend FSD структура → Task 4.
 - GraphQL skeleton + GraphiQL → Task 7.
 - Cluster state, poller, issues, suggestions → Tasks 13–20.
 - Two-phase commit + etcd → Tasks 30–34.

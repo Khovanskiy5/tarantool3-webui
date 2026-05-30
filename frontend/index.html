@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tarantool WebUI</title>
+    <meta name="description" content="Tarantool 3.7 cluster administration UI" />
+    <meta name="theme-color" content="#0e1117" />
+    <!-- Preconnect to API origins is intentionally omitted: the SPA is
+         served by the same origin that exposes /admin/api and /ws. -->
+  </head>
+  <body class="webui-dark">
+    <noscript>
+      <div style="padding:2rem;font-family:sans-serif">
+        Tarantool WebUI requires JavaScript to be enabled in your browser.
+      </div>
+    </noscript>
+    <div id="app"></div>
+    <script type="module" src="/src/app/main.ts"></script>
+  </body>
+</html>
