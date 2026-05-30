@@ -32,6 +32,7 @@ local peer_cookie = require('webui.cluster.peer_cookie')
 local peers       = require('webui.cluster.peers')
 local poller      = require('webui.cluster.poller')
 local issues      = require('webui.cluster.issues')
+local suggestions_engine = require('webui.cluster.suggestions')
 
 local logger = log_util.with_tag('init')
 
@@ -246,6 +247,14 @@ function M.start(opts)
         logger.warn('issues scanner start failed', { err = tostring(is_err) })
     end
 
+    -- Step 8c: suggestions engine. Same 5s cadence as the issues
+    -- scanner, separate fiber so a slow detector cannot starve
+    -- the other.
+    local sg_ok, sg_err = pcall(suggestions_engine.start)
+    if not sg_ok then
+        logger.warn('suggestions scanner start failed', { err = tostring(sg_err) })
+    end
+
     -- Step 9 in the role start sequence: HTTP server.
     STATE.started_at = fiber.time()
 
@@ -288,8 +297,14 @@ function M.stop()
         logger.error('http server stop raised', { err = tostring(err) })
     end
 
-    -- Stop the issues scanner first — it reads state.snapshot()
+    -- Stop the suggestions scanner first — it reads state.snapshot()
     -- which the poller produces.
+    local sg_ok, sg_err = pcall(function() suggestions_engine.stop() end)
+    if not sg_ok then
+        logger.warn('suggestions stop raised', { err = tostring(sg_err) })
+    end
+
+    -- Stop the issues scanner — same dependency as above.
     local is_ok, is_err = pcall(function() issues.stop() end)
     if not is_ok then
         logger.warn('issues stop raised', { err = tostring(is_err) })

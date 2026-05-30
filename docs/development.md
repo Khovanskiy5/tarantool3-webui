@@ -418,6 +418,32 @@ GraphQL:
 
 `issues.current()` возвращает deep-copy кеша (resolver безопасно сортирует/фильтрует без гонок). `issues.summarise(list)` — pure counter. `issues.status()` — `{running, last_scan_at, issue_count}` для debug.
 
+## Suggestions engine (`cluster/suggestions.lua`)
+
+Daemon-fiber `webui_suggestions_scanner` тикает каждые 5s поверх `state.snapshot()` и формирует automated-recovery suggestions для UI. Engine paired с issues: issues говорит «сломано», suggestions говорит «нажми сюда, чтобы починить».
+
+7 типов (GraphQL surface стабилен между фазами):
+
+- **force_apply** — peer'ы с `config:info().status ≠ ready`. Action: `require('config'):reload()` map_eval.
+- **restart_replication** — peer'ы с upstream != `follow`. Action: `box.cfg{replication=box.cfg.replication}` map_eval (drop+rebuild upstream'ов).
+- **refresh_vshard**, **disable_server**, **refine_uri**, **restart_failover**, **bootstrap_vshard** — типы определены, детекторы возвращают `[]` до Task 30 (etcd/config edit), Task 46 (failover), Task 47 (vshard).
+
+Stable IDs `<type>:<uuid|alias>`. UI коррелирует между тиками без flicker.
+
+Action contract — `M.apply(type, payload, opts?)`:
+- payload: `{ instance_uuids = [...] }` (accept UUIDs, aliases, или mixed)
+- `resolve_targets(snapshot, uuids)` → `{aliases=[...], unknown=[...]}` — pure helper, lookup по uuid → alias map; unknown UUIDs пробрасываются как aliases для graceful degradation; truly bogus названия возвращаются в `unknown`.
+- map_eval с `timeout=5s`.
+- Возврат: `{ok=true, results={[peer]={ok, value|err}}, unknown}` для реализованных. `nil, "type X is not implemented yet"` для остальных.
+
+GraphQL:
+- `Query.suggestions` → `Suggestions {forceApply[], restartReplication[], refreshVshard[], disableServer[], refineUri[], restartFailover[], bootstrapVshard[]}`. Все списки пустые когда нет suggestion'ов.
+- `Mutation.applyForceApply(instanceUuids)`, `applyRestartReplication(...)`, и 5 остальных — все возвращают `SuggestionApplyResult{ok, message, unknown, results}`. Нереализованные типы returns `{ok:false, message:"...not implemented yet"}` — UI рендерит disabled action с tooltip без парсинга GraphQL `errors[]`.
+
+Логирование: INFO `applied <type> suggestion` с targets/unknown/count. DEBUG `suggestions tick` с total. WARN `suggestions tick raised` на pcall failure.
+
+`suggestions.current()` — deep-copy кеша (resolver безопасно). `status()` — `{running, last_scan_at}`. Audit (Task 26) подхватит INFO применённого действия как security-relevant event.
+
 ## Добавление нового backend-резолвера
 
 ```bash

@@ -28,8 +28,10 @@ local health_types     = require('webui.graphql.types.health')
 local server_types     = require('webui.graphql.types.server')
 local replicaset_types = require('webui.graphql.types.replicaset')
 local issue_types      = require('webui.graphql.types.issue')
+local suggestion_types = require('webui.graphql.types.suggestion')
 local cluster_resolver = require('webui.graphql.resolvers.cluster')
 local issues_resolver  = require('webui.graphql.resolvers.issues')
+local suggestions_resolver = require('webui.graphql.resolvers.suggestions')
 
 local M = {}
 
@@ -171,20 +173,87 @@ local Query = types.object {
             description = 'Counts of issues by severity. Drives the TopBar badge.',
             resolve = issues_resolver.issues_summary,
         },
+        suggestions = {
+            kind = suggestion_types.Suggestions.nonNull,
+            description = 'Automated recovery suggestions for the current '
+                .. 'cluster state. Empty lists when no suggestion applies.',
+            resolve = suggestions_resolver.suggestions,
+        },
     },
 }
 
--- Mutations land in subsequent tasks (auth, config commit, …). The
--- placeholder is required because the rock validates that schemas with
--- queries also expose a Mutation type when introspection is used.
+-- Mutations.
+--
+-- M1 lands the seven applySuggestion fields — every suggestion
+-- type gets a mutation now even though only two have working
+-- handlers (force_apply, restart_replication). The others raise
+-- "not implemented" errors when invoked; keeping them in the
+-- schema means the frontend can render the action buttons
+-- consistently and the GraphQL contract stays stable across
+-- M5 / M6.
 local Mutation = types.object {
     name = 'Mutation',
-    description = 'Write operations. Populated by subsequent tasks.',
+    description = 'Write operations. M1 wires the applySuggestion family.',
     fields = {
-        _noop = {
-            kind = types.boolean.nonNull,
-            description = 'Placeholder mutation; always returns true. Will be removed once concrete mutations land.',
-            resolve = function() return true end,
+        applyForceApply = {
+            kind = suggestion_types.SuggestionApplyResult.nonNull,
+            description = 'Call config:reload() on the listed instances.',
+            arguments = {
+                instanceUuids = types.list(types.string.nonNull).nonNull,
+            },
+            resolve = suggestions_resolver.apply_force_apply,
+        },
+        applyRestartReplication = {
+            kind = suggestion_types.SuggestionApplyResult.nonNull,
+            description = 'Re-apply box.cfg.replication on the listed '
+                .. 'instances to drop and rebuild upstreams.',
+            arguments = {
+                instanceUuids = types.list(types.string.nonNull).nonNull,
+            },
+            resolve = suggestions_resolver.apply_restart_replication,
+        },
+        applyRefreshVshard = {
+            kind = suggestion_types.SuggestionApplyResult.nonNull,
+            description = 'Wake up vshard.router discovery. Implemented in Task 47.',
+            arguments = {
+                instanceUuids = types.list(types.string.nonNull).nonNull,
+            },
+            resolve = suggestions_resolver.apply_refresh_vshard,
+        },
+        applyDisableServer = {
+            kind = suggestion_types.SuggestionApplyResult.nonNull,
+            description = 'Take an instance out of the RW set via config edit. '
+                .. 'Implemented in Task 30+.',
+            arguments = {
+                instanceUuids = types.list(types.string.nonNull).nonNull,
+            },
+            resolve = suggestions_resolver.apply_disable_server,
+        },
+        applyRefineUri = {
+            kind = suggestion_types.SuggestionApplyResult.nonNull,
+            description = 'Reshape the peer URI in cluster config. '
+                .. 'Implemented once config-edit ships.',
+            arguments = {
+                instanceUuids = types.list(types.string.nonNull).nonNull,
+            },
+            resolve = suggestions_resolver.apply_refine_uri,
+        },
+        applyRestartFailover = {
+            kind = suggestion_types.SuggestionApplyResult.nonNull,
+            description = 'Restart the supervised failover coordinator. '
+                .. 'Implemented in Task 46.',
+            arguments = {
+                instanceUuids = types.list(types.string.nonNull).nonNull,
+            },
+            resolve = suggestions_resolver.apply_restart_failover,
+        },
+        applyBootstrapVshard = {
+            kind = suggestion_types.SuggestionApplyResult.nonNull,
+            description = 'Bootstrap a vshard group. Implemented in Task 47.',
+            arguments = {
+                instanceUuids = types.list(types.string.nonNull).nonNull,
+            },
+            resolve = suggestions_resolver.apply_bootstrap_vshard,
         },
     },
 }
