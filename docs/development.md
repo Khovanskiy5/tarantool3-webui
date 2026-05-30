@@ -306,6 +306,29 @@ cd frontend && bun run scaffold page library
 
 Шаблоны в `tools/scaffold/templates/`.
 
+## Peer cookie (`webui_peer`)
+
+Каждый инстанс при старте поднимает системного пользователя `webui_peer` — единый идентификатор, под которым `cluster.peers` (Task 16+) ходит к соседям по net.box.
+
+Источник пароля (первый непустой выигрывает):
+
+1. **`opts.config_password`** — то, что init.lua вытащил из cluster-config `credentials.users.webui_peer`. Это production-канон; rolling-смена пароля идёт через config two-phase commit.
+2. **`TT_WEBUI_PEER_PASSWORD`** env — используется dev compose чтобы поделить один пароль между tt-1/tt-2/tt-3.
+3. **Спейс `_webui_meta`** (key=`webui_peer_password`, `is_local=true`, на инстансе) — переживает рестарты, если первые два источника не настроены.
+4. **Auto-generated** — 32 char url-safe base64 (24 random bytes через `digest.urandom`), сохраняется в `_webui_meta` и сопровождается WARN'ом в логе, чтобы оператор увидел ad-hoc credential.
+
+DDL (создание пользователя, спейса, grant universe read,execute) требует write-доступа к схеме. На read-only инстансах (Raft-фолловерах или `read_only=true`) bootstrap откладывает DDL и форкает daemon-fiber `webui_peer_provisioner` который ждёт `box.ctl.wait_rw()` — при выборе этого инстанса лидером он догоняет DDL. Лидер делает работу один раз; `_user` и DDL `_webui_meta` реплицируются на фолловеры автоматически (само значение в `_webui_meta` — local-only, у каждого инстанса своё).
+
+Грант — `read,execute` на `universe` (`pcall` обёртка чтобы повторный запуск не падал на already-granted). Это минимум для net.box authentication; точечные грантовать функции — следующий шаг после Task 16.
+
+Логирование:
+
+- `INFO peer cookie loaded` — source=config/env (внешний источник).
+- `DEBUG peer cookie loaded from meta space` — source=meta (перезагрузка с уже сохранённым паролем).
+- `WARN peer cookie auto-generated` — fallback на сгенерированный пароль.
+- `INFO peer cookie DDL deferred; instance is read-only` — фолловер, DDL отложено.
+- `INFO instance became read-write; provisioning peer cookie` — фолловер стал лидером и догоняет DDL.
+
 ## Добавление нового backend-резолвера
 
 ```bash

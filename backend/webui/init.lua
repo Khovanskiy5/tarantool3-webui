@@ -25,9 +25,10 @@
 local checks = require('checks')
 local fiber = require('fiber')
 
-local log_util  = require('webui.log_util')
-local version   = require('webui.version')
-local http_srv  = require('webui.http.server')
+local log_util    = require('webui.log_util')
+local version     = require('webui.version')
+local http_srv    = require('webui.http.server')
+local peer_cookie = require('webui.cluster.peer_cookie')
 
 local logger = log_util.with_tag('init')
 
@@ -164,9 +165,26 @@ function M.start(opts)
         graphiql_enabled = opts.graphiql_enabled,
     })
 
+    -- Step 5 in the role start sequence: peer cookie (system user
+    -- `webui_peer` + per-instance secret persistence). Steps 3, 4,
+    -- 6, 7, 8 land in subsequent tasks (metrics, storage, cluster
+    -- peers + rpc, cluster state, fibers).
+    local pc_ok, pc_result = pcall(peer_cookie.bootstrap, {
+        config_password = opts.peer_password,
+    })
+    if not pc_ok then
+        STATE.status = 'uninitialized'
+        STATE.config = nil
+        logger.error('peer cookie bootstrap failed', { err = tostring(pc_result) })
+        return nil, 'peer cookie bootstrap failed: ' .. tostring(pc_result)
+    end
+    logger.debug('peer cookie ready', {
+        user    = pc_result.user,
+        source  = pc_result.source,
+        created = pc_result.created,
+    })
+
     -- Step 9 in the role start sequence: HTTP server.
-    -- Steps 3–8 land in subsequent tasks (metrics, storage, peer cookie,
-    -- cluster.peers, state, fibers).
     STATE.started_at = fiber.time()
 
     local http_ok, http_err = http_srv.start({

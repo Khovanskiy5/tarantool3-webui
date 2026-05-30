@@ -50,6 +50,7 @@ build = {
         ['webui.graphql.error_envelope'] = 'backend/webui/graphql/error_envelope.lua',
         ['webui.graphql.types.health']   = 'backend/webui/graphql/types/health.lua',
         ['webui.config_source.etcd_source'] = 'backend/webui/config_source/etcd_source.lua',
+        ['webui.cluster.peer_cookie']    = 'backend/webui/cluster/peer_cookie.lua',
         ['internal.config.extras']       = 'backend/internal/config/extras.lua',
     },
 }
