@@ -64,6 +64,7 @@ build = {
         ['webui.cluster.suggestions']       = 'backend/webui/cluster/suggestions.lua',
         ['webui.config_source.etcd_source'] = 'backend/webui/config_source/etcd_source.lua',
         ['webui.cluster.peer_cookie']    = 'backend/webui/cluster/peer_cookie.lua',
+        ['webui.config_store.etcd']      = 'backend/webui/config_store/etcd.lua',
         ['webui.storage.spaces']         = 'backend/webui/storage/spaces.lua',
         ['webui.storage.migrations']     = 'backend/webui/storage/migrations.lua',
         ['webui.auth.session']           = 'backend/webui/auth/session.lua',
