@@ -45,18 +45,16 @@ const csrfTokenStore = {
   },
 };
 
-/** Determine whether an operation is a mutation (needs CSRF). */
-const isMutation = (op: Operation): boolean => op.kind === 'mutation';
-
 /**
- * Add CSRF header on mutations.
+ * Add CSRF header to every GraphQL operation.
  *
- * We treat this as an operation-level concern instead of a global
- * fetch wrapper so that hand-written `fetch` calls (REST helpers,
- * static URLs) do not accidentally rely on the same code path.
+ * GraphQL transports queries over POST, so the backend's middleware
+ * — which enforces CSRF on every state-changing HTTP method —
+ * rejects unauthenticated POSTs even when the operation is a
+ * read-only query. Always sending the double-submit token keeps the
+ * middleware happy without weakening the mutation path.
  */
 const withCsrfToken = (operation: Operation): Operation => {
-  if (!isMutation(operation)) return operation;
   const token = csrfTokenStore.read();
   if (!token) return operation;
   const existingHeaders = (operation.context.fetchOptions as RequestInit | undefined)?.headers ?? {};
