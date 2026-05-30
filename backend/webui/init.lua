@@ -29,6 +29,7 @@ local log_util    = require('webui.log_util')
 local version     = require('webui.version')
 local http_srv    = require('webui.http.server')
 local peer_cookie = require('webui.cluster.peer_cookie')
+local peers       = require('webui.cluster.peers')
 
 local logger = log_util.with_tag('init')
 
@@ -167,10 +168,30 @@ function M.start(opts)
 
     -- Step 5 in the role start sequence: peer cookie (system user
     -- `webui_peer` + per-instance secret persistence). Steps 3, 4,
-    -- 6, 7, 8 land in subsequent tasks (metrics, storage, cluster
-    -- peers + rpc, cluster state, fibers).
+    -- 7, 8 land in subsequent tasks (metrics, storage, cluster
+    -- state, fibers).
+    --
+    -- Production source of truth for the peer secret is the cluster
+    -- config (`credentials.users.webui_peer.password`); look it up
+    -- now so peer_cookie sees the canonical value and the pool can
+    -- authenticate against peers immediately. Falling back to
+    -- `opts.peer_password` keeps standalone scripts working without
+    -- a declarative config.
+    local cluster_password
+    do
+        local cfg_ok, cfg = pcall(require, 'config')
+        if cfg_ok then
+            local got_ok, value = pcall(function()
+                return cfg:get('credentials.users.webui_peer.password')
+            end)
+            if got_ok and type(value) == 'string' and value ~= '' then
+                cluster_password = value
+            end
+        end
+    end
+
     local pc_ok, pc_result = pcall(peer_cookie.bootstrap, {
-        config_password = opts.peer_password,
+        config_password = opts.peer_password or cluster_password,
     })
     if not pc_ok then
         STATE.status = 'uninitialized'
@@ -183,6 +204,24 @@ function M.start(opts)
         source  = pc_result.source,
         created = pc_result.created,
     })
+
+    -- Step 6: peer pool. Bind the credential resolved at step 5
+    -- (cluster config wins, then env, then ad-hoc generated) and
+    -- refresh the connection map from the current cluster config.
+    -- The pool fans out via cluster.rpc.map_call; the poller
+    -- (Task 17) will re-call peers.refresh() on every
+    -- `box.watch('config.info', ...)` event to track config rolls.
+    -- We never let pool errors abort role start — if the config is
+    -- not ready yet or the local instance is the only one defined,
+    -- we still want HTTP / GraphQL up.
+    local pool_password = opts.peer_password
+        or cluster_password
+        or os.getenv('TT_WEBUI_PEER_PASSWORD')
+    peers.set_credential(pc_result.user, pool_password)
+    local pp_ok, pp_err = pcall(peers.refresh)
+    if not pp_ok then
+        logger.warn('initial peer pool refresh failed', { err = tostring(pp_err) })
+    end
 
     -- Step 9 in the role start sequence: HTTP server.
     STATE.started_at = fiber.time()
@@ -224,6 +263,14 @@ function M.stop()
     local ok, err = pcall(function() http_srv.stop() end)
     if not ok then
         logger.error('http server stop raised', { err = tostring(err) })
+    end
+
+    -- Close every outbound net.box connection before declaring stop.
+    -- pcall protects against partial init paths where peers was
+    -- imported but never refresh()'ed.
+    local pp_ok, pp_err = pcall(function() peers.close_all() end)
+    if not pp_ok then
+        logger.warn('peer pool close raised', { err = tostring(pp_err) })
     end
 
     STATE.status = 'stopped'

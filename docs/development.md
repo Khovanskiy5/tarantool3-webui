@@ -329,6 +329,36 @@ DDL (создание пользователя, спейса, grant universe rea
 - `INFO peer cookie DDL deferred; instance is read-only` — фолловер, DDL отложено.
 - `INFO instance became read-write; provisioning peer cookie` — фолловер стал лидером и догоняет DDL.
 
+## Peer pool (`cluster/peers.lua` + `cluster/rpc.lua`)
+
+`peers.lua` — единственный владелец исходящих net.box-коннектов от роли к соседям. Источник списка пиров — `config:instances()`, URI с TLS-параметрами — `config:instance_uri('peer', {instance=name})`. Credential к net.box приходит из `peer_cookie.bootstrap` через `peers.set_credential(user, password)`.
+
+API:
+
+- `peers.refresh()` — синхронизирует пул с текущим cluster config. Открывает новые коннекты, закрывает выпавшие, реконнектится при смене URI. Параметры `reconnect_after=1s`, `wait_connected=false` — пул не блокирует rolestart.
+- `peers.list()` — snapshot для GraphQL/REST: `{[name] = {uri, state, replicaset_name, group_name}}`. Без net.box-объектов в выдаче.
+- `peers.connections()` — внутренний: `{[name] = conn}` для `rpc.map_call`.
+- `peers.get(name)` / `peers.close_all()` / `peers.self_alias()`.
+- Чистые helper'ы для тестов: `filter_self(instances, self_alias)`, `diff_peers(current, expected)` (sorted, deterministic), `normalise_uri(raw)`.
+
+`rpc.lua` — fan-out поверх пула. `rpc.map_call(fn_name, args?, opts?)`:
+
+- `opts.timeout` — default 1.0s (меньше тика поллера 1.5s, контракт зафиксирован в тесте).
+- `opts.peers` — опциональный whitelist.
+- Возвращает гомогенный shape: `{[name] = {ok=true, value=...} | {ok=false, err=...}}`. Никогда не raises — каждая per-peer ошибка ловится.
+- Single-return результат `conn:call` автоматически распаковывается (`value[1]` если `value[2]==nil`); multi-return сохраняет массив.
+- Состояния net.box `active`/`fetch_schema` считаются "connected"; всё остальное → `not connected` без блокирующего ожидания.
+
+Источник пароля для пула (init.lua step 6):
+
+1. `opts.peer_password` (явная инициализация роли).
+2. `config:get('credentials.users.webui_peer.password')` — production-канон, читается прямо из cluster config.
+3. `TT_WEBUI_PEER_PASSWORD` env — escape hatch для out-of-band секретов.
+
+Один и тот же resolver передаётся в `peer_cookie.bootstrap` (для DDL на лидере) и в `peers.set_credential` (для net.box). На лидерах `peer_cookie` синхронизирует `_user.webui_peer.password` с тем же значением, на фолловерах — DDL пропущен (Раф-лидер реплицирует).
+
+Логи: INFO `peer connection opened`/`closed`/`peer URI changed; reconnecting`, WARN `no peer URI advertised`/`initial peer pool refresh failed`/`map_call peer failed`, DEBUG `map_call peer ok`.
+
 ## Добавление нового backend-резолвера
 
 ```bash

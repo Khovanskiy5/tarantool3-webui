@@ -35,9 +35,11 @@ x-tarantool-common: &tarantool-common
     TT_CONFIG: /opt/webui/etc/cluster.yaml
     WEBUI_PORT: '8081'
     WEBUI_LOG_LEVEL: debug
-    # Replicator + webui_peer credentials are duplicated here so the
-    # config YAML can reference ${VAR} once the secrets plumbing lands
-    # in M2. For now the values inside cluster.yaml are hard-coded.
+    # `webui_peer` password lives in cluster.yaml under
+    # credentials.users.webui_peer. The role reads it via
+    # `config:get(...)` at start time, so no separate env wiring is
+    # needed. TT_WEBUI_PEER_PASSWORD remains a documented escape hatch
+    # for installations that ship the secret out-of-band.
   volumes:
     - ./configs/cluster.yaml:/opt/webui/etc/cluster.yaml:ro
   healthcheck:

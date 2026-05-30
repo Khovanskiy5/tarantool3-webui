@@ -51,6 +51,8 @@ build = {
         ['webui.graphql.types.health']   = 'backend/webui/graphql/types/health.lua',
         ['webui.config_source.etcd_source'] = 'backend/webui/config_source/etcd_source.lua',
         ['webui.cluster.peer_cookie']    = 'backend/webui/cluster/peer_cookie.lua',
+        ['webui.cluster.peers']          = 'backend/webui/cluster/peers.lua',
+        ['webui.cluster.rpc']            = 'backend/webui/cluster/rpc.lua',
         ['internal.config.extras']       = 'backend/internal/config/extras.lua',
     },
 }
