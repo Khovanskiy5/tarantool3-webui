@@ -45,9 +45,10 @@ M.NAMES = {
     AUDIT    = '_webui_audit',
 }
 
--- Bumped by migrations. Baseline is 1 — every subsequent migration
--- step (Task 24a) walks `migrations[N]` from the stored value up
--- to this constant.
+-- Bumped by migrations. Baseline 1 means: spaces created at boot,
+-- no further migrations registered yet. Every subsequent change
+-- adds an entry to backend/webui/storage/migrations.lua and bumps
+-- this constant in lockstep.
 M.CURRENT_SCHEMA_VERSION = 1
 
 local SCHEMA_VERSION_KEY = 'schema_version'
@@ -181,7 +182,11 @@ local function bootstrap_as_leader()
     local created_audit    = ensure_audit()
 
     local current = M.get_schema_version()
+    local migrations_applied = 0
     if current == nil then
+        -- Fresh install. Set baseline directly; the migration
+        -- runner only kicks in when an existing deployment needs
+        -- to roll forward.
         set_schema_version(M.CURRENT_SCHEMA_VERSION)
         current = M.CURRENT_SCHEMA_VERSION
         logger.info('storage schema initialised', { version = current })
@@ -189,13 +194,25 @@ local function bootstrap_as_leader()
         return nil, string.format(
             'stored schema_version %d is newer than this build supports (%d)',
             current, M.CURRENT_SCHEMA_VERSION)
+    elseif current < M.CURRENT_SCHEMA_VERSION then
+        -- Roll forward via the migration catalog.
+        local migrations = require('webui.storage.migrations')
+        local result, err = migrations.run({
+            meta_space      = box.space[M.NAMES.META],
+            current_version = current,
+            target_version  = M.CURRENT_SCHEMA_VERSION,
+        })
+        if result == nil then return nil, err end
+        migrations_applied = #result.applied
+        current = M.CURRENT_SCHEMA_VERSION
     end
 
     logger.info('storage spaces ready', {
-        version          = current,
-        created_meta     = created_meta,
-        created_sessions = created_sessions,
-        created_audit    = created_audit,
+        version             = current,
+        created_meta        = created_meta,
+        created_sessions    = created_sessions,
+        created_audit       = created_audit,
+        migrations_applied  = migrations_applied,
     })
 
     return {
