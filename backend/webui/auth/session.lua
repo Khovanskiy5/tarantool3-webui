@@ -129,6 +129,12 @@ function M.install_remote()
             expires_at = result.expires_at,
         }
     end)
+    rawset(_G, 'webui_session_delete_remote', function(id)
+        if type(id) ~= 'string' then return nil, 'bad id' end
+        local ok, result = pcall(M.delete, id)
+        if not ok then return nil, tostring(result) end
+        return { deleted = result == true }
+    end)
 end
 
 -- Sweep expired sessions. Called from a periodic fiber once the

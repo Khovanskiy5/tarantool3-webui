@@ -281,7 +281,45 @@ function M.handler_logout(req)
     if id ~= nil then
         local tuple = session.get(id)
         if tuple ~= nil then user = tuple.user end
-        session.delete(id)
+
+        -- `_webui_sessions` is replicated, so DELETE lands on the
+        -- leader; on a follower we forward through the existing
+        -- net.box pool exactly like login does. Logout being a
+        -- best-effort operation, READONLY without a reachable
+        -- leader is downgraded to a warning — the SPA still drops
+        -- the cookie and the session expires naturally.
+        local del_ok, del_err = pcall(session.delete, id)
+        local del_err_str = tostring(del_err or '')
+        local is_readonly = (not del_ok)
+            and (del_err_str:find('read[- ]only', 1, false)
+                or del_err_str:find('READONLY', 1, true))
+        if not del_ok and is_readonly then
+            logger.info('logout: local instance is read-only, forwarding to leader',
+                { user = user })
+            local ok_state, cluster_state = pcall(require, 'webui.cluster.state')
+            local ok_peers, peers         = pcall(require, 'webui.cluster.peers')
+            local leader_alias
+            if ok_state then leader_alias = cluster_state.find_leader() end
+            if leader_alias ~= nil and ok_peers then
+                local peer = peers.get(leader_alias)
+                if peer ~= nil and peer.conn ~= nil then
+                    local fwd_ok, fwd_err = pcall(function()
+                        peer.conn:call('webui_session_delete_remote',
+                            { id }, { timeout = 3 })
+                    end)
+                    if fwd_ok then
+                        logger.info('logout forwarded ok',
+                            { user = user, leader = leader_alias })
+                    else
+                        logger.warn('logout forward to leader failed',
+                            { leader = leader_alias, err = tostring(fwd_err) })
+                    end
+                end
+            end
+        elseif not del_ok then
+            logger.warn('session delete failed', { err = del_err_str })
+        end
+
         -- Close any live WS connections owned by this session.
         local ws_ok, ws_reg = pcall(require, 'webui.http.ws_registry')
         if ws_ok and ws_reg.close_by_session ~= nil then

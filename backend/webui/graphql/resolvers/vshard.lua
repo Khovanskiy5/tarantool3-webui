@@ -154,16 +154,20 @@ function M.mutation_bootstrap(root, args)
         local peer = peers.get(router_alias)
         local conn = peer and peer.conn
         if conn == nil then
-            error('PEER_UNAVAILABLE: no net.box connection to ' .. router_alias)
+            ok = false
+            result = 'PEER_UNAVAILABLE: no net.box connection to ' .. router_alias
+        else
+            ok, result = pcall(conn.call, conn,
+                'webui_vshard_bootstrap_local', { target }, { timeout = 30 })
         end
-        ok, result = pcall(conn.call, conn,
-            'webui_vshard_bootstrap_local', { target }, { timeout = 30 })
     else
         local vshard_ok, vshard = pcall(require, 'vshard')
         if not vshard_ok or vshard.router == nil then
-            error('VSHARD_NOT_AVAILABLE: vshard module missing on ' .. router_alias)
+            ok = false
+            result = 'VSHARD_NOT_AVAILABLE: vshard module missing on ' .. router_alias
+        else
+            ok, result = pcall(vshard.router.bootstrap, { timeout = 30 })
         end
-        ok, result = pcall(vshard.router.bootstrap, { timeout = 30 })
     end
     local latency_ms = (fiber.time() - started) * 1000
 
