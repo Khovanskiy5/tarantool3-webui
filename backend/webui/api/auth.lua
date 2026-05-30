@@ -165,12 +165,74 @@ function M.handler_login(req)
     rate_limit.success(ip, 'login')
     local id = session.new_id()
     local csrf = session.new_csrf()
-    local sess_ok, sess_err = pcall(session.create, {
+    local create_opts = {
         id = id, user = body.user, csrf = csrf,
         ttl_sec = nil, ip = ip, user_agent = user_agent(req),
-    })
-    if not sess_ok then
-        logger.error('session create failed', { err = tostring(sess_err) })
+    }
+
+    -- `_webui_sessions` is a replicated space, so INSERT lands on
+    -- the leader. On a follower the local call raises READONLY.
+    -- We detect that and forward to the leader through the existing
+    -- `webui_peer` net.box pool, then wait for replication to push
+    -- the row back so the cookie we return is immediately valid
+    -- against this instance's own `session.get(...)`.
+    local sess_ok, sess_err = pcall(session.create, create_opts)
+    local sess_err_str = tostring(sess_err or '')
+    local is_readonly = (not sess_ok)
+        and (sess_err_str:find('read[- ]only', 1, false)
+            or sess_err_str:find('READONLY', 1, true))
+    if not sess_ok and is_readonly then
+        logger.info('login: local instance is read-only, forwarding to leader',
+            { user = body.user })
+        local ok_state, cluster_state = pcall(require, 'webui.cluster.state')
+        local ok_peers, peers         = pcall(require, 'webui.cluster.peers')
+        local leader_alias
+        if ok_state then leader_alias = cluster_state.find_leader() end
+        if leader_alias == nil or not ok_peers then
+            logger.warn('login forward failed: no leader available')
+            return json_response(503, {
+                error = { code = 'NO_LEADER',
+                    message = 'no cluster leader reachable; retry shortly' },
+            })
+        end
+        local peer = peers.get(leader_alias)
+        if peer == nil or peer.conn == nil then
+            logger.warn('login forward failed: leader connection unavailable',
+                { leader = leader_alias })
+            return json_response(503, {
+                error = { code = 'NO_LEADER',
+                    message = 'leader connection unavailable; retry shortly' },
+            })
+        end
+        local call_ok, call_res = pcall(function()
+            return peer.conn:call('webui_session_create_remote',
+                { create_opts }, { timeout = 3 })
+        end)
+        if not call_ok or call_res == nil then
+            logger.error('login forward to leader failed', {
+                leader = leader_alias, err = tostring(call_res),
+            })
+            return json_response(503, {
+                error = { code = 'UNAVAILABLE',
+                    message = 'leader rejected session create' },
+            })
+        end
+        -- Wait for the replicated row to be visible locally so the
+        -- cookie we just issued is immediately accepted.
+        local replicated = session.wait_for_local(id, 2)
+        if replicated == nil then
+            logger.warn('login forward ok but replication lag exceeded',
+                { leader = leader_alias })
+            return json_response(503, {
+                error = { code = 'REPLICATION_LAG',
+                    message = 'session not yet replicated; retry shortly' },
+            })
+        end
+        logger.info('login forwarded ok', {
+            user = body.user, leader = leader_alias,
+        })
+    elseif not sess_ok then
+        logger.error('session create failed', { err = sess_err_str })
         return json_response(503, {
             error = { code = 'UNAVAILABLE',
                 message = 'session storage unavailable' },

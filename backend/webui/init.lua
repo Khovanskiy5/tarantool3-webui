@@ -212,6 +212,15 @@ function M.start(opts)
         deferred          = sto_result.deferred,
     })
 
+    -- Expose the leader-only session creator over net.box so
+    -- followers can forward `/api/auth/login` writes. Safe to call
+    -- on every instance — only the leader's INSERT actually
+    -- succeeds; followers raise READONLY locally.
+    local sess_remote_ok, sess_mod = pcall(require, 'webui.auth.session')
+    if sess_remote_ok and type(sess_mod.install_remote) == 'function' then
+        sess_mod.install_remote()
+    end
+
     -- Step 5 in the role start sequence: peer cookie (system user
     -- `webui_peer` + per-instance secret persistence). Steps 3,
     -- 7, 8 land in subsequent tasks (metrics, cluster state,

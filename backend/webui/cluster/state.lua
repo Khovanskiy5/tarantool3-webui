@@ -262,6 +262,39 @@ end
 function M.generation()  return STATE.generation end
 function M.last_tick_at() return STATE.last_tick_at end
 
+-- Locate the current cluster leader by scanning the polled server
+-- snapshot. Preference order:
+--   1. an instance whose `election.state == "leader"`,
+--   2. otherwise an instance with `is_ro == false`,
+-- A nil result means "no consensus yet" — typically observed mid-
+-- election or during a network partition; callers should retry or
+-- surface a clear error.
+--
+-- Pure over `servers`: split out so it's testable without the
+-- module-level cache.
+function M.find_leader_in(servers)
+    if type(servers) ~= 'table' then return nil end
+    -- Prefer the raft leader. Walk twice (cheap; ~10 entries) so the
+    -- second pass only runs when nobody reports state="leader" —
+    -- e.g. during election or in `failover: off` clusters.
+    for alias, srv in pairs(servers) do
+        local elect = srv and srv.election
+        if type(elect) == 'table' and elect.state == 'leader' then
+            return alias, srv
+        end
+    end
+    for alias, srv in pairs(servers) do
+        if srv and srv.is_ro == false then
+            return alias, srv
+        end
+    end
+    return nil
+end
+
+function M.find_leader()
+    return M.find_leader_in(STATE.servers)
+end
+
 -- Test hook. Production code never calls this.
 function M._reset()
     STATE.generation   = 0

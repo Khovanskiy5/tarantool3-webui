@@ -90,6 +90,47 @@ function M.new_csrf()
         { nowrap = true, urlsafe = true })
 end
 
+-- Block until the session row with `id` shows up locally (or the
+-- deadline passes). Used by the login forwarder so the cookie that
+-- the follower hands the browser is immediately valid against its
+-- own `session.get(...)`.
+function M.wait_for_local(id, deadline_sec)
+    local fiber_lib = require('fiber')
+    local deadline = fiber_lib.time() + (deadline_sec or 2)
+    while fiber_lib.time() < deadline do
+        local tuple = M.get(id)
+        if tuple ~= nil then return tuple end
+        fiber_lib.sleep(0.05)
+    end
+    return nil
+end
+
+-- Remote-invocable session creator. Lives on every instance; only
+-- succeeds on the leader (the underlying space write would fail
+-- under READONLY otherwise). The follower forwards through here
+-- via the `webui_peer` net.box pool when its own write is blocked.
+--
+-- The function is exposed through `_G` so net.box `:call(...)` can
+-- reach it; it's NOT a Tarantool function (`box.schema.func.create`)
+-- because the peer pool authenticates as `webui_peer` which already
+-- has `super`. The role's `validate` step refuses startup if the
+-- system user is misconfigured.
+function M.install_remote()
+    rawset(_G, 'webui_session_create_remote', function(opts)
+        if type(opts) ~= 'table' then
+            return nil, 'bad opts'
+        end
+        local ok, result = pcall(M.create, opts)
+        if not ok then return nil, tostring(result) end
+        if result == nil then return nil, 'insert returned nil' end
+        return {
+            id         = result.id,
+            user       = result.user,
+            expires_at = result.expires_at,
+        }
+    end)
+end
+
 -- Sweep expired sessions. Called from a periodic fiber once the
 -- cluster.poller layer is happy with another scheduler hop;
 -- exposed as a function so the caller can drive cadence.
