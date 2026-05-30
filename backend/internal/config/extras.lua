@@ -104,15 +104,26 @@ local ALLOW_PREFIXES = {
     'iproto.advertise.client',
 }
 
-local function patch_instance_schema()
-    local ok, ic = pcall(require, 'internal.config.instance_config')
-    if not ok or type(ic) ~= 'table' or type(ic.schema) ~= 'table' then
-        return
+local function patch_schemas()
+    -- instance_config's own schema (covers `tarantool --config X` with
+    -- a flat instance YAML).
+    local ok_ic, ic = pcall(require, 'internal.config.instance_config')
+    if ok_ic and type(ic) == 'table' and type(ic.schema) == 'table' then
+        relax_ee_nodes(ic.schema, '', ALLOW_PREFIXES)
     end
-    relax_ee_nodes(ic.schema, '', ALLOW_PREFIXES)
+
+    -- cluster_config builds its own scoped copies of the instance
+    -- schema (see instance_config_with_scope in
+    -- tarantool-3.7.0/src/box/lua/config/cluster_config.lua). table.copy
+    -- there is not deep enough to share the EE-marked nodes, so we
+    -- must walk cluster_config.schema independently.
+    local ok_cc, cc = pcall(require, 'internal.config.cluster_config')
+    if ok_cc and type(cc) == 'table' and type(cc.schema) == 'table' then
+        relax_ee_nodes(cc.schema, '', ALLOW_PREFIXES)
+    end
 end
 
-patch_instance_schema()
+patch_schemas()
 
 -- ── 2. Register the etcd source ──────────────────────────────────────
 --
