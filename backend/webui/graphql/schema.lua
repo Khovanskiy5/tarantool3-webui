@@ -27,7 +27,9 @@ local version = require('webui.version')
 local health_types     = require('webui.graphql.types.health')
 local server_types     = require('webui.graphql.types.server')
 local replicaset_types = require('webui.graphql.types.replicaset')
+local issue_types      = require('webui.graphql.types.issue')
 local cluster_resolver = require('webui.graphql.resolvers.cluster')
+local issues_resolver  = require('webui.graphql.resolvers.issues')
 
 local M = {}
 
@@ -147,6 +149,27 @@ local Query = types.object {
             description = 'Aggregated cluster view (self, servers, replicasets, '
                 .. 'knownRoles, vshardGroups). Source: cluster.state.snapshot().',
             resolve = cluster_resolver.cluster,
+        },
+        issues = {
+            kind = issue_types.IssuePage.nonNull,
+            description = 'Findings produced by the issues scanner. Supports '
+                .. 'severity / scope / category / instance / replicaset filters '
+                .. 'and cursor pagination over the issue ID.',
+            arguments = {
+                severity   = issue_types.IssueSeverity,
+                scope      = issue_types.IssueScope,
+                category   = issue_types.IssueCategory,
+                instance   = types.string,
+                replicaset = types.string,
+                after      = types.string,
+                limit      = types.int,
+            },
+            resolve = issues_resolver.issues,
+        },
+        issuesSummary = {
+            kind = issue_types.IssuesSummary.nonNull,
+            description = 'Counts of issues by severity. Drives the TopBar badge.',
+            resolve = issues_resolver.issues_summary,
         },
     },
 }

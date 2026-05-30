@@ -393,6 +393,31 @@ API:
 
 `poller.status()` для debug: `{running, last_tick_at, generation, backoff_count}`. `_reset()` — test hook.
 
+## Issues scanner (`cluster/issues.lua`)
+
+Daemon-fiber `webui_issues_scanner` тикает каждые `SCAN_INTERVAL_SEC=5s` поверх `state.snapshot()`. Категории M1:
+
+- **replication** — `upstream.status ≠ follow` (critical), `lag > replication_sync_lag` (warning), `idle > replication_idle_factor × default_replication_timeout` (warning). Локальная self-запись (`upstream.status == nil`) пропускается. Unreachable peers не сканируются — это шум.
+- **memory** — `arena_used_ratio`/`items_used_ratio`/`quota_used_ratio` против `<kind>_warn`/`<kind>_critical` порогов (default 0.85/0.95). Слаб-ratio'ы нормализованы в state (0..1 fraction) через `parse_ratio` (поддерживает строки "12.3%" и числа).
+- **clock** — wall-clock skew (`clock.realtime()`) пира против локального > `clock_delta_sec` (default 5s).
+- **config** — пробрасываем `config:info().alerts` каждого peer'а как issues (severity: `critical`/`error` → critical, остальное → warning).
+
+Defer: failover (Task 46), vshard (Task 47).
+
+Stable ID format: `category:scope:target:key` (например `replication:instance:tt-1:upstream-status-<peer-uuid>`). Это значит UI видит ту же проблему между тиками без flicker.
+
+Severity: `warning` или `critical`. Scope: `cluster`/`replicaset`/`instance`.
+
+Логирование:
+- INFO `issue appeared` / `issue cleared` — детектится через сравнение `prev_by_id` ↔ `new_by_id` на каждом тике. WARN `critical issue` дополнительно к INFO для critical-severity.
+- DEBUG `issues tick` со счётчиками total/appeared/disappeared.
+
+GraphQL:
+- `issues(severity?, scope?, category?, instance?, replicaset?, after?, limit?)` — фильтрация по любой комбинации, cursor-пагинация по issue.id (default 50, cap 500).
+- `issuesSummary { warning, critical, total }` — для TopBar badge.
+
+`issues.current()` возвращает deep-copy кеша (resolver безопасно сортирует/фильтрует без гонок). `issues.summarise(list)` — pure counter. `issues.status()` — `{running, last_scan_at, issue_count}` для debug.
+
 ## Добавление нового backend-резолвера
 
 ```bash

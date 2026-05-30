@@ -100,6 +100,26 @@ function M.group_by_replicaset(servers)
     return out
 end
 
+-- Parse a slab ratio field — Tarantool 3.x typically returns these
+-- as numbers in 0..1, older builds (and box.slab.info() in some
+-- combinations) emit "12.3%" strings. Normalise to a 0..1 fraction
+-- so consumers (GraphQL Statistics, issues thresholds) have one
+-- shape to reason about.
+local function parse_ratio(value)
+    if type(value) == 'number' then
+        if value > 1 then return value / 100 end
+        return value
+    end
+    if type(value) ~= 'string' then return nil end
+    local stripped = (value:gsub('%%', ''))
+    local num = tonumber(stripped)
+    if num == nil then return nil end
+    if num > 1 then return num / 100 end
+    return num
+end
+
+M._parse_ratio = parse_ratio
+
 -- Merge probe data from a single peer into the working server entry.
 -- Pulled out of apply_tick so the merge rules are testable in
 -- isolation. The function returns the mutated server table for
@@ -118,6 +138,19 @@ function M.merge_probe(server, probe)
     if type(probe.config_alerts) == 'table' then
         server.alerts = probe.config_alerts
     end
+    -- box.info.replication & box.slab.info() drive the issues
+    -- scanner; the GraphQL Statistics type also reads the parsed
+    -- slab ratios.
+    if probe.replication ~= nil then server.replication = probe.replication end
+    if probe.replicaset ~= nil then server.replicaset = probe.replicaset end
+    if type(probe.slab) == 'table' then
+        server.slab = probe.slab
+        server.arena_used_ratio = parse_ratio(probe.slab.arena_used_ratio)
+        server.items_used_ratio = parse_ratio(probe.slab.items_used_ratio)
+        server.quota_used_ratio = parse_ratio(probe.slab.quota_used_ratio)
+    end
+    server.election      = probe.election or server.election
+    server.clock         = probe.clock or server.clock
     server.reachable     = true
     return server
 end

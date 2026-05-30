@@ -31,6 +31,7 @@ local http_srv    = require('webui.http.server')
 local peer_cookie = require('webui.cluster.peer_cookie')
 local peers       = require('webui.cluster.peers')
 local poller      = require('webui.cluster.poller')
+local issues      = require('webui.cluster.issues')
 
 local logger = log_util.with_tag('init')
 
@@ -236,6 +237,15 @@ function M.start(opts)
         logger.warn('poller start failed', { err = tostring(pl_err) })
     end
 
+    -- Step 8b: issues scanner. Pulled out of poller so the 5s
+    -- cadence of human-facing diagnostics does not interfere with
+    -- the 1.5s data-collection loop. Reads state.snapshot() under
+    -- pcall — never blocks role start.
+    local is_ok, is_err = pcall(issues.start)
+    if not is_ok then
+        logger.warn('issues scanner start failed', { err = tostring(is_err) })
+    end
+
     -- Step 9 in the role start sequence: HTTP server.
     STATE.started_at = fiber.time()
 
@@ -276,6 +286,13 @@ function M.stop()
     local ok, err = pcall(function() http_srv.stop() end)
     if not ok then
         logger.error('http server stop raised', { err = tostring(err) })
+    end
+
+    -- Stop the issues scanner first — it reads state.snapshot()
+    -- which the poller produces.
+    local is_ok, is_err = pcall(function() issues.stop() end)
+    if not is_ok then
+        logger.warn('issues stop raised', { err = tostring(is_err) })
     end
 
     -- Stop the poller before closing the pool: in-flight ticks

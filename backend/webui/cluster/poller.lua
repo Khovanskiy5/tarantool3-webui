@@ -76,9 +76,38 @@ M.PROBE_SRC = [[
         end
         return out
     end
+    -- box.info.replication is keyed by replica id (1..N); copy the
+    -- subset the issues scanner needs (status/lag/idle/message) so
+    -- the snapshot does not balloon to multi-megabyte at scale.
+    local function map_replication(repl)
+        if type(repl) ~= 'table' then return {} end
+        local out = {}
+        for id, r in pairs(repl) do
+            out[tostring(id)] = {
+                id   = r.id,
+                uuid = r.uuid,
+                lsn  = r.lsn,
+                upstream = r.upstream and {
+                    status   = r.upstream.status,
+                    lag      = r.upstream.lag,
+                    idle     = r.upstream.idle,
+                    message  = r.upstream.message,
+                    peer     = r.upstream.peer,
+                } or nil,
+                downstream = r.downstream and {
+                    status  = r.downstream.status,
+                    lag     = r.downstream.lag,
+                    idle    = r.downstream.idle,
+                    message = r.downstream.message,
+                } or nil,
+            }
+        end
+        return out
+    end
     local info = box.info
     local cfg_ok, cfg = pcall(require, 'config')
     local cfg_info = cfg_ok and safe(function() return cfg:info() end) or nil
+    local slab = safe(function() return box.slab.info() end)
     return {
         alias         = info.name,
         uuid          = info.uuid,
@@ -88,8 +117,10 @@ M.PROBE_SRC = [[
         ro_reason     = info.ro_reason,
         status        = info.status,
         vclock        = info.vclock,
+        clock         = safe(function() return require('clock').realtime() end),
         election      = safe(function() return info.election end),
-        slab          = safe(function() return box.slab.info() end),
+        slab          = slab,
+        replication   = map_replication(info.replication),
         replicaset    = safe(function()
             return info.replicaset and {
                 name = info.replicaset.name,
@@ -168,6 +199,32 @@ local function safe_call(fn)
     return v
 end
 
+local function map_replication(repl)
+    if type(repl) ~= 'table' then return {} end
+    local out = {}
+    for id, r in pairs(repl) do
+        out[tostring(id)] = {
+            id   = r.id,
+            uuid = r.uuid,
+            lsn  = r.lsn,
+            upstream = r.upstream and {
+                status   = r.upstream.status,
+                lag      = r.upstream.lag,
+                idle     = r.upstream.idle,
+                message  = r.upstream.message,
+                peer     = r.upstream.peer,
+            } or nil,
+            downstream = r.downstream and {
+                status  = r.downstream.status,
+                lag     = r.downstream.lag,
+                idle    = r.downstream.idle,
+                message = r.downstream.message,
+            } or nil,
+        }
+    end
+    return out
+end
+
 local function collect_local_probe()
     if rawget(_G, 'box') == nil then return nil end
     local info = safe_call(function() return box.info end)
@@ -189,8 +246,10 @@ local function collect_local_probe()
         ro_reason     = info.ro_reason,
         status        = info.status,
         vclock        = info.vclock,
+        clock         = safe_call(function() return require('clock').realtime() end),
         election      = safe_call(function() return info.election end),
         slab          = safe_call(function() return box.slab.info() end),
+        replication   = map_replication(info.replication),
         replicaset    = safe_call(function()
             return info.replicaset and {
                 name = info.replicaset.name,
