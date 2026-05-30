@@ -87,13 +87,60 @@ local function enriched_status_provider()
     return base
 end
 
--- Register the built-in health endpoint. Other modules call
--- M.register_route() for their own paths.
+-- Register the built-in health endpoint and static SPA routes. Other
+-- modules call M.register_route() for their own paths.
+--
+-- Route ordering matters: the http rock matches routes in iteration
+-- order, so explicit /api/* paths must be registered BEFORE the
+-- catch-all "/*splat" used for SPA history-mode fallback. Otherwise
+-- the wildcard would shadow them and turn every /api request into a
+-- 404 inside the static handler.
 local function register_builtin_routes(httpd)
     httpd:route(
         { path = '/api/health', method = 'GET' },
         middleware.wrap('health', health_api.make_handler(enriched_status_provider))
     )
+
+    -- Static SPA. The module is always loadable: when the bundle has
+    -- not been produced (unit-test runs without `make embed-assets`),
+    -- the handler returns 404 for every path while leaving the rest
+    -- of the role healthy.
+    local ok, static = pcall(require, 'webui.http.static')
+    if not ok then
+        logger.warn('static module load failed; UI disabled', {
+            err = tostring(static),
+        })
+        return
+    end
+
+    local static_handler = middleware.wrap('static', static.handler)
+
+    -- Explicit, frequently-hit paths first.
+    httpd:route({ path = '/',                       method = 'GET' }, static_handler)
+    httpd:route({ path = '/index.html',             method = 'GET' }, static_handler)
+    httpd:route({ path = '/favicon.ico',            method = 'GET' }, static_handler)
+    httpd:route({ path = '/robots.txt',             method = 'GET' }, static_handler)
+
+    -- Asset folders. The http rock's `*splat` syntax captures the
+    -- remainder of the path under the `splat` stash; we ignore the
+    -- capture because the handler re-reads req.path itself.
+    httpd:route({ path = '/assets/*splat',           method = 'GET' }, static_handler)
+    httpd:route({ path = '/monacoeditorwork/*splat', method = 'GET' }, static_handler)
+
+    -- SPA history-mode fallback. Registered LAST so explicit routes
+    -- (api, assets, favicons) match first. The handler inspects the
+    -- request path and either serves the asset, falls back to
+    -- index.html for nav paths, or emits a clean 404 for /api/* and
+    -- friends if their owners never registered them.
+    httpd:route({ path = '/*splat', method = 'GET' }, static_handler)
+
+    local stats = static.stats()
+    logger.info('static routes registered', {
+        bundle_loaded = stats.loaded,
+        entries = stats.entries,
+        total_raw_bytes = stats.total_raw_bytes,
+        index_present = stats.index_present,
+    })
 end
 
 -- Public: register a route with the standard middleware wrapper applied.

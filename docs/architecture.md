@@ -352,12 +352,7 @@ return {
 
 ### Что использует bundle.lua
 
-Task 6 (`backend/webui/http/static.lua`) — это потребитель. Он:
-- При role start импортирует `webui.assets.bundle` (один раз).
-- На каждый `GET /<path>` ищет `bundle['/' .. path]`.
-- По `Accept-Encoding` отдаёт `body_br` или `body_gz` с `Content-Encoding`, либо `body_raw`.
-- Возвращает 304 при совпадающем `If-None-Match`.
-- Для путей вне bundle — fallback на `/index.html` (SPA history mode).
+См. ниже раздел «Раздача статики (Task 6)».
 
 ### Запуск
 
@@ -367,6 +362,62 @@ tarantool tools/embed-assets.lua [<source-dir>] [<output-file>]   # вручну
 ```
 
 CLI печатает таблицу с маршрутами, MIME и размерами raw/br/gz и итоговую сводку. Скрипт коммитится в `tools/`, сгенерированный `bundle.lua` — gitignored (`backend/webui/assets/bundle.lua`).
+
+## Раздача статики (Task 6)
+
+`backend/webui/http/static.lua` — обработчик статических ресурсов SPA. На каждый `GET /<path>`:
+
+1. **Нормализация path**: strip query/fragment; `/` → `/index.html`.
+2. **Поиск в bundle**: `bundle[path]`.
+3. **SPA history-mode fallback**: если в bundle нет, и путь НЕ начинается с `NON_SPA_PREFIXES` (`/api/`, `/admin/`, `/ws`, `/assets/`, `/monacoeditorwork/`, `/favicon.ico`, `/robots.txt`, `/sitemap.xml`, `/.well-known/`) — отдаёт `/index.html`. Это разрешает прямой переход на `/cluster`, `/issues`, `/config-editor` и т.п.
+4. **Content negotiation**: `Accept-Encoding` парсится без q-values; приоритет `br > gz > raw`.
+5. **Conditional GET**: `If-None-Match == entry.etag` → `304 Not Modified` с теми же `ETag` и `Cache-Control`, пустое тело.
+6. **Cache-Control**:
+   - `/assets/*` и `/monacoeditorwork/*` (content-hashed имена от Vite) → `public, max-age=31536000, immutable`.
+   - `index.html` и все SPA-пути → `no-cache, no-store, must-revalidate`. Это безопасно потому что HTML мал, а ETag-revalidation быстра.
+
+### Регистрация роутов
+
+В `http/server.lua → register_builtin_routes`:
+
+```
+explicit высокая частота:
+  GET /                       → static
+  GET /index.html             → static
+  GET /favicon.ico            → static
+  GET /robots.txt             → static
+
+asset-папки (catch-all внутри префикса):
+  GET /assets/*splat          → static
+  GET /monacoeditorwork/*splat → static
+
+SPA history fallback (регистрируется последним):
+  GET /*splat                 → static
+```
+
+Порядок важен: http rock матчит роуты в порядке регистрации. `/api/health` (зарегистрирован первым в Task 3) выигрывает у `/*splat`. Когда появятся `/admin/api` (Task 7) и `/ws` (Task 21), они регистрируются через `M.register_route()` ДО `register_builtin_routes` или с явной поправкой в server.lua.
+
+### Graceful degradation
+
+Bundle загружается через `pcall(require, 'webui.assets.bundle')`. Если `make embed-assets` не запускался (unit-тесты без фронта), модуль грузится с пустой таблицей. Все `GET` отдают 404, `/api/health` и остальные API-роуты продолжают работать. Это позволяет CI юнит-тесты бэкенда без необходимости собирать SPA.
+
+### Логирование
+
+`tag = static`. Каждый запрос логируется на уровне `debug` с полями: `path`, `resolved` (после нормализации/fallback), `status`, `encoding` (`br`/`gz`/`raw`), `size`, `outcome` (`hit`/`spa_fallback`/`304`). При `WEBUI_LOG_LEVEL=info` (prod) статика молчит — middleware `http` всё равно логирует request на info-уровне.
+
+### Проверка end-to-end
+
+| Сценарий | Запрос | Ответ |
+|---|---|---|
+| Корень SPA | `GET /` (Accept-Encoding: br, gzip) | 200, body_br, ETag, Cache-Control: no-cache |
+| SPA fallback | `GET /cluster` | 200, body /index.html, no-cache |
+| Content-hashed asset, brotli | `GET /assets/index-XXX.js` (Accept-Encoding: br) | 200, body_br, Content-Encoding: br, immutable |
+| Conditional GET (matching) | `GET /index.html` (If-None-Match: matching) | 304, пустое тело, тот же ETag |
+| Stale ETag | `GET /index.html` (If-None-Match: stale) | 200 + body |
+| Identity encoding | `GET /index.html` (Accept-Encoding: identity) | 200 без Content-Encoding |
+| Missing asset | `GET /assets/missing.js` | 404 (без SPA fallback) |
+| Missing /api/* | `GET /api/missing` | 404 |
+| Bundle отсутствует | `GET /` | 404 |
 
 ## Дальнейшие разделы
 

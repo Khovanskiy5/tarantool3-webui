@@ -43,6 +43,7 @@ build = {
         ['webui.http.server']        = 'backend/webui/http/server.lua',
         ['webui.http.middleware']    = 'backend/webui/http/middleware.lua',
         ['webui.http.error_envelope']= 'backend/webui/http/error_envelope.lua',
+        ['webui.http.static']        = 'backend/webui/http/static.lua',
         ['webui.api.health']         = 'backend/webui/api/health.lua',
     },
 }
