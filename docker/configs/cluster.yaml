@@ -39,8 +39,10 @@ groups:
   default:
     replicasets:
       rs-1:
-        # Initial leader hint; raft re-elects automatically on failure.
-        leader: tt-1
+        # In `election` failover mode the leader is chosen by the
+        # built-in raft algorithm, so no explicit `leader:` is set
+        # here. (Tarantool 3.x rejects `leader:` together with
+        # election mode.)
         instances:
           tt-1:
             iproto:

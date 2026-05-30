@@ -123,7 +123,7 @@ HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=3 \
 | Сервис | Образ | Источник |
 |---|---|---|
 | etcd | `quay.io/coreos/etcd:v3.5.18` | официальный (Red Hat hosted) |
-| HAProxy | `haproxy:2.9-alpine` | официальный Docker Hub |
+| HAProxy | `haproxy:3.3.4-alpine` | официальный Docker Hub |
 | Tarantool инстансы | `webui-instance:dev` | сборка из `docker/Dockerfile.instance` (Task 9) |
 
 ### Запуск
@@ -180,13 +180,21 @@ URL'ы:
 
 ```
 etcd: started → 5s → healthy
-  tt-1: started → start_period 30s → role lifecycle uninitialized→starting→ready → 5s → healthy
-    tt-2: started → … → healthy
-    tt-3: started → … → healthy
+  tt-1 ┐
+  tt-2 ├─ стартуют параллельно (важно — см. ниже)
+  tt-3 ┘   → bootstrap replication majority → role lifecycle uninitialized→starting→ready → healthy
       haproxy: started (depends_on=service_healthy всех tt-*) → ready
 ```
 
-Полный bootstrap из чистого состояния — порядка 45–60 секунд.
+Полный bootstrap из чистого состояния — порядка 30–45 секунд (на текущем M0 каркасе).
+
+#### Почему tt-1/2/3 стартуют параллельно
+
+Tarantool 3.x `replication.bootstrap_strategy: auto` (default) при первом старте требует подключения к большинству peer'ов. Если бы compose выстраивал зависимость tt-1 → tt-2 → tt-3, tt-1 застрял бы в `connecting to 3 replicas` (тт-2/3 ещё не подняты), а затем упал бы с `failed to connect to one or more replicas`. Поэтому все три инстанса стартуют параллельно после healthy сигнала etcd.
+
+#### Почему `roles_cfg.webui` не задаёт `leader`
+
+В `replication.failover: election` (raft) явный `leader: tt-1` запрещён: Tarantool валидатор кидает «`leader` option cannot be used together with replication.failover = election». Initial leader выбирается raft'ом автоматически на первом старте (обычно тот, кто первым достиг кворума) — без подсказок в YAML.
 
 ### Volumes
 

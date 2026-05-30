@@ -114,10 +114,12 @@ services:
     ports:
       - '8082:8081'
       - '3302:3301'
+    # All three instances start in parallel. Tarantool's replication
+    # bootstrap requires a majority of peers to be reachable at the
+    # same moment, so a tt-1 → tt-2 → tt-3 chain via depends_on
+    # deadlocks at first boot.
     depends_on:
       etcd:
-        condition: service_healthy
-      tt-1:
         condition: service_healthy
 
   tt-3:
@@ -136,12 +138,10 @@ services:
     depends_on:
       etcd:
         condition: service_healthy
-      tt-1:
-        condition: service_healthy
 
   # ── HAProxy ───────────────────────────────────────────────────────
   haproxy:
-    image: haproxy:2.9-alpine
+    image: haproxy:3.3.4-alpine
     container_name: webui-haproxy
     restart: unless-stopped
     volumes:

@@ -57,6 +57,8 @@ RUN apt-get update \
         curl \
         git \
         build-essential \
+        cmake \
+        unzip \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/webui
@@ -86,10 +88,18 @@ RUN tt rocks install http 1.6.0 \
 # embed-assets reads from <source-dir> and writes to <output-file>; the
 # output sits next to the role's other modules so the static handler's
 # `require('webui.assets.bundle')` resolves with no special setup.
+#
+# `env -u TT_INSTANCE_NAME -u TT_APP_NAME -u TT_CONFIG` strips the
+# defaults inherited from the official tarantool base image (which
+# preset instance-001 / default / a fake config path so the image can
+# auto-bootstrap when run barefoot). Without that strip, running any
+# script through `tarantool` triggers cluster bootstrap and the script
+# never reaches its first print.
 COPY --from=frontend-build /build/dist /opt/webui/frontend/dist
-RUN tarantool /opt/webui/tools/embed-assets.lua \
-        /opt/webui/frontend/dist \
-        /usr/share/tarantool/webui/assets/bundle.lua \
+RUN env -u TT_INSTANCE_NAME -u TT_APP_NAME -u TT_CONFIG \
+        tarantool /opt/webui/tools/embed-assets.lua \
+            /opt/webui/frontend/dist \
+            /usr/share/tarantool/webui/assets/bundle.lua \
  && rm -rf /opt/webui/frontend/dist
 
 # Runtime directories used by tarantool for work_dir, snapshots, xlogs
@@ -113,10 +123,17 @@ USER tarantool
 
 # Default runtime configuration. Each value can be overridden per
 # container (compose, helm, docker run -e).
+#
+# TT_INSTANCE_NAME and TT_APP_NAME are explicitly cleared because the
+# base image presets them to "instance-001" / "default". Leaving the
+# defaults in place would silently engage tarantool's auto-bootstrap
+# mode whenever the entrypoint forgets to set them.
 ENV WEBUI_PORT=8081 \
     WEBUI_LOG_LEVEL=info \
     TT_CONFIG=/opt/webui/etc/instance.yaml \
-    TT_WORK_DIR=/opt/webui/var/lib
+    TT_WORK_DIR=/opt/webui/var/lib \
+    TT_INSTANCE_NAME= \
+    TT_APP_NAME=
 
 EXPOSE 8081 3301
 
