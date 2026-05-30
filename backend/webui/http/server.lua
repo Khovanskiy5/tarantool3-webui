@@ -102,6 +102,52 @@ local function register_builtin_routes(httpd, role_opts)
         middleware.wrap('health', health_api.make_handler(enriched_status_provider))
     )
 
+    -- Metrics (Task 42/42a) — public/no-auth, like /api/health.
+    local mok, metrics = pcall(require, 'webui.api.metrics')
+    if mok then
+        httpd:route({ path = '/api/metrics',       method = 'GET' },
+            middleware.wrap('metrics_app',  metrics.handler_app))
+        httpd:route({ path = '/api/metrics/webui', method = 'GET' },
+            middleware.wrap('metrics_self', metrics.handler_self))
+    end
+
+    -- Config IO (Task 37).
+    local cio_ok, config_io = pcall(require, 'webui.api.config_io')
+    if cio_ok then
+        httpd:route({ path = '/api/config/download', method = 'GET' },
+            middleware.wrap('config_download', config_io.handler_download,
+                { auth = 'admin' }))
+        httpd:route({ path = '/api/config/upload',   method = 'POST' },
+            middleware.wrap('config_upload',   config_io.handler_upload,
+                { auth = 'admin' }))
+    end
+
+    -- Snapshots (Task 43).
+    local snap_ok, snapshots = pcall(require, 'webui.api.snapshots')
+    if snap_ok then
+        httpd:route({ path = '/api/snapshots/take', method = 'POST' },
+            middleware.wrap('snapshot_take', snapshots.handler_take,
+                { auth = 'admin' }))
+        httpd:route({ path = '/api/snapshots',      method = 'GET' },
+            middleware.wrap('snapshot_list', snapshots.handler_list,
+                { auth = 'admin' }))
+    end
+
+    -- Diagnostic bundle (Task 55).
+    local diag_ok, diag = pcall(require, 'webui.api.diagnostics')
+    if diag_ok then
+        httpd:route({ path = '/api/diagnostics/bundle', method = 'GET' },
+            middleware.wrap('diagnostics', diag.handler, { auth = 'admin' }))
+    end
+
+    -- Lua/SQL eval (Task 44).
+    local eval_ok, eval_api = pcall(require, 'webui.api.eval')
+    if eval_ok then
+        eval_api.configure({ console_enabled = role_opts.console_enabled == true })
+        httpd:route({ path = '/api/eval', method = 'POST' },
+            middleware.wrap('eval', eval_api.handler, { auth = 'superuser' }))
+    end
+
     -- Auth surface (Task 25). Lazy require so a misconfigured
     -- session storage does not block the rest of the role.
     local auth_ok, auth_api = pcall(require, 'webui.api.auth')

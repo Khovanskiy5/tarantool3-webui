@@ -36,6 +36,9 @@ local audit_types          = require('webui.graphql.types.audit')
 local audit_resolver       = require('webui.graphql.resolvers.audit')
 local config_types         = require('webui.graphql.types.config')
 local config_resolver      = require('webui.graphql.resolvers.config')
+local lifecycle_resolver   = require('webui.graphql.resolvers.lifecycle')
+local failover_resolver    = require('webui.graphql.resolvers.failover')
+local vshard_resolver      = require('webui.graphql.resolvers.vshard')
 
 local M = {}
 
@@ -183,6 +186,44 @@ local Query = types.object {
                 .. 'cluster state. Empty lists when no suggestion applies.',
             resolve = suggestions_resolver.suggestions,
         },
+        failover = {
+            kind = types.object({
+                name = 'FailoverState',
+                fields = {
+                    mode = types.string.nonNull,
+                    elections = types.list(types.object({
+                        name = 'ElectionState',
+                        fields = {
+                            instance = types.string.nonNull,
+                            state    = types.string,
+                            term     = types.long,
+                            leader_uuid = types.string,
+                        },
+                    })),
+                },
+            }).nonNull,
+            description = 'Failover mode + per-server election state.',
+            resolve = failover_resolver.query_failover,
+        },
+        vshard = {
+            kind = types.object({
+                name = 'VshardSummary',
+                fields = {
+                    groups = types.list(types.object({
+                        name = 'VshardGroupSummary',
+                        fields = {
+                            name = types.string.nonNull,
+                            total_buckets = types.long,
+                            distribution = types.string,
+                            rebalancer = types.string,
+                            status = types.string.nonNull,
+                        },
+                    })),
+                },
+            }).nonNull,
+            description = 'Vshard groups summary. Empty until vshard wiring lands.',
+            resolve = vshard_resolver.query_vshard,
+        },
         config = {
             kind = config_types.ConfigCurrent.nonNull,
             description = 'Current cluster YAML and its etcd revision. ' ..
@@ -305,6 +346,56 @@ local Mutation = types.object {
             kind = config_types.ConfigCommitResult.nonNull,
             arguments = { prepared_id = types.string.nonNull },
             resolve = config_resolver.mutation_abort,
+        },
+        probeUri = {
+            kind = types.object({
+                name = 'ProbeResult',
+                fields = {
+                    reachable         = types.boolean.nonNull,
+                    tarantool_version = types.string,
+                    cluster_uuid      = types.string,
+                    instance_uuid     = types.string,
+                    ro                = types.boolean,
+                    ro_reason         = types.string,
+                    latency_ms        = types.long.nonNull,
+                },
+            }).nonNull,
+            arguments = { uri = types.string.nonNull },
+            resolve = lifecycle_resolver.mutation_probe_uri,
+        },
+        forceReapplyConfig = {
+            kind = types.object({
+                name = 'LifecycleResult',
+                fields = {
+                    results = types.list(types.object({
+                        name = 'PeerResult',
+                        fields = {
+                            instance = types.string.nonNull,
+                            ok       = types.boolean.nonNull,
+                            err      = types.string,
+                        },
+                    })),
+                },
+            }).nonNull,
+            arguments = { instances = types.list(types.string.nonNull) },
+            resolve = lifecycle_resolver.mutation_force_reapply,
+        },
+        reloadRoles = {
+            kind = types.object({
+                name = 'ReloadRolesResult',
+                fields = {
+                    results = types.list(types.object({
+                        name = 'PeerResultReload',
+                        fields = {
+                            instance = types.string.nonNull,
+                            ok       = types.boolean.nonNull,
+                            err      = types.string,
+                        },
+                    })),
+                },
+            }).nonNull,
+            arguments = { instances = types.list(types.string.nonNull) },
+            resolve = lifecycle_resolver.mutation_reload_roles,
         },
     },
 }

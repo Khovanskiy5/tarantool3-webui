@@ -29,19 +29,20 @@ end
 -- is on disk gives operators a starting point for the editor even
 -- before etcd is wired.
 local function read_local_yaml()
-    local candidates = {
-        os.getenv('TT_CONFIG_PATH'),
-        '/opt/webui/etc/cluster.yaml',
-        'docker/configs/cluster.yaml',
-    }
+    -- ipairs stops at the first nil, so we can't put env getters
+    -- straight into the table literal. Build the list defensively.
+    local candidates = {}
+    local function push(p) if p and #p > 0 then table.insert(candidates, p) end end
+    push(os.getenv('TT_CONFIG_PATH'))
+    push(os.getenv('TT_CONFIG'))
+    push('/opt/webui/etc/cluster.yaml')
+    push('docker/configs/cluster.yaml')
     for _, path in ipairs(candidates) do
-        if path and #path > 0 then
-            local f = fio.open(path)
-            if f ~= nil then
-                local body = f:read()
-                f:close()
-                if body then return body, 'file' end
-            end
+        local f = fio.open(path)
+        if f ~= nil then
+            local body = f:read()
+            f:close()
+            if body then return body, 'file' end
         end
     end
     return '', 'memory'
