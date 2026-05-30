@@ -281,6 +281,93 @@ Lazy chunks страниц ошибок — < 1 КБ каждая.
 
 `vite.config.server.proxy` направляет `/admin/api`, `/api/*`, `/ws` на `VITE_BACKEND_URL` (default `http://localhost:8081`). В compose-окружении это `tt-1`.
 
+## Упаковка SPA в Lua-модуль (Task 5)
+
+Frontend собирается Vite'ом в `frontend/dist/`. Чтобы любой Tarantool-инстанс мог отдавать SPA без отдельной файловой системы (важно для read-only контейнеров и rolling-rock-апгрейда), весь bundle упаковывается в Lua-модуль `backend/webui/assets/bundle.lua`.
+
+### Пайплайн
+
+```
+frontend/source ──► bun run build ──► frontend/dist/
+                                          │
+                                          │ vite-plugin-compression2
+                                          │ → emits .br + .gz siblings
+                                          ▼
+                            frontend/dist/
+                              index.html  index.html.br  index.html.gz
+                              assets/foo.js  assets/foo.js.br  assets/foo.js.gz
+                              …
+                                          │
+                                          │ tools/embed-assets.lua
+                                          │ (make embed-assets)
+                                          ▼
+                  backend/webui/assets/bundle.lua  ← generated, gitignored
+```
+
+### Формат bundle.lua
+
+```lua
+local base64_decode = require('digest').base64_decode
+local function decode(b) return base64_decode(b) end
+
+return {
+  ['/index.html'] = {
+    mime     = 'text/html; charset=utf-8',
+    etag     = '"1ea2a56ced4fe73e90bbbfb391d259c5c16d6b01"',  -- strong, SHA-1 of raw
+    size_raw = 1291,
+    size_br  = 415,
+    size_gz  = 598,
+    body_raw = decode([[<base64>]]),
+    body_br  = decode([[<base64>]]),
+    body_gz  = decode([[<base64>]]),
+  },
+  ['/assets/index-XXXXX.js'] = { ... },
+  …
+}
+```
+
+### Дизайн-решения
+
+- **Base64, а не `\xNN`-escape**: длинная строка `[[…]]` с base64 в 4 раза компактнее, чем `\xNN`-escape каждого байта. Base64-алфавит `A-Za-z0-9+/=` не содержит `]`, поэтому конфликта с закрывающим `]]` не возникает.
+- **`size_*` метаданные**: позволяют статик-хендлеру вычислить `Content-Length` без `#body` (быстрее).
+- **Strong ETag = `"<sha1_hex>"`**: совпадает с RFC 7232; вычисляется только от raw — pre-compressed варианты имеют один тот же ETag, что соответствует семантике «то же представление, другая кодировка».
+- **MIME по расширению**: таблица в скрипте, по умолчанию `application/octet-stream`.
+- **Pre-compressed варианты не пересжимаются**: используются те, что эмитнул Vite. Это гарантирует bit-identical артефакты между `make build-frontend` и `make embed-assets`.
+- **Стабильная сортировка ключей** (`table.sort(ordered_keys)`) делает bundle.lua воспроизводимым — два разных запуска на тех же входных данных дают побайтово одинаковый файл.
+- **Включаем `.map`-файлы**: они тяжёлые (vendor-vue.js.map ~1.1 МиБ), но загружаются только при открытии DevTools. Не сжимаются (sourcemaps — JSON, который уже компактен).
+
+### Размер и время загрузки
+
+На текущем каркасном frontend:
+
+| Метрика | Значение |
+|---|---|
+| Assets total raw | 2.75 МиБ (включая sourcemaps) |
+| Assets total brotli | 189 КиБ (только сжатые формы main + page chunks + monaco-css) |
+| `bundle.lua` на диске | 4.22 МиБ (raw + br + gz в base64) |
+| Время `require('webui.assets.bundle')` | ~11 мс (cold load, jit прогрев) |
+| Память после декодирования | ~3 МиБ (per-instance; разделяется между fiber-ами) |
+
+При production frontend (без sourcemaps): bundle ожидаемо < 2.5 МиБ на диске и < 1.5 МиБ в памяти.
+
+### Что использует bundle.lua
+
+Task 6 (`backend/webui/http/static.lua`) — это потребитель. Он:
+- При role start импортирует `webui.assets.bundle` (один раз).
+- На каждый `GET /<path>` ищет `bundle['/' .. path]`.
+- По `Accept-Encoding` отдаёт `body_br` или `body_gz` с `Content-Encoding`, либо `body_raw`.
+- Возвращает 304 при совпадающем `If-None-Match`.
+- Для путей вне bundle — fallback на `/index.html` (SPA history mode).
+
+### Запуск
+
+```bash
+make embed-assets        # вызывает make build-frontend, потом tarantool tools/embed-assets.lua
+tarantool tools/embed-assets.lua [<source-dir>] [<output-file>]   # вручную
+```
+
+CLI печатает таблицу с маршрутами, MIME и размерами raw/br/gz и итоговую сводку. Скрипт коммитится в `tools/`, сгенерированный `bundle.lua` — gitignored (`backend/webui/assets/bundle.lua`).
+
 ## Дальнейшие разделы
 
 Появляются по мере реализации задач:
