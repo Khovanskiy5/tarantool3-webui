@@ -1,11 +1,23 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import SelectButton from 'primevue/selectbutton';
+import Button from 'primevue/button';
 
 import { SUPPORTED_LOCALES, setLocale, type Locale } from '@/shared/i18n';
 import { useHealth } from '@/shared/lib/health';
 import { IssuesBadge } from '@/widgets/issues-badge';
+import { useSessionStore } from '@/entities/session';
+import { performLogout } from '@/features/auth-logout';
+
+const router = useRouter();
+const session = useSessionStore();
+
+const onLogout = async () => {
+  await performLogout();
+  router.push({ name: 'login' });
+};
 
 const { t, locale } = useI18n();
 const { snapshot } = useHealth();
@@ -63,6 +75,18 @@ const localeModel = computed<Locale>({
         :aria-label="t('app.language')"
         size="small"
         class="webui-top-bar__locale-switch"
+      />
+      <span v-if="session.user" class="webui-top-bar__user" :title="(session.user.roles ?? []).join(', ')">
+        <i class="pi pi-user" /> {{ session.user.user }}
+      </span>
+      <Button
+        v-if="session.user"
+        text
+        rounded
+        size="small"
+        aria-label="Sign out"
+        icon="pi pi-sign-out"
+        @click="onLogout"
       />
     </div>
   </header>
@@ -122,6 +146,18 @@ const localeModel = computed<Locale>({
 .webui-top-bar__instance-name {
   font-weight: 600;
   font-family: var(--webui-font-mono);
+}
+
+.webui-top-bar__user {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--webui-radius);
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--webui-border);
+  font-family: var(--webui-font-mono);
+  font-size: 0.85rem;
 }
 
 /* PrimeVue 4 / Aura paints SelectButton via the design-token system,

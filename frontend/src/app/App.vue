@@ -1,10 +1,28 @@
 <script setup lang="ts">
+import { useRoute } from 'vue-router';
+import { computed } from 'vue';
+
 import { Sidebar } from '@/widgets/sidebar';
 import { TopBar } from '@/widgets/top-bar';
+
+const route = useRoute();
+// The login (and any future setup-style) page renders full-bleed
+// without the shared TopBar/Sidebar shell.
+const hideShell = computed(() => route.meta?.hideShell === true);
 </script>
 
 <template>
-  <div class="webui-shell">
+  <div v-if="hideShell" class="webui-shell webui-shell--bare">
+    <router-view v-slot="{ Component }">
+      <Suspense>
+        <component :is="Component" />
+        <template #fallback>
+          <div class="webui-shell__loading" role="status">Loading…</div>
+        </template>
+      </Suspense>
+    </router-view>
+  </div>
+  <div v-else class="webui-shell">
     <TopBar />
     <div class="webui-shell__body">
       <Sidebar />
@@ -27,6 +45,9 @@ import { TopBar } from '@/widgets/top-bar';
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  background: var(--webui-bg);
+}
+.webui-shell--bare {
   background: var(--webui-bg);
 }
 

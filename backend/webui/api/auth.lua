@@ -183,13 +183,28 @@ function M.handler_login(req)
     })
     logger.info('login ok', { user = body.user, ip = ip })
 
+    -- Two cookies on a successful login:
+    --   * `webui_session`  HttpOnly — the cookie the browser sends
+    --                      on every request, never visible to JS.
+    --   * `webui_csrf`     readable (no HttpOnly) — the SPA reads
+    --                      this to mirror back into `X-Csrf-Token`
+    --                      on every state-changing request, i.e.
+    --                      a classic double-submit CSRF token.
+    local ttl = require('webui.auth.session').DEFAULT_TTL_SEC
+    local csrf_cookie = table.concat({
+        'webui_csrf=' .. csrf,
+        'Path=/',
+        'SameSite=Strict',
+        'Max-Age=' .. tostring(ttl),
+    }, '; ')
+    if is_secure(req) then csrf_cookie = csrf_cookie .. '; Secure' end
     return json_response(200, {
-        user = body.user, csrf = csrf, expiresIn = require('webui.auth.session').DEFAULT_TTL_SEC,
+        user = body.user, csrf = csrf, expiresIn = ttl,
     }, {
-        ['set-cookie'] = build_cookie(id, {
-            secure = is_secure(req),
-            max_age = require('webui.auth.session').DEFAULT_TTL_SEC,
-        }),
+        ['set-cookie'] = {
+            build_cookie(id, { secure = is_secure(req), max_age = ttl }),
+            csrf_cookie,
+        },
         [CSRF_HEADER] = csrf,
     })
 end
@@ -216,9 +231,12 @@ function M.handler_logout(req)
         request_id = req.request_id,
     })
     logger.info('logout', { user = user })
+    local expire_csrf = 'webui_csrf=; Path=/; SameSite=Strict; Max-Age=0'
     return json_response(204, {}, {
-        ['set-cookie'] = build_cookie('', { expire = true,
-            secure = is_secure(req) }),
+        ['set-cookie'] = {
+            build_cookie('', { expire = true, secure = is_secure(req) }),
+            expire_csrf,
+        },
     })
 end
 
