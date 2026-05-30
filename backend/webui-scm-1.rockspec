@@ -25,8 +25,8 @@ dependencies = {
     'checks',
     'errors',
     'http >= 1.6',
+    'graphql',
     -- Subsequent tasks pin additional dependencies as their code lands:
-    --   Task 7  (GraphQL):       'graphql'
     --   Task 10 (compose configs): 'lyaml'
     --   Task 30 (etcd):          'etcd-client'
     --   Task 42a (self-metrics): 'metrics'
@@ -45,5 +45,9 @@ build = {
         ['webui.http.error_envelope']= 'backend/webui/http/error_envelope.lua',
         ['webui.http.static']        = 'backend/webui/http/static.lua',
         ['webui.api.health']         = 'backend/webui/api/health.lua',
+        ['webui.graphql.server']     = 'backend/webui/graphql/server.lua',
+        ['webui.graphql.schema']     = 'backend/webui/graphql/schema.lua',
+        ['webui.graphql.error_envelope'] = 'backend/webui/graphql/error_envelope.lua',
+        ['webui.graphql.types.health']   = 'backend/webui/graphql/types/health.lua',
     },
 }

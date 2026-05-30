@@ -419,6 +419,98 @@ Bundle загружается через `pcall(require, 'webui.assets.bundle')`
 | Missing /api/* | `GET /api/missing` | 404 |
 | Bundle отсутствует | `GET /` | 404 |
 
+## GraphQL skeleton (Task 7)
+
+`backend/webui/graphql/*` — GraphQL поверхность WebUI. Транспорт — `POST /admin/api` для запросов, `GET /admin/api/explore` для self-hosted explorer'а.
+
+### Модули
+
+| Файл | Назначение |
+|---|---|
+| `graphql/schema.lua` | Композиция GraphQL-схемы (объединение types + resolvers). Точка `M.build()` пересоздаёт schema на каждом `graphql.server.init`. |
+| `graphql/server.lua` | HTTP-хендлеры `POST /admin/api` и `GET /admin/api/explore`. Управление lifecycle (`init`, `stop`, `status`). |
+| `graphql/error_envelope.lua` | Формирование стандартного GraphQL-error shape с `extensions.code/request_id`, маппинг code→HTTP. |
+| `graphql/types/health.lua` | Тип `RoleStatus` (lifecycle роли). |
+
+### Pipeline на запрос
+
+```
+POST /admin/api  Content-Type: application/json
+   │
+   ▼ middleware.wrap('graphql')  ← request-id, security headers, pcall, log
+   │
+   ▼ server.handler(req)
+   │
+   ├─ read body (req:read_cached)            → 400 INVALID_QUERY на read fail
+   ├─ json.decode body                       → 400 INVALID_QUERY на JSON fail
+   ├─ validate "query" field is non-empty    → 400 INVALID_QUERY
+   ├─ pcall parse.parse(query)               → 400 INVALID_QUERY с err text
+   ├─ pcall validate.validate(schema, doc)   → 400 VALIDATION_ERROR с err text
+   ├─ pcall execute.execute(schema, doc, rootValue, vars, opName)
+   │       где rootValue = { request_id }    → 500 INTERNAL на crash (message маскируется)
+   │
+   ▼ json.encode({data = result})
+   │
+   ▼ 200 OK
+```
+
+`pcall` на каждом шаге. Никаких stack-trace наружу. Реальный текст ошибки (для diagnostics) — в structured-логе по тому же `request_id`.
+
+### Резолверы M0
+
+Skeleton-резолверы для smoke и для будущей интеграции:
+
+- `Query.ping: String!` → `"pong"`.
+- `Query.serverTime: String!` → ISO 8601 UTC с микросекундами.
+- `Query.webuiVersion: String!` → SemVer rock'а.
+- `Query.roleStatus: RoleStatus!` → снимок lifecycle через `webui.status()`.
+- `Query.configJsonSchema: String` → JSON-encoded `config:jsonschema()` Tarantool 3.x. Единый источник истины для backend-валидации (Task 32) и Monaco-autocomplete (Task 38). `null` если модуль `config` недоступен.
+- `Mutation._noop: Boolean!` → placeholder, удаляется в Task 26 когда появятся реальные mutation'ы.
+
+### GraphiQL Explorer
+
+`GET /admin/api/explore` — self-contained минимальный explorer (textarea + кнопка + JSON-результат, ~3 КБ inline JS+CSS). НЕ полный GraphiQL (он бы потребовал vendor'ить React + ProseMirror ≈ 1 МБ).
+
+Гейтинг:
+- `roles_cfg.webui.graphiql_enabled = false` (default) → 404
+- `roles_cfg.webui.graphiql_enabled = true` → 200 + relaxed CSP (`script-src 'self' 'unsafe-inline'`) для inline-скрипта explorer'а
+
+В Task 26 добавится RBAC-проверка (доступ только `admin`/`superuser`); сейчас фильтр — только по конфигу роли.
+
+### Регистрация роутов
+
+В `http/server.lua → register_builtin_routes` после `/api/health`:
+
+```
+POST /admin/api          → middleware.wrap('graphql',          graphql.handler)
+GET  /admin/api/explore  → middleware.wrap('graphql_explorer', graphql.graphiql_handler)
+```
+
+Затем static routes. SPA catch-all `/*splat` идёт последним.
+
+### Quirks rock'а `graphql`
+
+- `parse.parse` и `validate.validate` бросают исключение на ошибку (а не возвращают `nil, err`). Wrapping в `pcall` обязателен.
+- `execute.execute` принимает 5 позиционных аргументов: `(schema, doc, rootValue, variables, operationName)`. **Нет** отдельного context-параметра. Per-request данные (request_id, в будущем user) передаются через `rootValue`.
+- `execute.execute` не изолирует resolver-сбои. Если один резолвер кидает — всё выполнение фейлится. Для skeleton-резолверов это OK; для тяжёлых резолверов (cluster, config, …) в Tasks 18+ будем оборачивать каждый в локальный `pcall` и возвращать `nil, err` поверх стандартных результатов.
+
+### Graceful degradation
+
+`require('webui.graphql.server')` оборачивается в `pcall` в `register_builtin_routes`. Сбой загрузки модуля или `graphql_srv.init` → WARN/ERROR в логе, `/admin/api` не регистрируется, остальное (`/api/health`, статика) работает.
+
+### Проверка end-to-end
+
+| Сценарий | Запрос | Ответ |
+|---|---|---|
+| ping | `POST {query:"{ping}"}` | 200 `{"data":{"ping":"pong"}}` |
+| roleStatus | `POST {query:"{roleStatus{state version}}"}` | 200 `{"data":{"roleStatus":{"state":"ready",…}}}` |
+| introspection | `POST {query:"{__schema{queryType{name}}}"}` | 200 `{"data":{"__schema":{"queryType":{"name":"Query"}}}}` |
+| Parse error | `POST {query:"{ ping"}` | 400 `{"errors":[{"code":"INVALID_QUERY",…}]}` |
+| Validation error | `POST {query:"{ doesNotExist }"}` | 400 `{"errors":[{"code":"VALIDATION_ERROR",…}]}` |
+| Empty body | `POST` без body | 400 `INVALID_QUERY` |
+| Explorer (disabled) | `GET /admin/api/explore` | 404 |
+| Explorer (enabled) | `GET /admin/api/explore` | 200 text/html, 3 КБ |
+
 ## Дальнейшие разделы
 
 Появляются по мере реализации задач:

@@ -87,6 +87,28 @@ X-Request-Id: <uuid>
 
 См. `docs/security.md` для обоснования каждого заголовка.
 
+## POST /admin/api (GraphQL)
+
+Основная админ-поверхность. Документация: `docs/api/graphql-schema.md`.
+
+- Тело запроса: `{ query, variables, operationName }` (`Content-Type: application/json`).
+- Тело ответа: `{ data, errors }` (GraphQL spec).
+- HTTP-коды:
+  - `200` — успех (или частичный успех с `errors[]`).
+  - `400` — `INVALID_QUERY` или `VALIDATION_ERROR`.
+  - `500` — `INTERNAL` (резолвер crashed; message маскируется).
+  - `503` — `UNAVAILABLE` (GraphQL не инициализирован).
+- Errors используют GraphQL envelope с `extensions.code` и `extensions.request_id`.
+
+## GET /admin/api/explore
+
+Self-contained минимальный GraphQL explorer. Открывает HTML-страницу с textarea для запроса, кнопкой Execute (Ctrl+Enter) и панелью JSON-результата.
+
+- Гейтинг: `roles_cfg.webui.graphiql_enabled` (default `false`). При `false` → 404.
+- CSP relaxed для этого route: `script-src 'self' 'unsafe-inline'`.
+- Никаких внешних ассетов. Не GraphiQL (~3 КБ inline вместо ~1 МБ полного React-приложения).
+- В Task 26 добавится RBAC-фильтрация (доступ только `admin`/`superuser`).
+
 ## Дальнейшие endpoint'ы
 
 Появляются по мере реализации задач:
@@ -96,8 +118,6 @@ X-Request-Id: <uuid>
 - `GET /api/metrics`, `GET /api/metrics/webui` — Tasks 42, 42a.
 - `GET /api/config/download`, `POST /api/config/upload` — Task 37.
 - `GET /api/diagnostics/bundle` — Task 54.
-- `POST /admin/api` (GraphQL) — Task 7, отдельный документ.
-- `GET /admin/api/explore` (GraphiQL) — Task 7.
 - `GET /ws` (WebSocket upgrade) — Tasks 21, 26a.
 
 Каждая категория документируется отдельным разделом в этом файле или собственным документом.

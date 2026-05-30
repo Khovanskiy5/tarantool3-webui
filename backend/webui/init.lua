@@ -172,6 +172,7 @@ function M.start(opts)
     local http_ok, http_err = http_srv.start({
         listen = opts.listen,
         allowed_origins = opts.allowed_origins,
+        graphiql_enabled = opts.graphiql_enabled == true,
         role_status_provider = function() return M.status() end,
     })
     if not http_ok then

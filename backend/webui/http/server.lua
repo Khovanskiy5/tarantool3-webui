@@ -87,19 +87,52 @@ local function enriched_status_provider()
     return base
 end
 
--- Register the built-in health endpoint and static SPA routes. Other
--- modules call M.register_route() for their own paths.
+-- Register the built-in health endpoint, the GraphQL endpoint and
+-- the static SPA routes. Other modules call M.register_route() for
+-- their own paths.
 --
 -- Route ordering matters: the http rock matches routes in iteration
--- order, so explicit /api/* paths must be registered BEFORE the
--- catch-all "/*splat" used for SPA history-mode fallback. Otherwise
--- the wildcard would shadow them and turn every /api request into a
--- 404 inside the static handler.
-local function register_builtin_routes(httpd)
+-- order, so explicit /api/* and /admin/api/* paths must be registered
+-- BEFORE the catch-all "/*splat" used for SPA history-mode fallback.
+-- Otherwise the wildcard would shadow them and turn every API request
+-- into a 404 inside the static handler.
+local function register_builtin_routes(httpd, role_opts)
     httpd:route(
         { path = '/api/health', method = 'GET' },
         middleware.wrap('health', health_api.make_handler(enriched_status_provider))
     )
+
+    -- GraphQL surface. Loaded inside pcall so a broken schema does not
+    -- prevent the rest of the role from starting; the failure surfaces
+    -- as 503 UNAVAILABLE on /admin/api requests and a warn log line.
+    local ok_gql, graphql_srv = pcall(require, 'webui.graphql.server')
+    if ok_gql then
+        local init_ok, init_err = pcall(graphql_srv.init, {
+            graphiql_enabled = role_opts.graphiql_enabled == true,
+        })
+        if init_ok then
+            httpd:route(
+                { path = '/admin/api', method = 'POST' },
+                middleware.wrap('graphql', graphql_srv.handler)
+            )
+            httpd:route(
+                { path = '/admin/api/explore', method = 'GET' },
+                middleware.wrap('graphql_explorer', graphql_srv.graphiql_handler)
+            )
+            local s = graphql_srv.status()
+            logger.info('graphql routes registered', {
+                graphiql_enabled = s.graphiql_enabled,
+            })
+        else
+            logger.error('graphql init failed; /admin/api disabled', {
+                err = tostring(init_err),
+            })
+        end
+    else
+        logger.warn('graphql module load failed; /admin/api disabled', {
+            err = tostring(graphql_srv),
+        })
+    end
 
     -- Static SPA. The module is always loadable: when the bundle has
     -- not been produced (unit-test runs without `make embed-assets`),
@@ -188,7 +221,7 @@ function M.start(opts)
     end)
 
     STATE.httpd = httpd
-    register_builtin_routes(httpd)
+    register_builtin_routes(httpd, opts)
 
     local ok, err = pcall(function() httpd:start() end)
     if not ok then
