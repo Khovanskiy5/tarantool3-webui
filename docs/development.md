@@ -126,6 +126,39 @@ cd frontend && bunx vitest run src/entities/cluster
 cd frontend && bunx playwright test smoke.spec.ts
 ```
 
+## Backend test helpers
+
+В `backend/test/helpers/` лежат тонкие обёртки, которые скрывают рутину поднятия Tarantool и etcd в интеграционных тестах:
+
+- `paths.lua` — общий: вычисляет `repo_root`, идемпотентно расширяет `package.path`/`package.cpath` для in-tree `backend/` и `.rocks/`. Любой другой helper грузит его первым.
+- `server.lua` — наследник `luatest.server`. Прокидывает `LUA_PATH`/`LUA_CPATH` в spawned-процесс, добавляет `wait_webui_ready(timeout)` (поллит `GET /api/health` до `status ∈ {ok, degraded}`), `webui_health()`, `webui_base_url()`.
+- `cluster.lua` — обёртка над `luatest.cluster`. Принимает `config_file` (YAML) и map `webui_ports = {alias = port}`. Делегирует `start/stop/drop/size/each`, добавляет `wait_all_webui_ready` — обходит каждый инстанс и переиспользует `Server:wait_webui_ready`.
+- `etcd.lua` — режим `attach({endpoint=...})` для существующего etcd (CI re-использует compose-овский) и `spawn({image?,port?})` для эфемерного `quay.io/coreos/etcd:v3.5.18` через `docker run -d --rm`. API поверх etcd v3 HTTP gateway: `put/get/delete/delete_prefix/health/endpoint/stop`.
+- `http_client.lua` — клиент поверх `http.client`. Cookie-jar, in-memory CSRF, авто-`x-request-id`. REST: `rest_get/post/put/delete`. GraphQL: `graphql_query/graphql_mutation` распаковывают `res.json.data`/`res.json.errors`. Ассерты `assert_status` и `assert_graphql_ok` падают с информативным сообщением. `login()` — стаб до Task 25.
+
+Пример integration-теста:
+
+```lua
+local paths = require('test.helpers.paths')
+local Cluster = require('test.helpers.cluster')
+local Client = require('test.helpers.http_client')
+
+local cl = Cluster:new({
+    config_file = paths.cluster_dev_yaml,
+    webui_ports = { ['tt-1'] = 18081, ['tt-2'] = 18082, ['tt-3'] = 18083 },
+})
+cl:start()
+cl:wait_all_webui_ready(60)
+
+local c = Client:new({ base_url = 'http://127.0.0.1:18081' })
+local res = c:graphql_query('{ ping }')
+c:assert_graphql_ok(res)
+
+cl:drop()
+```
+
+Публичная поверхность helper'ов покрыта офлайн-тестом `backend/test/unit/helpers_test.lua` (11 кейсов) — если кто-то сломает API или удалит метод, CI упадёт сразу, без Docker.
+
 ## Структура и архитектура
 
 Полная картина — в `docs/architecture.md`. Кратко:
