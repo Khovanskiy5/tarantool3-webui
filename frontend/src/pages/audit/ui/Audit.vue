@@ -12,27 +12,49 @@ import { downloadExportedAudit } from '@/features/audit-export';
 const store = useAuditStore();
 const { entries, pending, error, hasMore } = storeToRefs(store);
 
-const filter = reactive({ user: '', action: '', scope: '' });
+const filter = reactive({
+  user: '',
+  action: '',
+  scope: '',
+  // Prefix match (e.g. `cluster.`) is mutually exclusive with the
+  // exact-match `action` field in the UI: the chip handlers toggle
+  // which one is populated. Backend filters AND them, so we keep
+  // the dichotomy at the UI level so the operator never sees
+  // overlapping criteria.
+  action_prefix: '',
+});
 
 // Curated quick-filter chips for the most operationally interesting
 // actions. Order: most-used first. New action types added to other
 // audit-emitting code paths should land here too so operators have a
 // one-click filter without remembering string names.
-const actionPresets: { label: string; action: string }[] = [
-  { label: 'Config rollback',   action: 'config.rollback' },
-  { label: 'Config commit',     action: 'config.commit' },
-  { label: 'Login',             action: 'auth.login' },
-  { label: 'Login failed',      action: 'auth.login_failed' },
-  { label: 'Logout',            action: 'auth.logout' },
-  { label: 'RBAC denied',       action: 'rbac.denied' },
-  { label: 'Console (Lua)',     action: 'eval.lua' },
-  { label: 'Console (SQL)',     action: 'eval.sql' },
+//
+// Presets either pin an exact action (`exact`) or a prefix
+// (`prefix`); the latter groups a family of related mutations under
+// a single chip. The audit page only ever has one preset active at a
+// time so the operator can keep typing into the user / scope fields
+// without losing the family selection.
+type ActionPreset =
+  | { label: string; exact: string }
+  | { label: string; prefix: string };
+
+const actionPresets: ActionPreset[] = [
+  { label: 'Cluster ops',       prefix: 'cluster.' },
+  { label: 'Config rollback',   exact:  'config.rollback' },
+  { label: 'Config commit',     exact:  'config.commit' },
+  { label: 'Login',             exact:  'auth.login' },
+  { label: 'Login failed',      exact:  'auth.login_failed' },
+  { label: 'Logout',            exact:  'auth.logout' },
+  { label: 'RBAC denied',       exact:  'rbac.denied' },
+  { label: 'Console (Lua)',     exact:  'eval.lua' },
+  { label: 'Console (SQL)',     exact:  'eval.sql' },
 ];
 
 const buildFilter = () => ({
-  user:   filter.user.trim()   || undefined,
-  action: filter.action.trim() || undefined,
-  scope:  filter.scope.trim()  || undefined,
+  user:          filter.user.trim()          || undefined,
+  action:        filter.action.trim()        || undefined,
+  action_prefix: filter.action_prefix.trim() || undefined,
+  scope:         filter.scope.trim()         || undefined,
 });
 
 const apply = () => { store.load(buildFilter()); };
@@ -41,11 +63,18 @@ const exportNow = () => { downloadExportedAudit(buildFilter()); };
 const resetFilters = () => {
   filter.user = '';
   filter.action = '';
+  filter.action_prefix = '';
   filter.scope = '';
   store.load({});
 };
-const setPreset = (action: string) => {
-  filter.action = action;
+const setPreset = (preset: ActionPreset) => {
+  if ('exact' in preset) {
+    filter.action = preset.exact;
+    filter.action_prefix = '';
+  } else {
+    filter.action = '';
+    filter.action_prefix = preset.prefix;
+  }
   store.load(buildFilter());
 };
 
@@ -70,19 +99,27 @@ onMounted(() => { store.load({}); });
       <span class="webui-audit__presets-label">Quick filters:</span>
       <button
         v-for="preset in actionPresets"
-        :key="preset.action"
+        :key="preset.label"
         type="button"
         :class="[
           'webui-audit__preset',
-          { 'webui-audit__preset--active': filter.action === preset.action },
+          {
+            'webui-audit__preset--active':
+              ('exact' in preset && filter.action === preset.exact)
+              || ('prefix' in preset && filter.action_prefix === preset.prefix),
+          },
         ]"
-        :title="`Filter by action ${preset.action}`"
-        @click="setPreset(preset.action)"
+        :title="
+          'exact' in preset
+            ? `Filter by action ${preset.exact}`
+            : `Filter by action prefix ${preset.prefix}`
+        "
+        @click="setPreset(preset)"
       >
         {{ preset.label }}
       </button>
       <button
-        v-if="filter.user || filter.action || filter.scope"
+        v-if="filter.user || filter.action || filter.action_prefix || filter.scope"
         type="button"
         class="webui-audit__reset"
         @click="resetFilters"

@@ -17,6 +17,8 @@ export interface AuditPage {
 export interface AuditFilter {
   user?: string;
   action?: string;
+  /** Prefix match on the action string, e.g. `cluster.` covers every Phase 5 operator mutation. */
+  action_prefix?: string;
   scope?: string;
   from_ts?: number;
   to_ts?: number;

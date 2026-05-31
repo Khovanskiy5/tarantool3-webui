@@ -32,6 +32,19 @@ function M.matches_filter(tuple, filter)
     if filter == nil then return true end
     if filter.user   ~= nil and tuple.user   ~= filter.user   then return false end
     if filter.action ~= nil and tuple.action ~= filter.action then return false end
+    -- Prefix match lets the SPA group whole families of actions
+    -- behind a single chip (e.g. `cluster.` covers every Phase 5
+    -- operator mutation: cluster.promote, cluster.set_failover_mode,
+    -- cluster.expel_instance …). Both `action` and `action_prefix`
+    -- may be set — they AND, mirroring the rest of the filter
+    -- contract.
+    if filter.action_prefix ~= nil and filter.action_prefix ~= '' then
+        local p = filter.action_prefix
+        if type(tuple.action) ~= 'string'
+            or tuple.action:sub(1, #p) ~= p then
+            return false
+        end
+    end
     if filter.scope  ~= nil and tuple.scope  ~= filter.scope  then return false end
     if filter.from_ts ~= nil and tuple.ts < filter.from_ts then return false end
     if filter.to_ts   ~= nil and tuple.ts > filter.to_ts   then return false end

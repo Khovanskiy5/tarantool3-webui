@@ -157,7 +157,15 @@ local function fan_out_reload()
         if ok_cfg then
             local ok, err = pcall(function() cfg:reload() end)
             if not ok then
-                self_outcome = ' Self-reload failed: ' .. tostring(err) .. '.'
+                -- "already in progress" is a Tarantool 3.x race
+                -- between our explicit reload and the etcd
+                -- source's own poll cycle. Both will see the new
+                -- key — silencing the noise keeps the operator-
+                -- visible message focused on real failures.
+                local msg = tostring(err)
+                if not msg:find('already in progress', 1, true) then
+                    self_outcome = ' Self-reload failed: ' .. msg .. '.'
+                end
             end
         end
     end
@@ -1042,12 +1050,13 @@ function M.mutation_set_failover_mode(root, args)
         --   * supervised → forcibly ON (it IS the agent path; the
         --     other branch above explicitly maps supervised to
         --     `off + agent: true`).
-        --   * off → operator's explicit choice via params.agent.
-        --     When unset, KEEP the existing cluster value untouched.
-        --     This avoids the off → manual → off footgun where the
-        --     agent was implicitly turned off by the first edit and
-        --     stayed off through the second, leaving the cluster
-        --     without a leader.
+        --   * off → defaults to ON because plain `failover: off`
+        --     without an explicit `database.mode` per instance
+        --     leaves the cluster with no RW peer. The agent is
+        --     the open-source primary-electing driver. An operator
+        --     who truly wants off-without-agent (e.g. they will
+        --     drive leadership manually via direct
+        --     `database.mode: rw` edits) passes `agent: false`.
         new_parsed.roles_cfg = new_parsed.roles_cfg or {}
         new_parsed.roles_cfg.webui = new_parsed.roles_cfg.webui or {}
         new_parsed.roles_cfg.webui.failover =
@@ -1055,12 +1064,15 @@ function M.mutation_set_failover_mode(root, args)
         if args.mode == 'election' or args.mode == 'manual' then
             new_parsed.roles_cfg.webui.failover.agent = false
         elseif args.mode == 'off' then
-            if params.agent == true then
-                new_parsed.roles_cfg.webui.failover.agent = true
-            elseif params.agent == false then
+            if params.agent == false then
                 new_parsed.roles_cfg.webui.failover.agent = false
+            else
+                -- Default: turn the agent ON. The previous edit
+                -- might have left it off (e.g. transitioning out
+                -- of manual mode); leaving it that way means no
+                -- one drives leadership.
+                new_parsed.roles_cfg.webui.failover.agent = true
             end
-            -- else: leave existing value as-is.
         end
     end
 
@@ -1091,6 +1103,80 @@ function M.mutation_set_failover_mode(root, args)
                         end
                         if not has_more then inst.database = nil end
                     end
+                end
+            end
+        end
+    end
+
+    -- Schema rule (cross_validate in config_store/schema.lua):
+    -- `replicasets.<rs>.leader` MUST NOT be set when
+    -- `replication.failover = election` OR
+    -- `replication.failover = off`. Both modes drive leadership
+    -- through other channels (raft / per-instance database.mode /
+    -- our OS agent) and reject a contradicting static `leader`.
+    -- Strip it the same way we strip `database.mode`.
+    if args.mode == 'election' or args.mode == 'off' then
+        for _, group in pairs(new_parsed.groups or {}) do
+            for _, rs in pairs(group.replicasets or {}) do
+                if rs.leader ~= nil then rs.leader = nil end
+            end
+        end
+    end
+
+    -- Manual mode requires `replicasets.<rs>.leader` to be set —
+    -- otherwise no instance becomes RW and the next sync write
+    -- (audit log on the current commit!) deadlocks on a queue
+    -- without an owner. When the operator switches off → manual
+    -- without naming a leader, pre-populate each replicaset's
+    -- `leader` with whoever currently owns the synchro queue
+    -- locally (us if we are the writer, otherwise the alias the
+    -- agent last appointed). Falls back to the first alphabetical
+    -- instance alias when nothing better is known — manual mode
+    -- requires SOME leader; "first alpha" is a deterministic
+    -- placeholder the operator will normally override via the
+    -- promoteInstance flow within seconds.
+    if args.mode == 'manual' then
+        local self_alias
+        if box.info and box.info.name then self_alias = box.info.name end
+        local self_is_writer = box.info ~= nil and box.info.ro == false
+        local agent_last
+        do
+            local ok_agent, agent = pcall(require, 'webui.failover.agent')
+            if ok_agent then
+                local s = ok_agent and agent.status() or nil
+                if type(s) == 'table' and type(s.appointments) == 'table' then
+                    agent_last = {}
+                    for _, a in ipairs(s.appointments) do
+                        if a.leader ~= nil then
+                            agent_last[a.replicaset] = a.leader
+                        end
+                    end
+                end
+            end
+        end
+        for _, group in pairs(new_parsed.groups or {}) do
+            for rs_name, rs in pairs(group.replicasets or {}) do
+                if rs.leader == nil then
+                    local picked
+                    if agent_last and agent_last[rs_name]
+                        and rs.instances
+                        and rs.instances[agent_last[rs_name]] ~= nil then
+                        picked = agent_last[rs_name]
+                    elseif self_is_writer and self_alias
+                        and rs.instances
+                        and rs.instances[self_alias] ~= nil then
+                        picked = self_alias
+                    else
+                        -- Last resort: alphabetical first instance
+                        -- in the replicaset.
+                        local aliases = {}
+                        for alias in pairs(rs.instances or {}) do
+                            table.insert(aliases, alias)
+                        end
+                        table.sort(aliases)
+                        picked = aliases[1]
+                    end
+                    if picked ~= nil then rs.leader = picked end
                 end
             end
         end

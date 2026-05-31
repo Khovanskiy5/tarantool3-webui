@@ -32,11 +32,12 @@ M.AuditPage = types.object({
 M.AuditFilter = types.inputObject({
     name = 'AuditFilter',
     fields = {
-        user    = types.string,
-        action  = types.string,
-        scope   = types.string,
-        from_ts = types.long,
-        to_ts   = types.long,
+        user          = types.string,
+        action        = types.string,
+        action_prefix = types.string,
+        scope         = types.string,
+        from_ts       = types.long,
+        to_ts         = types.long,
     },
 })
 
