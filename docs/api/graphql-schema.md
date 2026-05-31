@@ -191,6 +191,18 @@ Reject: `synchro_quorum < N/2+1` (would allow split-brain).
 
 Расширение существующей мутации. Без `revision` — fan-out `config:reload()` на все (или перечисленные) peer'ы. С `revision` — сначала откат к указанной ревизии через `rollbackConfig` (audit, reload fan-out), а затем возврат с `rollback_to`, `rollback_revision`, `rollback_message` в response.
 
+#### `pauseFailover(ttl_sec?): TopologyEditResult!` / `resumeFailover: TopologyEditResult!`
+
+Maintenance-window pause для supervised-агента. Пишет `<prefix>/failover/pause = {until_ts, by_user}` в etcd. Координатор на каждом тике читает ключ и пропускает новые promotions (lease_keepalive продолжает работать, чтобы не сменился координатор и сам же не перезаписал pause). Default TTL 1h, hard cap 24h (`PAUSE_TTL_TOO_LONG` reject — для долгосрочного выключения через setFailoverMode "off" без agent). `paused_until` теперь доступно из `failoverAgentStatus { paused_until }` для UI banner.
+
+#### `failoverCommands(limit, status?, command_type?): FailoverCommandsPage!`
+
+TCM-style commands journal — replicated sync space `_webui_failover_commands` с одной row на каждую operator-issued cluster mutation (promote, pause/resume, force_apply, expel, set_failover_mode, edit_topology). Поля: `id`, `ts`, `command_type`, `params` (JSON string), `status` (pending/taken/success/failed), `user`, `coordinator`, `taken_at`, `completed_at`, `error_reason`. Retention: leader-only fiber, default 30 дней, 1000 удалений per tick. Knob: `roles_cfg.webui.failover.commands_retention_days`.
+
+#### `failover_priority` в YAML + `leader_autoreturn`
+
+В `groups.<g>.replicasets.<rs>.failover_priority: [tt-1, tt-2, tt-3]` — ordered preference. `agent.pick_leader` добавляет (n - idx) * 100 к score за позицию в списке; первый перечисленный выигрывает при равных условиях. Auto-return throttle: `roles_cfg.webui.failover.autoreturn_delay` (default 60s) — bonus применяется только если current leader держится дольше этого периода. Backward compat: missing field = alphabetical (текущее поведение).
+
 ### `TopologyEditResult`
 
 ```graphql

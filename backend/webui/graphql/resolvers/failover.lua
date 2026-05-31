@@ -156,6 +156,25 @@ function M.query_agent_status(root)
     local current_ro
     if box.info ~= nil then current_ro = box.info.ro end
 
+    -- paused_until is sourced from etcd directly, not from
+    -- STATE.paused_until — that cache is only populated on the
+    -- coordinator after its first appointment_cycle tick. Reading
+    -- from etcd means every peer answers the same value the moment
+    -- pauseFailover writes the key.
+    local pause_until
+    do
+        local ok_pause, pause_mod = pcall(require, 'webui.failover.pause')
+        local ok_client, etcd_client = pcall(require,
+            'webui.config_store.client')
+        if ok_pause and ok_client then
+            local client = etcd_client.get_client()
+            if client ~= nil then
+                local entry = pause_mod.read(client)
+                if entry ~= nil then pause_until = entry.until_ts end
+            end
+        end
+    end
+
     return {
         enabled         = agent_status.enabled == true,
         self_alias      = agent_status.self_alias,
@@ -164,6 +183,7 @@ function M.query_agent_status(root)
         lease_id        = agent_status.lease_id,
         appointments    = appointments,
         last_error      = agent_status.last_error,
+        paused_until    = pause_until,
         watcher_replicaset = watcher_status.replicaset,
         watcher_last_leader = watcher_status.last_seen
             and watcher_status.last_seen.leader,
@@ -272,6 +292,22 @@ function M.query_state_provider_status(root)
         -- which is the actionable bit.
         lease_active = box.NULL,
         coordinator  = box.NULL,
+    }
+end
+
+-- failoverCommands(limit, status?, command_type?) — TCM-style
+-- journal of every operator-issued cluster mutation. Sourced from
+-- the `_webui_failover_commands` replicated sync space.
+function M.query_commands(root, args)
+    require_role(root, 'failover')
+    local commands = require('webui.failover.commands')
+    args = args or {}
+    return {
+        entries = commands.list({
+            limit        = args.limit,
+            status       = args.status,
+            command_type = args.command_type,
+        }),
     }
 end
 

@@ -393,6 +393,38 @@ function M.start(opts)
         return { deleted = true }
     end)
 
+    -- Forward-to-leader shims for the _webui_failover_commands
+    -- journal (Task 5.13). A follower calling commands.record from
+    -- a GraphQL resolver lands here on the leader so the replicated
+    -- sync space sees a single writer.
+    rawset(_G, 'webui_failover_commands_write_remote', function(row)
+        if type(row) ~= 'table' then return { err = 'bad row' } end
+        local ok_sto, sto_mod = pcall(require, 'webui.storage.spaces')
+        if not ok_sto then return { err = 'storage module unavailable' } end
+        local space = sto_mod.failover_commands()
+        if space == nil then return { err = 'failover_commands missing' } end
+        local ok, t = pcall(function() return space:insert(row) end)
+        if not ok then return { err = tostring(t) } end
+        return { id = t[1] }
+    end)
+    rawset(_G, 'webui_failover_commands_complete_remote',
+        function(id, status, error_reason, completed_at)
+            if type(id) ~= 'number' then return { err = 'bad id' } end
+            local ok_sto, sto_mod = pcall(require, 'webui.storage.spaces')
+            if not ok_sto then return { err = 'storage module unavailable' } end
+            local space = sto_mod.failover_commands()
+            if space == nil then return { err = 'failover_commands missing' } end
+            local ok, err = pcall(function()
+                space:update({ id }, {
+                    { '=', 'status',       status or 'success' },
+                    { '=', 'completed_at', completed_at or 0 },
+                    { '=', 'error_reason', error_reason },
+                })
+            end)
+            if not ok then return { err = tostring(err) } end
+            return { updated = true }
+        end)
+
     -- Step 5 in the role start sequence: peer cookie (system user
     -- `webui_peer` + per-instance secret persistence). Steps 3,
     -- 7, 8 land in subsequent tasks (metrics, cluster state,
@@ -502,6 +534,21 @@ function M.start(opts)
             })
         end
         STATE.audit_retention = retention
+    end
+
+    -- Failover-commands journal retention fiber (Task 5.13). Same
+    -- shape as audit retention: leader-only, time-based prune,
+    -- per-tick budget. Default 30 days. Roll forward gracefully
+    -- when the module is missing during partial-image builds.
+    do
+        local cmds_ok, commands_mod = pcall(require, 'webui.failover.commands')
+        if cmds_ok then
+            local cfg = (opts.failover and opts.failover.commands_retention_days)
+                or nil
+            pcall(commands_mod.start_retention, {
+                retention_days = cfg,
+            })
+        end
     end
 
     -- Outbound notifications dispatcher (Task 53a). The fiber runs

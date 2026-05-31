@@ -23,6 +23,31 @@ local twophase      = require('webui.config_store.twophase')
 local config_schema = require('webui.config_store.schema')
 local etcd_client   = require('webui.config_store.client')
 local audit         = require('webui.audit.log')
+local commands      = require('webui.failover.commands')
+
+-- Single helper for "audit row + commands journal row" because
+-- every cluster mutation needs both. We swallow errors here on
+-- purpose: a failed audit write must NOT roll back the operator's
+-- action, otherwise transient storage glitches turn into failed
+-- mutations the operator already saw confirmed.
+local function audit_and_journal(action, scope, payload, root)
+    pcall(function()
+        audit.record({
+            user       = root and root.user,
+            action     = action,
+            scope      = scope or 'cluster',
+            payload    = payload,
+            request_id = root and root.request_id,
+        })
+    end)
+    pcall(function()
+        commands.record(action, payload, {
+            user        = root and root.user,
+            coordinator = box.info and box.info.name,
+            status      = 'success',
+        })
+    end)
+end
 local rbac          = require('webui.auth.rbac')
 local log_util      = require('webui.log_util')
 local logger        = log_util.with_tag('graphql.cluster_ops')
@@ -213,6 +238,13 @@ local function edit_topology_core(root, edits, apply, audit_action)
 
     local new_revision = (commit_result and commit_result.revision) or 0
 
+    pcall(function()
+        commands.record(audit_action, {
+            from_revision = current_revision,
+            new_revision  = new_revision,
+            ops_count     = #ops,
+        }, { user = root and root.user, status = 'success' })
+    end)
     pcall(function()
         audit.record({
             user       = root and root.user,
@@ -659,6 +691,11 @@ function M.mutation_expel_instance(root, args)
     end
 
     pcall(function()
+        commands.record('cluster.expel_instance', {
+            alias = args.alias, replicaset = rsname, force = force,
+        }, { user = root and root.user, status = 'success' })
+    end)
+    pcall(function()
         audit.record({
             user       = root and root.user,
             action     = 'cluster.expel_instance',
@@ -724,6 +761,11 @@ function M.mutation_promote_instance(root, args)
         apply_edit_topology = make_apply_edit_topology(root),
     })
     pcall(function()
+        commands.record('cluster.promote', {
+            alias = args.alias, mode = result.mode,
+        }, { user = root and root.user, status = 'success' })
+    end)
+    pcall(function()
         audit.record({
             user       = root and root.user,
             action     = 'cluster.promote',
@@ -765,6 +807,11 @@ function M.mutation_demote_instance(root, args)
         alias               = args.alias,
         apply_edit_topology = make_apply_edit_topology(root),
     })
+    pcall(function()
+        commands.record('cluster.demote', {
+            alias = args.alias, mode = result.mode,
+        }, { user = root and root.user, status = 'success' })
+    end)
     pcall(function()
         audit.record({
             user       = root and root.user,
@@ -976,6 +1023,11 @@ function M.mutation_set_failover_mode(root, args)
     if commit_err then
         error('COMMIT_FAILED: ' .. tostring(commit_err))
     end
+    pcall(function()
+        commands.record('cluster.set_failover_mode', {
+            mode = args.mode, params = params,
+        }, { user = root and root.user, status = 'success' })
+    end)
     pcall(function()
         audit.record({
             user       = root and root.user,
@@ -1259,6 +1311,87 @@ function M.mutation_set_instance_state(root, args)
     end
 
     error('VALIDATION_ERROR: unsupported failover mode: ' .. tostring(mode))
+end
+
+-- ── pauseFailover / resumeFailover ────────────────────────────────
+
+function M.mutation_pause_failover(root, args)
+    require_role(root, 'pauseFailover')
+    args = args or {}
+    local client, client_err = etcd_client.get_client()
+    if client == nil then
+        error('UNAVAILABLE: etcd unavailable: ' .. tostring(client_err))
+    end
+    local pause_mod = require('webui.failover.pause')
+    local res, err = pause_mod.set(client, args.ttl_sec,
+        root and root.user)
+    if res == nil then
+        if err == 'PAUSE_TTL_TOO_LONG' then
+            error('PAUSE_TTL_TOO_LONG: pause TTL cannot exceed '
+                .. tostring(pause_mod.MAX_PAUSE_TTL_SEC)
+                .. 's; for longer disable run setFailoverMode "off" '
+                .. 'without our agent.')
+        end
+        error('UNAVAILABLE: pause write failed: ' .. tostring(err))
+    end
+    pcall(function()
+        commands.record('cluster.pause_failover', {
+            until_ts = res.until_ts,
+            ttl_sec = args.ttl_sec or pause_mod.DEFAULT_TTL_SEC,
+        }, { user = root and root.user, status = 'success' })
+    end)
+    pcall(function()
+        audit.record({
+            user       = root and root.user,
+            action     = 'cluster.pause_failover',
+            scope      = 'cluster',
+            payload    = { until_ts = res.until_ts,
+                ttl_sec = args.ttl_sec or pause_mod.DEFAULT_TTL_SEC },
+            request_id = root and root.request_id,
+        })
+    end)
+    return {
+        prepared_id  = nil,
+        diff_summary = { 'pause until ' .. tostring(math.floor(res.until_ts)) },
+        applied      = true,
+        revision     = 0,
+        message      = string.format(
+            'failover paused until epoch %d (%.0fs from now).',
+            math.floor(res.until_ts), res.until_ts - require('fiber').time()),
+    }
+end
+
+function M.mutation_resume_failover(root, _args)
+    require_role(root, 'resumeFailover')
+    local client, client_err = etcd_client.get_client()
+    if client == nil then
+        error('UNAVAILABLE: etcd unavailable: ' .. tostring(client_err))
+    end
+    local pause_mod = require('webui.failover.pause')
+    local _, err = pause_mod.clear(client)
+    if err ~= nil then
+        error('UNAVAILABLE: pause clear failed: ' .. tostring(err))
+    end
+    pcall(function()
+        commands.record('cluster.resume_failover', {},
+            { user = root and root.user, status = 'success' })
+    end)
+    pcall(function()
+        audit.record({
+            user       = root and root.user,
+            action     = 'cluster.resume_failover',
+            scope      = 'cluster',
+            payload    = {},
+            request_id = root and root.request_id,
+        })
+    end)
+    return {
+        prepared_id  = nil,
+        diff_summary = { 'resume' },
+        applied      = true,
+        revision     = 0,
+        message      = 'failover resumed; agent will appoint on next tick.',
+    }
 end
 
 return M

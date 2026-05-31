@@ -46,6 +46,7 @@ M.NAMES = {
     WEBHOOK_QUEUE       = '_webui_webhook_queue',
     WEBHOOK_DEAD_LETTER = '_webui_webhook_dead_letter',
     PREPARED            = '_webui_prepared',
+    FAILOVER_COMMANDS   = '_webui_failover_commands',
 }
 
 -- Bumped by migrations. Every schema change adds an entry to
@@ -68,7 +69,12 @@ M.NAMES = {
 --       immediate leader crash, otherwise the data the API just
 --       confirmed disappears on the next promote. Local space
 --       `_webui_meta` stays async because it never replicates.
-M.CURRENT_SCHEMA_VERSION = 5
+--   6 — `_webui_failover_commands` (TCM-style journal for every
+--       operator-issued cluster mutation: promote, pause,
+--       force_apply, expel, set_failover_mode). Replicated +
+--       sync. Time-based retention (default 30 days, 1000/tick)
+--       runs on the leader; see backend/webui/failover/commands.lua.
+M.CURRENT_SCHEMA_VERSION = 6
 
 local SCHEMA_VERSION_KEY = 'schema_version'
 
@@ -300,6 +306,48 @@ local function ensure_webhook_dead_letter()
     return true
 end
 
+-- TCM-style commands journal (Task 5.13). Every operator mutation
+-- on cluster state (promote, pause/resume, force_apply, expel,
+-- set_failover_mode) writes a row that walks pending → taken →
+-- success/failed. Replicated + sync so the leader's view never
+-- diverges from followers; the SPA reads it for the "command
+-- history" tab.
+local function ensure_failover_commands()
+    if box.space[M.NAMES.FAILOVER_COMMANDS] ~= nil then return false end
+    box.schema.space.create(M.NAMES.FAILOVER_COMMANDS, {
+        if_not_exists = true,
+        is_sync       = true,
+        format = {
+            { name = 'id',           type = 'unsigned' },
+            { name = 'ts',           type = 'number' },
+            { name = 'command_type', type = 'string' },
+            { name = 'params',       type = 'any',    is_nullable = true },
+            { name = 'status',       type = 'string' },  -- pending|taken|success|failed
+            { name = 'user',         type = 'string', is_nullable = true },
+            { name = 'coordinator',  type = 'string', is_nullable = true },
+            { name = 'taken_at',     type = 'number', is_nullable = true },
+            { name = 'completed_at', type = 'number', is_nullable = true },
+            { name = 'error_reason', type = 'string', is_nullable = true },
+        },
+    })
+    box.space[M.NAMES.FAILOVER_COMMANDS]:create_index('primary', {
+        parts          = { 'id' },
+        sequence       = true,
+        if_not_exists  = true,
+    })
+    box.space[M.NAMES.FAILOVER_COMMANDS]:create_index('by_ts', {
+        parts          = { 'ts' },
+        unique         = false,
+        if_not_exists  = true,
+    })
+    box.space[M.NAMES.FAILOVER_COMMANDS]:create_index('by_status', {
+        parts          = { 'status', 'id' },
+        unique         = false,
+        if_not_exists  = true,
+    })
+    return true
+end
+
 -- ─────────────────────────────────────────────────────────────────────
 -- Schema version
 -- ─────────────────────────────────────────────────────────────────────
@@ -331,6 +379,7 @@ local function bootstrap_as_leader()
     local created_webhook_queue       = ensure_webhook_queue()
     local created_webhook_dead_letter = ensure_webhook_dead_letter()
     local created_prepared            = ensure_prepared()
+    local created_failover_commands   = ensure_failover_commands()
 
     local current = M.get_schema_version()
     local migrations_applied = 0
@@ -366,6 +415,7 @@ local function bootstrap_as_leader()
         created_webhook_queue       = created_webhook_queue,
         created_webhook_dead_letter = created_webhook_dead_letter,
         created_prepared    = created_prepared,
+        created_failover_commands   = created_failover_commands,
         migrations_applied  = migrations_applied,
     })
 
@@ -377,6 +427,7 @@ local function bootstrap_as_leader()
         created_prepared  = created_prepared,
         created_webhook_queue       = created_webhook_queue,
         created_webhook_dead_letter = created_webhook_dead_letter,
+        created_failover_commands   = created_failover_commands,
         deferred          = false,
     }
 end
@@ -447,6 +498,7 @@ function M.audit()        return box.space[M.NAMES.AUDIT]        end
 function M.prepared()     return box.space[M.NAMES.PREPARED]     end
 function M.webhook_queue()       return box.space[M.NAMES.WEBHOOK_QUEUE]       end
 function M.webhook_dead_letter() return box.space[M.NAMES.WEBHOOK_DEAD_LETTER] end
+function M.failover_commands()   return box.space[M.NAMES.FAILOVER_COMMANDS]   end
 
 -- Generic key/value helpers around _webui_meta.
 function M.meta_get(key)

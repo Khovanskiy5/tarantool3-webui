@@ -223,6 +223,7 @@ local Query = types.object {
                     is_coordinator = types.boolean,
                     lease_id       = types.string,
                     last_error     = types.string,
+                    paused_until   = types.float,
                     watcher_replicaset  = types.string,
                     watcher_last_leader = types.string,
                     watcher_current_ro  = types.boolean,
@@ -241,6 +242,39 @@ local Query = types.object {
                 .. '`enabled=false` when roles_cfg.webui.failover.agent '
                 .. 'is unset; the SPA hides the panel in that case.',
             resolve = failover_resolver.query_agent_status,
+        },
+        failoverCommands = {
+            kind = types.object({
+                name = 'FailoverCommandsPage',
+                fields = {
+                    entries = types.list(types.object({
+                        name = 'FailoverCommand',
+                        fields = {
+                            id           = types.long.nonNull,
+                            ts           = types.float.nonNull,
+                            command_type = types.string.nonNull,
+                            params       = types.string,
+                            status       = types.string.nonNull,
+                            user         = types.string,
+                            coordinator  = types.string,
+                            taken_at     = types.float,
+                            completed_at = types.float,
+                            error_reason = types.string,
+                        },
+                    })),
+                },
+            }).nonNull,
+            arguments = {
+                limit        = types.int,
+                status       = types.string,
+                command_type = types.string,
+            },
+            description = 'TCM-style commands history. One row per ' ..
+                'operator-issued cluster mutation (promote, pause, ' ..
+                'force_apply, expel, set_failover_mode, ...). ' ..
+                'Replicated + sync — the row the API just confirmed ' ..
+                'survives an immediate leader crash.',
+            resolve = failover_resolver.query_commands,
         },
         failoverStateProviderStatus = {
             kind = types.object({
@@ -915,6 +949,22 @@ local Mutation = types.object {
                 'tick); election→election_mode=voter on target; manual ' ..
                 'is rejected (promote elsewhere instead).',
             resolve = cluster_ops_resolver.mutation_demote_instance,
+        },
+        pauseFailover = {
+            kind = TopologyEditResult.nonNull,
+            arguments = { ttl_sec = types.int },
+            description = 'Maintenance-window pause for the supervised ' ..
+                'agent. While active, the coordinator stops issuing new ' ..
+                'appointments (lease_keepalive continues). Default TTL ' ..
+                '1h; hard cap 24h — anything longer should be a cluster-' ..
+                'wide setFailoverMode "off" without our agent.',
+            resolve = cluster_ops_resolver.mutation_pause_failover,
+        },
+        resumeFailover = {
+            kind = TopologyEditResult.nonNull,
+            description = 'Clear the failover pause flag; the agent ' ..
+                'resumes its appointment cycle on the next tick.',
+            resolve = cluster_ops_resolver.mutation_resume_failover,
         },
         setFailoverMode = {
             kind = TopologyEditResult.nonNull,

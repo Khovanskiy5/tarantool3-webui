@@ -57,6 +57,11 @@ M.DEFAULTS = {
     max_replication_lag_sec  = 5,   -- candidate's lag ceiling
     min_promotion_interval   = 10,  -- no two promotions within N seconds
     election_jitter_sec      = 1,   -- backoff jitter to avoid herd
+    -- failover_priority auto-return throttle (Task 5.12): wait at
+    -- least this many seconds after the current leader's
+    -- appointment before swapping back to priority[0]. Keeps
+    -- flapping primaries from ping-ponging the queue.
+    autoreturn_delay         = 60,
 }
 
 M.KEY_COORDINATOR = '/failover/coordinator'
@@ -75,6 +80,7 @@ local STATE = {
     last_error           = nil,
     last_promotion_at    = 0,
     stop_flag            = false,
+    paused_until         = nil,  -- epoch seconds while a pause is active
 }
 
 local function clear_error()
@@ -226,7 +232,17 @@ end
 -- Deterministic on ties: alphabetical alias ordering. `disabled`
 -- is an optional set of aliases the operator has marked as
 -- ineligible — they are filtered to score = -inf before ranking.
-function M.pick_leader(replicaset_probes, max_lag_sec, disabled)
+-- `priority` is an optional ordered list of aliases — the i-th
+-- entry adds (len - i) * 100 to its score so the first listed
+-- candidate wins whenever multiple are healthy.
+function M.pick_leader(replicaset_probes, max_lag_sec, disabled, priority)
+    local priority_index = {}
+    if type(priority) == 'table' then
+        local n = #priority
+        for i, alias in ipairs(priority) do
+            priority_index[alias] = (n - i + 1) * 100
+        end
+    end
     local best_alias, best_score = nil, -math.huge
     local aliases = {}
     for alias in pairs(replicaset_probes) do table.insert(aliases, alias) end
@@ -238,6 +254,9 @@ function M.pick_leader(replicaset_probes, max_lag_sec, disabled)
         else
             score = M.score_candidate(
                 replicaset_probes[alias], max_lag_sec)
+            if score > -math.huge and priority_index[alias] ~= nil then
+                score = score + priority_index[alias]
+            end
         end
         if score > best_score then
             best_alias, best_score = alias, score
@@ -304,6 +323,28 @@ function M.appoint_manually(client, rs_name, alias, ttl_sec, by_user)
 end
 
 local function appointment_cycle(client)
+    -- Maintenance-window pause (Task 5.11). When active, the
+    -- coordinator stops issuing new promotions but keeps its lease
+    -- alive — so it remains the authoritative observer through the
+    -- maintenance window and reads the pause flag itself on the
+    -- next tick after expiry. We deliberately do NOT call probe /
+    -- pick_leader when paused: cheaper and avoids spurious lag /
+    -- replication warnings while peers are intentionally down.
+    do
+        local ok_p, pause_mod = pcall(require, 'webui.failover.pause')
+        if ok_p then
+            local entry = pause_mod.read(client)
+            if entry ~= nil then
+                STATE.paused_until = entry.until_ts
+                logger.debug('failover paused; skipping cycle',
+                    { until_ts = entry.until_ts,
+                      by_user = entry.by_user })
+                return
+            end
+            STATE.paused_until = nil
+        end
+    end
+
     local rs_map = probe_replicasets()
     local now = fiber.time()
     -- Operator-controlled disabled set (Task 5.7). Read every cycle
@@ -314,6 +355,29 @@ local function appointment_cycle(client)
     do
         local ok_d, mod = pcall(require, 'webui.failover.disabled')
         if ok_d then disabled = select(1, mod.aliases_set(client)) end
+    end
+
+    -- Per-replicaset failover_priority list (Task 5.12), pulled
+    -- straight from the live cluster YAML. When unset for a given
+    -- rs, pick_leader falls back to alphabetical ordering — the
+    -- current behaviour, so existing clusters keep working
+    -- unchanged.
+    local priority_by_rs = {}
+    do
+        local ok_yaml, yaml_mod = pcall(require, 'yaml')
+        local kv = ok_yaml and select(1, client:get('config')) or nil
+        if kv ~= nil and kv.value ~= nil then
+            local ok, parsed = pcall(yaml_mod.decode, kv.value)
+            if ok and type(parsed) == 'table' then
+                for _, group in pairs(parsed.groups or {}) do
+                    for rs_name, rs in pairs(group.replicasets or {}) do
+                        if type(rs.failover_priority) == 'table' then
+                            priority_by_rs[rs_name] = rs.failover_priority
+                        end
+                    end
+                end
+            end
+        end
     end
     -- Global hysteresis: any promotion (across any replicaset)
     -- in the last min_promotion_interval seconds blocks the next
@@ -351,8 +415,26 @@ local function appointment_cycle(client)
                 { replicaset = rs_name, leader = live.leader,
                   expires_at = live.manual_override_until })
         else
+        -- Auto-return throttle (Task 5.12 part B): don't swap a
+        -- working leader back to priority[0] for at least
+        -- `autoreturn_delay` seconds after the current leader was
+        -- appointed. Without this guard, a flapping primary that
+        -- recovers and re-fails inside seconds would ping-pong the
+        -- queue across the cluster on every cycle.
+        local priority_for_pick = priority_by_rs[rs_name]
+        do
+            local current = STATE.last_appointments[rs_name]
+            local autoreturn_delay = tonumber(
+                STATE.config.autoreturn_delay) or 60
+            if current ~= nil
+                and (now - (current.ts or 0)) < autoreturn_delay then
+                priority_for_pick = nil
+            end
+        end
+
         local leader = M.pick_leader(probes,
-            STATE.config.max_replication_lag_sec, disabled)
+            STATE.config.max_replication_lag_sec, disabled,
+            priority_for_pick)
         if leader == nil then
             logger.debug('no qualified candidate', { replicaset = rs_name })
         else
@@ -625,6 +707,7 @@ function M.status()
         appointments    = appointments,
         last_error      = STATE.last_error,
         last_promotion_at = STATE.last_promotion_at,
+        paused_until    = STATE.paused_until,
     }
 end
 

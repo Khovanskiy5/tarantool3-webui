@@ -75,6 +75,14 @@
 | `setReplicasetRoles`          | admin          |
 | `createReplicaset`            | admin          |
 | `editReplicaset`              | admin          |
+| `addInstance`                 | admin          |
+| `expelInstance`               | admin          |
+| `setInstanceState`            | admin          |
+| `promoteInstance`             | admin          |
+| `demoteInstance`              | admin          |
+| `setFailoverMode`             | admin          |
+| `pauseFailover`               | admin          |
+| `resumeFailover`              | admin          |
 | `forceTakeLock`               | admin          |
 | `setFailover`                 | admin          |
 | `promote`                     | admin          |

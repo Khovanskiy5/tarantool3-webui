@@ -162,6 +162,42 @@ M.migrations = {
             end
         end
     end,
+
+    -- `_webui_failover_commands`: TCM-style commands journal for
+    -- every operator-issued cluster mutation. Replicated + sync so
+    -- the row the API just returned is durable across an immediate
+    -- leader crash; without sync the operator would see "promote
+    -- success" but find no audit-trail row on the new leader.
+    [6] = function(box)
+        if box.space._webui_failover_commands == nil then
+            box.schema.space.create('_webui_failover_commands', {
+                if_not_exists = true,
+                is_sync       = true,
+                format = {
+                    { name = 'id',           type = 'unsigned' },
+                    { name = 'ts',           type = 'number' },
+                    { name = 'command_type', type = 'string' },
+                    { name = 'params',       type = 'any',    is_nullable = true },
+                    { name = 'status',       type = 'string' },
+                    { name = 'user',         type = 'string', is_nullable = true },
+                    { name = 'coordinator',  type = 'string', is_nullable = true },
+                    { name = 'taken_at',     type = 'number', is_nullable = true },
+                    { name = 'completed_at', type = 'number', is_nullable = true },
+                    { name = 'error_reason', type = 'string', is_nullable = true },
+                },
+            })
+            box.space._webui_failover_commands:create_index('primary', {
+                parts = { 'id' }, sequence = true, if_not_exists = true,
+            })
+            box.space._webui_failover_commands:create_index('by_ts', {
+                parts = { 'ts' }, unique = false, if_not_exists = true,
+            })
+            box.space._webui_failover_commands:create_index('by_status', {
+                parts = { 'status', 'id' },
+                unique = false, if_not_exists = true,
+            })
+        end
+    end,
 }
 
 -- ─────────────────────────────────────────────────────────────────────
