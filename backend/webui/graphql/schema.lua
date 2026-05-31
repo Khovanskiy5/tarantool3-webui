@@ -197,10 +197,14 @@ local Query = types.object {
                     elections = types.list(types.object({
                         name = 'ElectionState',
                         fields = {
-                            instance = types.string.nonNull,
-                            state    = types.string,
-                            term     = types.long,
-                            leader_uuid = types.string,
+                            instance    = types.string.nonNull,
+                            state       = types.string,
+                            term        = types.long,
+                            -- Alias of the elected raft leader (e.g.
+                            -- "tt-1"). Sourced from `box.info.election
+                            -- .leader_name`; Tarantool 3.x does not
+                            -- expose a leader UUID directly.
+                            leader_name = types.string,
                         },
                     })),
                 },

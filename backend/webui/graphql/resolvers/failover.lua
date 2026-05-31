@@ -40,17 +40,24 @@ end
 function M.query_failover(root)
     require_role(root, 'failover')
     local snap = state.snapshot() or {}
+    -- `box.info.election` in Tarantool 3.x exposes `leader` (numeric
+    -- replica id) and `leader_name` (alias). It does NOT expose a
+    -- UUID — to surface one we would have to cross-reference
+    -- `box.info.replication[leader].uuid` on every peer, which is
+    -- expensive for a UI panel and not actionable. The alias is what
+    -- operators recognise, so we surface that and skip the UUID.
     local elections = {}
     for alias, srv in pairs(snap.servers or {}) do
         if srv.election ~= nil then
             table.insert(elections, {
-                instance = alias,
-                state    = srv.election.state,
-                term     = srv.election.term,
-                leader_uuid = srv.election.leader_uuid,
+                instance    = alias,
+                state       = srv.election.state,
+                term        = srv.election.term,
+                leader_name = srv.election.leader_name,
             })
         end
     end
+    table.sort(elections, function(a, b) return a.instance < b.instance end)
     return {
         mode      = snap.failover_mode or 'election',
         elections = elections,

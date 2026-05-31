@@ -132,9 +132,17 @@ function M.mutation_commit(root, args)
             local all = {}
             for name in pairs(peers.list() or {}) do table.insert(all, name) end
             if #all > 0 then
+                -- 15s budget per peer. `config:reload()` re-runs role
+                -- start, which can coincide with a raft re-election
+                -- (credentials/replicaset/iproto changes all force one).
+                -- 5s was too tight: the peer that wins the election
+                -- always reported as a timeout even though it
+                -- recovered seconds later. 15s comfortably covers a
+                -- re-election plus role re-init on the local hardware
+                -- the dev cluster runs on.
                 local ok_call, res_each = pcall(rpc.map_eval,
                     'require("config"):reload(); return true',
-                    {}, { timeout = 5, peers = all })
+                    {}, { timeout = 15, peers = all })
                 if ok_call then
                     local failed = {}
                     for name, r in pairs(res_each) do

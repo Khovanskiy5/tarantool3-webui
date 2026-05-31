@@ -3,7 +3,6 @@ import { onMounted, ref } from 'vue';
 import DataTable from 'primevue/datatable';
 import Column from 'primevue/column';
 import Tag from 'primevue/tag';
-import Message from 'primevue/message';
 
 import { getClient } from '@/shared/api/graphql';
 
@@ -11,7 +10,7 @@ interface Election {
   instance: string;
   state: string | null;
   term: number | null;
-  leader_uuid: string | null;
+  leader_name: string | null;
 }
 
 interface SPEndpoint {
@@ -39,7 +38,7 @@ const FAILOVER_Q = /* GraphQL */ `
   query Failover {
     failover {
       mode
-      elections { instance state term leader_uuid }
+      elections { instance state term leader_name }
     }
     failoverStateProviderStatus {
       kind mode lease_active coordinator
@@ -84,23 +83,19 @@ onMounted(load);
         </template>
       </Column>
       <Column field="term" header="Term" />
-      <Column field="leader_uuid" header="Leader UUID">
+      <Column field="leader_name" header="Leader">
         <template #body="{ data }">
-          <code class="webui-failover__mono">{{ data.leader_uuid ?? '—' }}</code>
+          <code class="webui-failover__mono">{{ data.leader_name ?? '—' }}</code>
         </template>
       </Column>
     </DataTable>
 
-    <section v-if="sp" class="webui-failover__sp">
+    <section v-if="sp && sp.kind !== 'none'" class="webui-failover__sp">
       <header class="webui-failover__sp-head">
         <h2>State provider</h2>
-        <Tag :value="`kind: ${sp.kind}`" :severity="sp.kind === 'etcd' ? 'info' : 'secondary'" />
+        <Tag :value="`kind: ${sp.kind}`" severity="info" />
       </header>
-      <Message v-if="sp.kind === 'none'" severity="info" :closable="false">
-        Failover mode is <code>{{ sp.mode }}</code> — no external state provider is required.
-        Raft election (or operator decisions) drives leader selection.
-      </Message>
-      <DataTable v-else :value="sp.endpoints ?? []" data-key="uri" size="small">
+      <DataTable :value="sp.endpoints ?? []" data-key="uri" size="small">
         <Column field="uri" header="Endpoint">
           <template #body="{ data }"><code>{{ data.uri }}</code></template>
         </Column>
