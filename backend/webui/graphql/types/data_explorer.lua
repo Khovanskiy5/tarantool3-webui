@@ -139,6 +139,26 @@ M.UpdateOpInput = types.inputObject({
     },
 })
 
+M.FieldFormatInput = types.inputObject({
+    name = 'FieldFormatInput',
+    fields = {
+        name        = types.string.nonNull,
+        type        = types.string.nonNull,
+        is_nullable = types.boolean,
+    },
+})
+
+M.SpaceMutationResult = types.object({
+    name = 'SpaceMutationResult',
+    fields = {
+        ok        = types.boolean.nonNull,
+        name      = types.string.nonNull,
+        id        = types.long,
+        forwarded = types.boolean,
+        leader    = types.string,
+    },
+})
+
 M.TupleMutationResult = types.object({
     name = 'TupleMutationResult',
     fields = {

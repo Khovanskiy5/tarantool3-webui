@@ -24,6 +24,7 @@ import Message from 'primevue/message';
 
 import { getClient } from '@/shared/api/graphql';
 import TupleForm from './TupleForm.vue';
+import SpaceForm from './SpaceForm.vue';
 
 // ── types mirroring the backend GraphQL schema ─────────────────────
 
@@ -117,6 +118,12 @@ const DELETE_M = /* GraphQL */ `
   }
 `;
 
+const DROP_SPACE_M = /* GraphQL */ `
+  mutation DxDropSpace($name: String!) {
+    dropSpace(name: $name) { ok name forwarded leader }
+  }
+`;
+
 // ── state ───────────────────────────────────────────────────────────
 
 const spaces = ref<SpaceInfo[]>([]);
@@ -146,6 +153,10 @@ const newFilterValue = ref<string>('');
 const tupleFormOpen = ref(false);
 const tupleFormMode = ref<'create' | 'edit'>('create');
 const tupleFormInitial = ref<FieldValue[] | null>(null);
+
+const spaceFormOpen = ref(false);
+const spaceFormMode = ref<'create' | 'alter'>('create');
+const spaceFormSource = ref<SpaceInfo | null>(null);
 
 // Identity: the Sign-out chip already shows the connected instance,
 // but the follower banner explains the forward-to-leader path so
@@ -218,7 +229,13 @@ async function loadTuples() {
           filterChips.value.length > 0
             ? filterChips.value.map((c) => ({
                 field: c.field,
-                op: c.op,
+                // graphql-server validates enum variables against
+                // `value`, not `name` — sending the UPPER enum name
+                // crashes the request before it reaches the resolver
+                // ("Wrong variable filter[i].op for the Enum FilterOp").
+                // The schema's value mapping is identity-lowercase
+                // (EQ → 'eq', LIKE → 'like'), so the cast is safe.
+                op: c.op.toLowerCase(),
                 value: coerceFilterValue(c, selectedSpace.value!),
               }))
             : null,
@@ -346,6 +363,43 @@ function onTupleFormSaved() {
   loadTuples();
 }
 
+function openCreateSpace() {
+  spaceFormMode.value = 'create';
+  spaceFormSource.value = null;
+  spaceFormOpen.value = true;
+}
+
+function openAlterSpace(s: SpaceInfo) {
+  spaceFormMode.value = 'alter';
+  spaceFormSource.value = s;
+  spaceFormOpen.value = true;
+}
+
+async function onSpaceFormSaved() {
+  spaceFormOpen.value = false;
+  await loadSpaces();
+}
+
+async function dropSpace(s: SpaceInfo) {
+  if (s.name.startsWith('_')) return;
+  const confirmed = window.prompt(
+    `Drop space "${s.name}"? Type the name to confirm:`,
+  );
+  if (confirmed !== s.name) return;
+  const res = await getClient()
+    .mutation(DROP_SPACE_M, { name: s.name })
+    .toPromise();
+  if (res.error) {
+    error.value = res.error.message;
+    return;
+  }
+  if (selectedSpace.value?.id === s.id) {
+    selectedSpace.value = null;
+    tuples.value = [];
+  }
+  await loadSpaces();
+}
+
 // ── presentation helpers ──────────────────────────────────────────
 
 function renderField(v: FieldValue): string {
@@ -415,10 +469,20 @@ watch(includeSystem, () => {
     <aside class="webui-dx__sidebar">
       <header class="webui-dx__sidebar-head">
         <h2>Spaces</h2>
-        <label class="webui-dx__toggle">
-          <ToggleSwitch v-model="includeSystem" />
-          <span>System</span>
-        </label>
+        <span class="webui-dx__sidebar-tools">
+          <Button
+            icon="pi pi-plus"
+            severity="success"
+            text
+            size="small"
+            aria-label="New space"
+            @click="openCreateSpace"
+          />
+          <label class="webui-dx__toggle">
+            <ToggleSwitch v-model="includeSystem" />
+            <span>System</span>
+          </label>
+        </span>
       </header>
       <InputText
         v-model="sidebarFilter"
@@ -476,6 +540,24 @@ watch(includeSystem, () => {
           </div>
         </div>
         <div class="webui-dx__actions">
+          <Button
+            label="Edit space"
+            icon="pi pi-cog"
+            severity="info"
+            size="small"
+            text
+            :disabled="selectedSpace.name.startsWith('_')"
+            @click="openAlterSpace(selectedSpace)"
+          />
+          <Button
+            label="Drop"
+            icon="pi pi-trash"
+            severity="danger"
+            size="small"
+            text
+            :disabled="selectedSpace.name.startsWith('_')"
+            @click="dropSpace(selectedSpace)"
+          />
           <Button
             label="New tuple"
             icon="pi pi-plus"
@@ -643,6 +725,13 @@ watch(includeSystem, () => {
         :initial-fields="tupleFormInitial"
         @saved="onTupleFormSaved"
       />
+      <SpaceForm
+        v-if="spaceFormOpen"
+        v-model:visible="spaceFormOpen"
+        :mode="spaceFormMode"
+        :source="spaceFormSource"
+        @saved="onSpaceFormSaved"
+      />
     </main>
   </section>
 </template>
@@ -670,6 +759,11 @@ watch(includeSystem, () => {
 .webui-dx__sidebar-head h2 {
   margin: 0;
   font-size: 1rem;
+}
+.webui-dx__sidebar-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 .webui-dx__sidebar-filter {
   width: 100%;

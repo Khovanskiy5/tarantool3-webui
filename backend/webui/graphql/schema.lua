@@ -1072,6 +1072,84 @@ local Mutation = types.object {
                     .tuple_delete(root, args)
             end,
         },
+        createSpace = {
+            kind = data_explorer_types.SpaceMutationResult.nonNull,
+            arguments = {
+                name          = types.string.nonNull,
+                engine        = types.string,
+                is_sync       = types.boolean,
+                if_not_exists = types.boolean,
+                format        = types.list(
+                    types.nonNull(data_explorer_types.FieldFormatInput)),
+                primary_key   = types.list(types.string.nonNull),
+            },
+            description = 'Create a new user space via box.schema.space.create(). ' ..
+                'Names starting with `_` are blocked (system namespace). ' ..
+                'Default engine is memtx; if no primary_key is given the ' ..
+                'resolver picks the first format field. is_sync=true makes ' ..
+                'the space synchronous (sync replication required).',
+            resolve = function(root, args)
+                return require('webui.graphql.resolvers.data_mutations')
+                    .create_space(root, args)
+            end,
+        },
+        dropSpace = {
+            kind = data_explorer_types.SpaceMutationResult.nonNull,
+            arguments = { name = types.string.nonNull },
+            description = 'Drop a user space. NOT_FOUND when the space is ' ..
+                'absent. System spaces blocked.',
+            resolve = function(root, args)
+                return require('webui.graphql.resolvers.data_mutations')
+                    .drop_space(root, args)
+            end,
+        },
+        alterSpace = {
+            kind = data_explorer_types.SpaceMutationResult.nonNull,
+            arguments = {
+                name     = types.string.nonNull,
+                new_name = types.string,
+                is_sync  = types.boolean,
+                format   = types.list(
+                    types.nonNull(data_explorer_types.FieldFormatInput)),
+            },
+            description = 'Alter a user space: rename, replace the format, ' ..
+                'or toggle is_sync. Absent fields keep the current value.',
+            resolve = function(root, args)
+                return require('webui.graphql.resolvers.data_mutations')
+                    .alter_space(root, args)
+            end,
+        },
+        createIndex = {
+            kind = data_explorer_types.SpaceMutationResult.nonNull,
+            arguments = {
+                space         = types.string.nonNull,
+                name          = types.string.nonNull,
+                parts         = types.list(types.string.nonNull).nonNull,
+                type          = types.string,
+                unique        = types.boolean,
+                if_not_exists = types.boolean,
+            },
+            description = 'Create an additional index on a user space. ' ..
+                '`parts` are field names. type defaults to tree, unique ' ..
+                'defaults to true.',
+            resolve = function(root, args)
+                return require('webui.graphql.resolvers.data_mutations')
+                    .create_index(root, args)
+            end,
+        },
+        dropIndex = {
+            kind = data_explorer_types.SpaceMutationResult.nonNull,
+            arguments = {
+                space = types.string.nonNull,
+                name  = types.string.nonNull,
+            },
+            description = 'Drop an index from a user space. NOT_FOUND when ' ..
+                'space or index is absent.',
+            resolve = function(root, args)
+                return require('webui.graphql.resolvers.data_mutations')
+                    .drop_index(root, args)
+            end,
+        },
     },
 }
 

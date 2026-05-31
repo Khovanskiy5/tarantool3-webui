@@ -328,6 +328,252 @@ function M.tuple_delete(root, args)
         { key = args.key }, root)
 end
 
+-- ── space create / drop ─────────────────────────────────────────────
+--
+-- DDL via box.schema. We forward to leader on followers (replicated
+-- DDL otherwise rejects with READONLY), enforce the same sensitive-
+-- name guard that protects tuple writes, and audit every change.
+
+local function space_apply_local(op, payload)
+    if op == 'space_create' then
+        local s = box.schema.space.create(payload.name, {
+            engine        = payload.engine,
+            if_not_exists = payload.if_not_exists == true,
+            is_sync       = payload.is_sync == true,
+        })
+        if type(payload.format) == 'table' and #payload.format > 0 then
+            local fmt = {}
+            for i, f in ipairs(payload.format) do
+                if type(f) ~= 'table' or type(f.name) ~= 'string'
+                    or type(f.type) ~= 'string' then
+                    error('VALIDATION_ERROR: format[' .. i ..
+                        '] needs {name, type, is_nullable?}')
+                end
+                table.insert(fmt, {
+                    name = f.name, type = f.type,
+                    is_nullable = f.is_nullable == true,
+                })
+            end
+            s:format(fmt)
+        end
+        local pk = payload.primary_key
+        if type(pk) ~= 'table' or #pk == 0 then
+            -- Default: single-part by the first format field — Tarantool
+            -- requires at least one index before any tuple can be
+            -- inserted, so we provide a sane default rather than leave
+            -- the space half-initialised.
+            local first = payload.format and payload.format[1]
+            if first ~= nil then pk = { first.name } else pk = nil end
+        end
+        if pk ~= nil then
+            s:create_index('primary', { parts = pk, if_not_exists = true })
+        end
+        return { ok = true, name = payload.name, id = s.id }
+    end
+    if op == 'space_drop' then
+        local s = box.space[payload.name]
+        if s == nil then
+            error('NOT_FOUND: space ' .. payload.name .. ' does not exist')
+        end
+        s:drop()
+        return { ok = true, name = payload.name }
+    end
+    if op == 'space_alter' then
+        local s = box.space[payload.name]
+        if s == nil then
+            error('NOT_FOUND: space ' .. payload.name .. ' does not exist')
+        end
+        -- Apply the parts the operator filled in; absent fields keep
+        -- the current setting. Format goes first so a rename in the
+        -- same call still references the old name.
+        if payload.format ~= nil then
+            local fmt = {}
+            for i, f in ipairs(payload.format) do
+                if type(f) ~= 'table' or type(f.name) ~= 'string'
+                    or type(f.type) ~= 'string' then
+                    error('VALIDATION_ERROR: format[' .. i ..
+                        '] needs {name, type, is_nullable?}')
+                end
+                table.insert(fmt, {
+                    name = f.name, type = f.type,
+                    is_nullable = f.is_nullable == true,
+                })
+            end
+            s:format(fmt)
+        end
+        if payload.is_sync ~= nil then
+            s:alter({ is_sync = payload.is_sync == true })
+        end
+        local new_name = payload.name
+        if type(payload.new_name) == 'string' and payload.new_name ~= ''
+            and payload.new_name ~= payload.name then
+            if payload.new_name:sub(1, 1) == '_' then
+                error('FORBIDDEN: cannot rename a space into the `_` namespace')
+            end
+            s:rename(payload.new_name)
+            new_name = payload.new_name
+        end
+        return { ok = true, name = new_name, id = s.id }
+    end
+    if op == 'index_create' then
+        local s = box.space[payload.name]
+        if s == nil then
+            error('NOT_FOUND: space ' .. payload.name .. ' does not exist')
+        end
+        if type(payload.index_name) ~= 'string' or payload.index_name == '' then
+            error('VALIDATION_ERROR: index_name is required')
+        end
+        if type(payload.parts) ~= 'table' or #payload.parts == 0 then
+            error('VALIDATION_ERROR: parts is required')
+        end
+        s:create_index(payload.index_name, {
+            parts         = payload.parts,
+            type          = payload.type or 'tree',
+            unique        = payload.unique ~= false,
+            if_not_exists = payload.if_not_exists == true,
+        })
+        return { ok = true, name = payload.name, id = s.id }
+    end
+    if op == 'index_drop' then
+        local s = box.space[payload.name]
+        if s == nil then
+            error('NOT_FOUND: space ' .. payload.name .. ' does not exist')
+        end
+        local idx = s.index[payload.index_name]
+        if idx == nil then
+            error('NOT_FOUND: index ' .. tostring(payload.index_name)
+                .. ' on ' .. payload.name)
+        end
+        idx:drop()
+        return { ok = true, name = payload.name, id = s.id }
+    end
+    error('VALIDATION_ERROR: unknown space op ' .. tostring(op))
+end
+
+local function space_apply(field_name, op, payload, root)
+    require_role(root, field_name)
+    if type(payload.name) ~= 'string' or payload.name == '' then
+        error('VALIDATION_ERROR: name is required')
+    end
+    if M.SENSITIVE_SPACES[payload.name]
+        or payload.name:sub(1, 1) == '_' then
+        error('FORBIDDEN: ' .. op .. ' on system space ' .. payload.name ..
+            ' is blocked. The `_`-prefix namespace belongs to Tarantool ' ..
+            'and dedicated mutations (createUser, hotReloadModule, …).')
+    end
+    if is_read_only() then
+        local ok_state, cluster_state = pcall(require, 'webui.cluster.state')
+        local ok_peers, peers         = pcall(require, 'webui.cluster.peers')
+        if not (ok_state and ok_peers) then
+            error('UNAVAILABLE: cluster modules not loaded')
+        end
+        local leader_alias = cluster_state.find_leader()
+        if leader_alias == nil then error('UNAVAILABLE: no cluster leader reachable') end
+        local peer = peers.get(leader_alias)
+        if peer == nil or peer.conn == nil then
+            error('UNAVAILABLE: leader ' .. leader_alias .. ' not reachable')
+        end
+        local ok_call, res = pcall(function()
+            return peer.conn:call('webui_space_mutation_remote',
+                { op, payload, { user = root and root.user,
+                                 request_id = root and root.request_id } },
+                { timeout = 5 })
+        end)
+        if not ok_call then error('forward to leader failed: ' .. tostring(res)) end
+        if type(res) == 'table' and res._error then error(res._error) end
+        res.forwarded = true
+        res.leader = leader_alias
+        pcall(audit.record, {
+            user = root and root.user, action = op,
+            scope = 'space:' .. payload.name,
+            payload = { forwarded_to = leader_alias, name = res.name },
+            request_id = root and root.request_id,
+        })
+        return res
+    end
+    local ok, res = pcall(space_apply_local, op, payload)
+    if not ok then error(res) end
+    pcall(audit.record, {
+        user = root and root.user, action = op,
+        scope = 'space:' .. payload.name,
+        payload = { name = res.name, id = res.id },
+        request_id = root and root.request_id,
+    })
+    logger.info(op .. ' ok', {
+        space = payload.name, user = root and root.user,
+        request_id = root and root.request_id,
+    })
+    return res
+end
+
+function M.create_space(root, args)
+    return space_apply('createSpace', 'space_create', {
+        name        = args.name,
+        engine      = args.engine,
+        is_sync     = args.is_sync == true,
+        if_not_exists = args.if_not_exists == true,
+        format      = args.format,
+        primary_key = args.primary_key,
+    }, root)
+end
+
+function M.drop_space(root, args)
+    return space_apply('dropSpace', 'space_drop', {
+        name = args.name,
+    }, root)
+end
+
+function M.alter_space(root, args)
+    return space_apply('alterSpace', 'space_alter', {
+        name     = args.name,
+        new_name = args.new_name,
+        format   = args.format,
+        is_sync  = args.is_sync,
+    }, root)
+end
+
+function M.create_index(root, args)
+    return space_apply('createIndex', 'index_create', {
+        name          = args.space,
+        index_name    = args.name,
+        parts         = args.parts,
+        type          = args.type,
+        unique        = args.unique,
+        if_not_exists = args.if_not_exists,
+    }, root)
+end
+
+function M.drop_index(root, args)
+    return space_apply('dropIndex', 'index_drop', {
+        name       = args.space,
+        index_name = args.name,
+    }, root)
+end
+
+-- Remote receiver for space DDL — same idea as
+-- webui_data_mutation_remote, re-checks the deny-list on the
+-- leader side so a misbehaving follower can't smuggle a write.
+function M.space_remote_entry(op, payload, ctx)
+    if type(payload) ~= 'table'
+        or type(payload.name) ~= 'string' or payload.name == '' then
+        return { _error = 'VALIDATION_ERROR: name is required' }
+    end
+    if M.SENSITIVE_SPACES[payload.name]
+        or payload.name:sub(1, 1) == '_' then
+        return { _error = 'FORBIDDEN: ' .. op .. ' on system space '
+            .. payload.name .. ' is blocked.' }
+    end
+    local ok, res = pcall(space_apply_local, op, payload)
+    if not ok then return { _error = tostring(res) } end
+    pcall(audit.record, {
+        user = ctx and ctx.user, action = op,
+        scope = 'space:' .. payload.name,
+        payload = { name = res.name, id = res.id, via = 'forward' },
+        request_id = ctx and ctx.request_id,
+    })
+    return res
+end
+
 -- ── leader-side forwarded entry point ──────────────────────────────
 --
 -- Registered by init.lua as `webui_data_mutation_remote`. The

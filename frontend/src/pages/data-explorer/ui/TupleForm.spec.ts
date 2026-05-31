@@ -83,15 +83,22 @@ const baseSpace = {
   indexes: [{ id: 0, parts: ['id'] }],
 };
 
-function mountForm(overrides: Record<string, unknown> = {}) {
+type MountReturn = ReturnType<typeof mount>;
+interface MountOverrides {
+  mode?: 'create' | 'edit';
+  initialFields?: unknown[] | null;
+}
+
+function mountForm(overrides: MountOverrides = {}): MountReturn {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const props: any = {
+    visible: true,
+    space: baseSpace,
+    mode: overrides.mode ?? 'create',
+    initialFields: overrides.initialFields ?? null,
+  };
   return mount(TupleForm, {
-    props: {
-      visible: true,
-      space: baseSpace,
-      mode: 'create',
-      initialFields: null,
-      ...overrides,
-    } as Record<string, unknown>,
+    props,
     global: {
       stubs: {
         Dialog: DialogStub,

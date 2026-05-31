@@ -310,6 +310,16 @@ function M.start(opts)
         return mut.remote_entry(op, space, payload, ctx)
     end)
 
+    -- DDL receiver for the same forward-to-leader path. createSpace /
+    -- dropSpace / alterSpace / createIndex / dropIndex on a follower
+    -- routes here on the elected leader.
+    rawset(_G, 'webui_space_mutation_remote', function(op, payload, ctx)
+        local ok_mod, mut = pcall(require,
+            'webui.graphql.resolvers.data_mutations')
+        if not ok_mod then return { _error = 'data_mutations module unavailable' } end
+        return mut.space_remote_entry(op, payload, ctx)
+    end)
+
     -- Expose the dead-letter truncate over net.box. clearDeadLetter
     -- from the SPA lands on a random instance through round-robin;
     -- the leader is the only one that can actually truncate the

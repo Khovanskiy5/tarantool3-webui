@@ -31,12 +31,29 @@ end
 
 local SYSTEM_PREFIX = '_'
 
-local function describe_index(idx)
+-- describe_index(idx, format) → { id, name, type, unique, parts }
+-- `parts` is the list of human-readable field names — the SPA uses
+-- them to look up fieldnos through `space.format` on the wire, so we
+-- MUST emit names, not fieldnos. Tarantool sometimes hands us back
+-- parts with only `fieldno` set (no `field_name`), e.g. when the
+-- index was created with `parts = {'id'}` instead of
+-- `parts = {{field='id'}}`. In that case we resolve the fieldno
+-- through the passed-in `format` array before falling back to the
+-- numeric string — which the SPA cannot match against any field name.
+local function describe_index(idx, format)
     local parts = {}
     for _, p in ipairs(idx.parts or {}) do
         local name
-        if type(p) == 'table' then name = p.field_name or p.name or tostring(p.fieldno)
-        else name = tostring(p) end
+        if type(p) == 'table' then
+            name = p.field_name or p.name
+            if name == nil and p.fieldno ~= nil and format ~= nil then
+                local fmt = format[p.fieldno]
+                name = fmt and fmt.name or nil
+            end
+            if name == nil then name = tostring(p.fieldno) end
+        else
+            name = tostring(p)
+        end
         table.insert(parts, name)
     end
     return {
@@ -100,12 +117,13 @@ local function project_space(sp)
     local raw_format = sp[SPACE_F_FORMAT]
 
     local space = box.space[name]
+    local normalised_format = de_types.normalize_format(raw_format)
     local indexes, rows, bytes = {}, 0, nil
     if space ~= nil then
         for k, idx in pairs(space.index) do
             if type(k) == 'number'
                 and type(idx) == 'table' and idx.parts ~= nil then
-                table.insert(indexes, describe_index(idx))
+                table.insert(indexes, describe_index(idx, normalised_format))
             end
         end
         table.sort(indexes, function(a, b) return a.id < b.id end)
@@ -128,7 +146,7 @@ local function project_space(sp)
         is_sync         = space_is_sync(raw_flags),
         triggers_count  = triggers_count(space),
         sequence        = attached_sequence(id),
-        format          = de_types.normalize_format(raw_format),
+        format          = normalised_format,
         indexes         = indexes,
     }
 end
