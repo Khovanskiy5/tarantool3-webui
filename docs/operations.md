@@ -2,6 +2,8 @@
 
 # Operations
 
+> **Runbook каталог:** [runbooks/index.md](runbooks/index.md) — пошаговые инструкции по типовым операторским действиям (promote, expel, rollback, mode switch, split-brain recovery и др.).
+
 Operator handbook: развёртывание, конфигурация, failover, мониторинг, бэкап, rolling upgrade.
 
 ## Локальное dev-окружение
