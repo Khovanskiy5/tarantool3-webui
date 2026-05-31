@@ -133,13 +133,43 @@ function M.promote(ctx)
         return res
     end
 
-    -- manual: declare leader inside the replicaset.
+    -- manual: declare leader inside the replicaset AND drive the
+    -- promote on the target. Tarantool 3.x cfg:reload() sets
+    -- box.cfg.read_only based on `replicasets.<rs>.leader` BUT
+    -- does NOT call `box.ctl.promote()` automatically — without
+    -- the explicit promote the synchro queue stays without an
+    -- owner and the next sync write deadlocks on "queue doesn't
+    -- belong to any instance". The Cartridge failover module
+    -- does the same dance:
+    --   box.cfg{ read_only = not is_rw }
+    --   box.ctl.promote()
+    -- We mirror it: editTopology lands the new leader field
+    -- (which makes Tarantool flip ro on every peer via reload),
+    -- and then we explicitly call box.cfg{read_only=false} +
+    -- box.ctl.promote() on the target.
     if mode == 'manual' then
         local res = ctx.apply_edit_topology({
             replicasets = { {
                 name = rsname, group = gname, leader = ctx.alias,
             } },
         }, 'cluster.promote')
+        do
+            local self_alias
+            if box.info and box.info.name then self_alias = box.info.name end
+            local expr = 'pcall(box.cfg, { read_only = false });'
+                .. ' pcall(function() box.ctl.promote() end);'
+                .. ' return { ok = true }'
+            if ctx.alias == self_alias then
+                pcall(function() box.cfg({ read_only = false }) end)
+                pcall(function() box.ctl.promote() end)
+            else
+                local rpc_ok, rpc = pcall(require, 'webui.cluster.rpc')
+                if rpc_ok then
+                    pcall(rpc.map_eval, expr, {},
+                        { timeout = 5, peers = { ctx.alias } })
+                end
+            end
+        end
         res.mode = mode
         return res
     end

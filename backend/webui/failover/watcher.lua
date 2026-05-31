@@ -94,9 +94,24 @@ local function apply_appointment(appt)
     -- spam `box.ctl.promote()` once per second on the steady
     -- leader.
     if should_be_leader and not am_leader then
-        -- box.ctl.promote() claims the synchronous queue AND flips
-        -- `read_only` to false in one step (the supported "take
-        -- leadership" call under `replication.failover: off`).
+        -- Two-step handoff. In Tarantool 3.x with
+        -- `replication.failover: off`, `box.ctl.promote()` claims
+        -- the synchronous queue but does NOT flip
+        -- `box.cfg.read_only` on its own (verified empirically
+        -- 2026-05-31: queue.owner moved to our id, ro stayed
+        -- true). Cartridge's failover module does the same pair
+        -- explicitly:
+        --     box.cfg{ read_only = false }
+        --     box.ctl.promote()
+        -- The order matters: a RO peer cannot claim the queue.
+        local rw_ok, rw_err = pcall(function()
+            box.cfg({ read_only = false })
+        end)
+        if not rw_ok then
+            STATE.last_error = 'read_only=false: ' .. tostring(rw_err)
+            logger.error('failed to flip read_only before promote',
+                { err = tostring(rw_err) })
+        end
         local ok, err = pcall(box.ctl.promote)
         if ok then
             STATE.last_applied = { read_only = false, ts = fiber.time() }

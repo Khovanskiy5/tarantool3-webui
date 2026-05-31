@@ -1307,7 +1307,69 @@ function M.mutation_set_failover_mode(root, args)
     -- replicaset that names a leader, find the matching peer,
     -- call promote via net.box. Best-effort — failures land in
     -- the message so the operator can re-run.
+    -- When switching OUT of a mode that had an explicit primary,
+    -- Tarantool 3.x cfg:reload() flips `box.cfg.read_only=true`
+    -- on the demoted peer but does NOT call `box.ctl.demote()`.
+    -- The synchro queue stays owned by the old primary; any new
+    -- write hangs on "queue doesn't belong to any instance"
+    -- because the now-RO owner refuses to ack. Mirror the
+    -- Cartridge pattern: drive box.ctl.demote() on the previous
+    -- queue owner BEFORE the agent/raft can pick a fresh leader.
+    -- Best-effort + bounded: a failed demote is non-fatal (the
+    -- subsequent promote / agent appointment will overwrite).
+    if args.mode == 'off' or args.mode == 'election' then
+        local rpc_ok, rpc = pcall(require, 'webui.cluster.rpc')
+        local self_alias
+        if box.info and box.info.name then self_alias = box.info.name end
+        -- Walk every peer's box.info.synchro.queue.owner. The
+        -- owner is the replica id, which we cannot map to an
+        -- alias from here without the peer pool. Easiest path:
+        -- ask every peer to demote IF it currently owns its own
+        -- queue (i.e. owner == box.info.id).
+        -- Drop the `not box.info.ro` guard: cfg:reload() that
+        -- triggered this transition already set ro=true on the
+        -- former primary BEFORE we got here, but it left the
+        -- synchro queue ownership in place. Demote regardless of
+        -- the ro flag — `box.ctl.demote()` is the only call that
+        -- drains the limbo and releases queue ownership. pcall
+        -- swallows the harmless "already demoted" no-op.
+        local demote_expr = [[
+            if box.info.synchro.queue.owner == box.info.id then
+                pcall(function() box.ctl.demote() end)
+                return { demoted = true }
+            end
+            return { demoted = false }
+        ]]
+        -- Self first (we are the GraphQL handler peer).
+        do
+            local ok_info = rawget(_G, 'box') ~= nil and box.info ~= nil
+            if ok_info and box.info.synchro
+                and box.info.synchro.queue.owner == box.info.id then
+                pcall(function() box.ctl.demote() end)
+            end
+        end
+        if rpc_ok then
+            local ok_peers, peers = pcall(require, 'webui.cluster.peers')
+            if ok_peers then
+                local foreign = {}
+                for name in pairs(peers.list() or {}) do
+                    if name ~= self_alias then table.insert(foreign, name) end
+                end
+                if #foreign > 0 then
+                    pcall(rpc.map_eval, demote_expr, {},
+                        { timeout = 5, peers = foreign })
+                end
+            end
+        end
+    end
+
     if args.mode == 'manual' then
+        -- Cartridge-style two-step handoff for the named leader of
+        -- every replicaset: flip `box.cfg.read_only = false` AND
+        -- call `box.ctl.promote()`. Tarantool 3.x cfg:reload()
+        -- only does the first half — the second is on us (see
+        -- cartridge-2.17.1/cartridge/failover.lua synchro_promote
+        -- for the original).
         local rpc_ok, rpc = pcall(require, 'webui.cluster.rpc')
         local self_alias
         if box.info and box.info.name then self_alias = box.info.name end
@@ -1316,11 +1378,13 @@ function M.mutation_set_failover_mode(root, args)
                 local leader_alias = rs.leader
                 if type(leader_alias) == 'string' and leader_alias ~= '' then
                     if leader_alias == self_alias then
+                        pcall(function() box.cfg({ read_only = false }) end)
                         pcall(function() box.ctl.promote() end)
                     elseif rpc_ok then
                         pcall(rpc.map_eval,
-                            'pcall(function() box.ctl.promote() end);'
-                            .. 'return { ok = true }',
+                            'pcall(box.cfg, { read_only = false });'
+                            .. ' pcall(function() box.ctl.promote() end);'
+                            .. ' return { ok = true }',
                             {}, { timeout = 5, peers = { leader_alias } })
                     end
                 end

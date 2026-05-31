@@ -39,6 +39,21 @@
 * Bad mode value → `VALIDATION_ERROR: mode must be off|manual|election|supervised`.
 * `synchro_timeout <= 0` / `election_timeout <= 0` → reject.
 
+## Transient quorum loss во время switch
+
+Любое переключение mode перепроводит cluster через короткое window (1–5s) без queue owner:
+
+* Tarantool's `cfg:reload()` сначала ставит `read_only=true` на текущем primary (config больше не указывает что он leader).
+* НО: `box.ctl.demote()` НЕ вызывается автоматически — synchro queue ownership остается у старого primary, который теперь RO.
+* Ни один sync write (включая audit row самой мутации `setFailoverMode`) не проходит до того как watcher / agent на новом leader'е вызовет `box.cfg{read_only=false} + box.ctl.promote()`.
+
+Что это значит для оператора:
+* **Apply Settings возвращает `applied: true`** — этот этап завершён.
+* **Login или follow-up мутация могут вернуть** `UNAVAILABLE / NO_LEADER / queue doesn't belong to any instance` в течение 2–5 секунд после Apply.
+* **Просто повтори запрос.** Cluster auto-recovery'тся: watcher на новом leader'е делает `box.cfg{read_only=false}` + `box.ctl.promote()` в течение пары secunds, и sync writes возобновляются.
+
+Это known limitation Tarantool 3.x + supervised pattern. Cartridge решает то же самое в `cartridge/failover.lua::synchro_promote` тем же дуэтом (`box.cfg{read_only=false}` + `box.ctl.promote()`).
+
 ## Если что-то пошло не так
 
 * **После Apply mode всё ещё старый в UI.** Подождать 1-2 сек (reload propagation). Если не помогло — F5 на /failover, mode читается из `config:get('replication').failover` на peer'е который отвечает на запрос; если landed на другой peer которому reload еще не пришёл — будет лаг.
