@@ -79,10 +79,12 @@ files['tools/'] = {
 
 -- M.start orchestrates the role bootstrap end-to-end (config read,
 -- session/audit init, HTTP routes, fiber pool spin-up, graceful
--- shutdown hook). Splitting it would scatter the boot order across
--- helpers and obscure the single linear sequence.
+-- shutdown hook). M.validate type-checks every roles_cfg.webui field.
+-- Both grow linearly with the role's surface area; splitting them
+-- would scatter the boot order / validation rules across helpers
+-- and obscure the single linear flow.
 files['backend/webui/init.lua'] = {
-    max_cyclomatic_complexity = 35,
+    max_cyclomatic_complexity = 45,
 }
 
 -- M.send walks the SMTP protocol state machine (HELO/STARTTLS/AUTH/

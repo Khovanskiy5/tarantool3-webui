@@ -146,6 +146,24 @@ function M.validate(cfg)
             end
         end
     end
+    if cfg.failover ~= nil then
+        if type(cfg.failover) ~= 'table' then
+            return nil, 'roles_cfg.webui.failover must be a table'
+        end
+        if cfg.failover.agent ~= nil and type(cfg.failover.agent) ~= 'boolean' then
+            return nil, 'roles_cfg.webui.failover.agent must be a boolean'
+        end
+        for _, k in ipairs({ 'lease_ttl_sec', 'keepalive_interval',
+                'election_interval', 'appointment_interval',
+                'watcher_poll_interval_sec' }) do
+            if cfg.failover[k] ~= nil
+                and (type(cfg.failover[k]) ~= 'number'
+                or cfg.failover[k] <= 0) then
+                return nil, 'roles_cfg.webui.failover.' .. k
+                    .. ' must be a positive number'
+            end
+        end
+    end
 
     return true
 end
@@ -453,6 +471,21 @@ function M.start(opts)
         STATE.notifications = notif
     end
 
+    -- Open-source supervised-failover agent + watcher. Opt-in via
+    -- `roles_cfg.webui.failover.agent: true`. The wrapper refuses
+    -- to start when `replication.failover` is not "off" — Tarantool
+    -- raft would fight us over `box.cfg.read_only` otherwise.
+    local fo_ok, fo = pcall(require, 'webui.failover')
+    if fo_ok then
+        local fo_cfg = opts.failover or {}
+        local fo_started, fo_err = fo.start(fo_cfg)
+        if fo_started == true then
+            STATE.failover = fo
+        elseif fo_err ~= nil and fo_err ~= 'disabled' then
+            logger.warn('failover agent not started', { reason = fo_err })
+        end
+    end
+
     local http_ok, http_err = http_srv.start({
         listen = opts.listen,
         allowed_origins = opts.allowed_origins,
@@ -547,6 +580,14 @@ function M.stop()
     if STATE.notifications ~= nil then
         pcall(function() STATE.notifications.stop() end)
         STATE.notifications = nil
+    end
+
+    -- Stop the failover agent + watcher (releases the coordinator
+    -- lease so a surviving peer can claim it in seconds rather
+    -- than waiting for the full TTL).
+    if STATE.failover ~= nil then
+        pcall(function() STATE.failover.stop() end)
+        STATE.failover = nil
     end
 
     -- Stop the suggestions scanner first — it reads state.snapshot()

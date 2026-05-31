@@ -212,6 +212,35 @@ local Query = types.object {
             description = 'Failover mode + per-server election state.',
             resolve = failover_resolver.query_failover,
         },
+        failoverAgentStatus = {
+            kind = types.object({
+                name = 'FailoverAgentStatus',
+                fields = {
+                    enabled        = types.boolean.nonNull,
+                    self_alias     = types.string,
+                    coordinator    = types.string,
+                    is_coordinator = types.boolean,
+                    lease_id       = types.string,
+                    last_error     = types.string,
+                    watcher_replicaset  = types.string,
+                    watcher_last_leader = types.string,
+                    watcher_current_ro  = types.boolean,
+                    appointments   = types.list(types.object({
+                        name = 'FailoverAppointment',
+                        fields = {
+                            replicaset = types.string.nonNull,
+                            leader     = types.string,
+                            previous   = types.string,
+                            ts         = types.float,
+                        },
+                    })),
+                },
+            }).nonNull,
+            description = 'Open-source supervised-failover agent state. '
+                .. '`enabled=false` when roles_cfg.webui.failover.agent '
+                .. 'is unset; the SPA hides the panel in that case.',
+            resolve = failover_resolver.query_agent_status,
+        },
         failoverStateProviderStatus = {
             kind = types.object({
                 name = 'FailoverStateProviderStatus',

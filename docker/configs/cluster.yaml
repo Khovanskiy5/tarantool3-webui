@@ -60,20 +60,44 @@ iproto:
       login: replicator
 
 replication:
-  # Built-in raft-based leader election. Failover modes (off/manual/
-  # supervised) ship in Task 46.
-  failover: election
+  # `off`: Tarantool delegates leader selection to per-instance
+  # `database.mode`. The WebUI's open-source supervised-failover
+  # agent (`roles_cfg.webui.failover.agent`) then takes over at
+  # runtime: it elects a coordinator via etcd lease, writes an
+  # appointment per replicaset, and each instance's watcher calls
+  # `box.cfg{read_only=...}` to honour it.
+  #
+  # Switching back to raft is a one-line edit: set `failover:
+  # election` and remove the `database.mode` overrides below. The
+  # agent refuses to start when failover is not `off`, so there is
+  # no risk of double leadership during transitions.
+  failover: off
 
 groups:
   default:
     replicasets:
       rs-1:
-        # In `election` failover mode the leader is chosen by the
-        # built-in raft algorithm, so no explicit `leader:` is set
-        # here. (Tarantool 3.x rejects `leader:` together with
-        # election mode.)
+        # Every instance declares `database.mode: rw`. In
+        # `replication.failover: off` mode this would normally
+        # produce master-master, but our supervised agent uses
+        # the synchronous-queue ownership (`box.ctl.promote /
+        # demote`) as the single-writer lock: at most one
+        # instance owns the queue at a time, so writes to
+        # synchronous spaces (which everything safety-critical
+        # is) are linearisable through the queue owner. Plain
+        # asynchronous writes to non-synchro spaces would be
+        # multi-master; the WebUI itself only uses synchro
+        # spaces, so that is not a concern.
+        #
+        # We intentionally do NOT set `database.mode: ro` on the
+        # followers — Tarantool would then keep re-applying RO at
+        # every config reload, fighting the agent's `box.ctl
+        # .promote()`. With all instances declared RW, the agent
+        # controls leadership end-to-end via the synchro queue.
         instances:
           tt-1:
+            database:
+              mode: rw
             iproto:
               listen:
                 - uri: '0.0.0.0:3301'
@@ -81,6 +105,8 @@ groups:
                 peer:
                   uri: 'tt-1:3301'
           tt-2:
+            database:
+              mode: rw
             iproto:
               listen:
                 - uri: '0.0.0.0:3301'
@@ -88,6 +114,8 @@ groups:
                 peer:
                   uri: 'tt-2:3301'
           tt-3:
+            database:
+              mode: rw
             iproto:
               listen:
                 - uri: '0.0.0.0:3301'
@@ -128,3 +156,16 @@ roles_cfg:
     etcd_writer:
       endpoints: ['http://etcd:2379']
       prefix: '/tarantool/webui'
+    # Open-source supervised-failover agent. With this flag the
+    # WebUI runs a coordinator-election fiber on every peer (etcd
+    # lease on `<prefix>/failover/coordinator`) and the elected
+    # coordinator writes per-replicaset appointments to
+    # `<prefix>/failover/replicasets/<rs>/leader`. Every instance
+    # polls its appointment and reconciles `box.cfg{read_only}`
+    # accordingly. Requires `replication.failover: off`.
+    failover:
+      agent: true
+      lease_ttl_sec: 10
+      keepalive_interval: 3
+      appointment_interval: 2
+      watcher_poll_interval_sec: 1

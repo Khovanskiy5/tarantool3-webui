@@ -160,13 +160,68 @@ function M.proto:get(key)
     }
 end
 
-function M.proto:put(key, value)
-    local resp, e = post(self, '/v3/kv/put', {
-        key = b64(full_key(self, key)), value = b64(value),
-    })
+-- Optional `lease_id`: when supplied, the key is bound to the lease
+-- and disappears when the lease expires (no keepalive ⇒ TTL eviction).
+-- Used by the failover agent for the coordinator-election key.
+function M.proto:put(key, value, lease_id)
+    local body = { key = b64(full_key(self, key)), value = b64(value) }
+    if lease_id ~= nil then body.lease = tostring(lease_id) end
+    local resp, e = post(self, '/v3/kv/put', body)
     if resp == nil then return nil, e end
-    logger.debug('etcd put', { key = key })
+    logger.debug('etcd put', { key = key, lease = lease_id })
     return { revision = tonumber((resp.header or {}).revision) }
+end
+
+-- Atomic "put if absent" via txn: succeed only when the key has
+-- never been written (mod_revision == 0). Returns `(result, nil)`
+-- on success or `(nil, 'CAS_CONFLICT')` when the key already
+-- exists. Foundation of lease-based leader election.
+function M.proto:txn_create(key, value, lease_id)
+    local fk = b64(full_key(self, key))
+    local put_req = { key = fk, value = b64(value) }
+    if lease_id ~= nil then put_req.lease = tostring(lease_id) end
+    local body = {
+        compare = {{
+            target = 'MOD', key = fk, result = 'EQUAL',
+            mod_revision = '0',
+        }},
+        success = {{ request_put = put_req }},
+        failure = {{ request_range = { key = fk } }},
+    }
+    local resp, e = post(self, '/v3/kv/txn', body)
+    if resp == nil then return nil, e end
+    if resp.succeeded then
+        return { revision = tonumber((resp.header or {}).revision),
+                 created = true }
+    end
+    return nil, err('CAS_CONFLICT', 'key already exists', { key = key })
+end
+
+-- Conditional put fenced on a witness key's mod_revision. Used by
+-- the failover coordinator to ensure appointments are only written
+-- while THIS coordinator's lease is still alive: if a slower
+-- coordinator wakes up after its lease expired and another peer
+-- already acquired the lease (different mod_revision on the
+-- coordinator key), the write fails atomically.
+function M.proto:put_if_witness_unchanged(key, value, witness_key,
+        witness_revision)
+    local fk = b64(full_key(self, key))
+    local wk = b64(full_key(self, witness_key))
+    local body = {
+        compare = {{
+            target = 'MOD', key = wk, result = 'EQUAL',
+            mod_revision = tostring(witness_revision or 0),
+        }},
+        success = {{ request_put = { key = fk, value = b64(value) } }},
+        failure = {{ request_range = { key = wk } }},
+    }
+    local resp, e = post(self, '/v3/kv/txn', body)
+    if resp == nil then return nil, e end
+    if resp.succeeded then
+        return { revision = tonumber((resp.header or {}).revision) }
+    end
+    return nil, err('CAS_CONFLICT', 'witness key changed',
+        { witness = witness_key, expected = witness_revision })
 end
 
 function M.proto:delete(key)

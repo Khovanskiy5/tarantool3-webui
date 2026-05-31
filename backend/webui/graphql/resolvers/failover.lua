@@ -16,6 +16,7 @@
 
 local fiber       = require('fiber')
 local http_client = require('http.client')
+local json        = require('json')
 
 local rbac   = require('webui.auth.rbac')
 local state  = require('webui.cluster.state')
@@ -39,7 +40,19 @@ end
 
 function M.query_failover(root)
     require_role(root, 'failover')
-    local snap = state.snapshot() or {}
+    -- Failover mode comes straight from the live cluster config
+    -- rather than the poller snapshot — the snapshot never carried
+    -- `failover_mode`, so the previous `snap.failover_mode or
+    -- 'election'` default lied to operators when the cluster ran
+    -- in `off` / `manual` / `supervised`.
+    local cfg_ok, cfg = pcall(require, 'config')
+    local cfg_mode
+    if cfg_ok then
+        local ok, value = pcall(function()
+            return (cfg:get('replication') or {}).failover
+        end)
+        if ok and type(value) == 'string' then cfg_mode = value end
+    end
     -- `box.info.election` in Tarantool 3.x exposes `leader` (numeric
     -- replica id) and `leader_name` (alias). It does NOT expose a
     -- UUID — to surface one we would have to cross-reference
@@ -47,20 +60,114 @@ function M.query_failover(root)
     -- expensive for a UI panel and not actionable. The alias is what
     -- operators recognise, so we surface that and skip the UUID.
     local elections = {}
-    for alias, srv in pairs(snap.servers or {}) do
-        if srv.election ~= nil then
-            table.insert(elections, {
-                instance    = alias,
-                state       = srv.election.state,
-                term        = srv.election.term,
-                leader_name = srv.election.leader_name,
-            })
+    if cfg_mode == 'election' then
+        local snap = state.snapshot() or {}
+        for alias, srv in pairs(snap.servers or {}) do
+            if srv.election ~= nil then
+                table.insert(elections, {
+                    instance    = alias,
+                    state       = srv.election.state,
+                    term        = srv.election.term,
+                    leader_name = srv.election.leader_name,
+                })
+            end
+        end
+        table.sort(elections, function(a, b) return a.instance < b.instance end)
+    end
+    return {
+        mode      = cfg_mode or 'off',
+        elections = elections,
+    }
+end
+
+-- Read the full appointment map from etcd. Any peer can call this
+-- and get the same answer — the appointments live in etcd, not in
+-- each agent's local memory. Returns a sorted list so the UI
+-- renders deterministically across refreshes.
+local function read_appointments_from_etcd()
+    local client, _ = require('webui.config_store.client').get_client()
+    if client == nil then return {} end
+    -- etcd v3 does not have a wildcard get without range; we know
+    -- the replicaset list from local cluster state, so iterate.
+    local snap_ok, snap = pcall(function()
+        return require('webui.cluster.state').snapshot()
+    end)
+    local rs_names = {}
+    if snap_ok and snap and snap.replicasets then
+        for name in pairs(snap.replicasets) do
+            table.insert(rs_names, name)
         end
     end
-    table.sort(elections, function(a, b) return a.instance < b.instance end)
+    -- Fallback: use the current instance's own replicaset name.
+    if #rs_names == 0 and box.info.replicaset
+            and box.info.replicaset.name ~= nil then
+        table.insert(rs_names, box.info.replicaset.name)
+    end
+    local out = {}
+    for _, rs in ipairs(rs_names) do
+        local key = '/failover/replicasets/' .. rs .. '/leader'
+        local kv = client:get(key)
+        if kv ~= nil then
+            local ok, parsed = pcall(json.decode, kv.value)
+            if ok and type(parsed) == 'table' then
+                table.insert(out, {
+                    replicaset = rs,
+                    leader     = parsed.leader,
+                    previous   = parsed.previous,
+                    ts         = parsed.ts,
+                })
+            end
+        end
+    end
+    table.sort(out, function(a, b)
+        return (a.replicaset or '') < (b.replicaset or '')
+    end)
+    return out
+end
+
+-- Status of the open-source failover agent + watcher. Returns null
+-- fields when the agent is disabled (the default); the SPA hides
+-- the panel in that case.
+--
+-- Appointments are read straight from etcd so every peer's
+-- /failover page sees the same source-of-truth map regardless of
+-- which one happens to be the coordinator at the moment.
+-- watcher_current_ro reflects the LIVE `box.info.ro` rather than
+-- a stale "last_applied" — that's what an operator actually wants
+-- to know on the page (the local instance's RW/RO state right now).
+function M.query_agent_status(root)
+    require_role(root, 'failover')
+    local ok, fo = pcall(require, 'webui.failover')
+    if not ok then
+        return { enabled = false, error = 'failover module unavailable' }
+    end
+    local s = fo.status()
+    local agent_status = s.agent or {}
+    local watcher_status = s.watcher or {}
+
+    local appointments = {}
+    if agent_status.enabled then
+        local fetch_ok, fetched = pcall(read_appointments_from_etcd)
+        if fetch_ok and type(fetched) == 'table' then
+            appointments = fetched
+        end
+    end
+
+    local current_ro
+    if box.info ~= nil then current_ro = box.info.ro end
+
     return {
-        mode      = snap.failover_mode or 'election',
-        elections = elections,
+        enabled         = agent_status.enabled == true,
+        self_alias      = agent_status.self_alias,
+        coordinator     = agent_status.coordinator,
+        is_coordinator  = agent_status.is_coordinator == true,
+        lease_id        = agent_status.lease_id,
+        appointments    = appointments,
+        last_error      = agent_status.last_error,
+        watcher_replicaset = watcher_status.replicaset,
+        watcher_last_leader = watcher_status.last_seen
+            and watcher_status.last_seen.leader,
+        watcher_current_ro  = current_ro,
     }
 end
 
