@@ -54,6 +54,12 @@ mutation ExpelInstance($alias: String!, $force: Boolean) {
   }
 }
 
+mutation CreateReplicaset($input: String!) {
+  createReplicaset(input: $input) {
+    ...TopologyEditResultFields
+  }
+}
+
 fragment TopologyEditResultFields on TopologyEditResult {
   applied
   revision
