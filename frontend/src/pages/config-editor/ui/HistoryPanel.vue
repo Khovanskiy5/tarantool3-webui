@@ -37,6 +37,7 @@ const emit = defineEmits<{
   (e: 'select-revision', revision: number): void;
   (e: 'request-diff', revision: number, against: 'prev' | 'current'): void;
   (e: 'request-rollback', revision: number): void;
+  (e: 'request-force-apply', revision: number): void;
 }>();
 
 const Q_HISTORY = /* GraphQL */ `
@@ -187,6 +188,14 @@ const hasMore = computed(() => page.value.more);
             label="Rollback"
             :disabled="currentRevision != null && rev.revision === currentRevision"
             @click="emit('request-rollback', rev.revision)"
+          />
+          <Button
+            size="small"
+            text
+            severity="danger"
+            label="Force apply"
+            title="Roll back to this revision AND fan-out config:reload on every peer (covers stragglers that missed a previous commit)."
+            @click="emit('request-force-apply', rev.revision)"
           />
         </div>
       </li>

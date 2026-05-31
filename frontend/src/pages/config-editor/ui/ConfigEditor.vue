@@ -4,6 +4,7 @@ import Button from 'primevue/button';
 import Message from 'primevue/message';
 
 import { getClient } from '@/shared/api/graphql';
+import { DestructiveActionDialog } from '@/shared/ui/destructive-action-dialog';
 import { YamlEditor } from '@/widgets/yaml-editor';
 import HistoryPanel from './HistoryPanel.vue';
 import DiffViewer from './DiffViewer.vue';
@@ -27,6 +28,8 @@ const validating = ref(false);
 const preparing = ref(false);
 const committing = ref(false);
 const rollingBack = ref(false);
+const forceApplying = ref(false);
+const forceApplyTarget = ref<number | null>(null);
 const error = ref<string | null>(null);
 const info = ref<string | null>(null);
 const validationIssues = ref<{ path: string; message: string }[]>([]);
@@ -80,6 +83,14 @@ const M_ABORT = /* GraphQL */ `
 const M_ROLLBACK = /* GraphQL */ `
   mutation Rollback($revision: Long!) {
     rollbackConfig(revision: $revision) { revision applied message }
+  }
+`;
+const M_FORCE_APPLY = /* GraphQL */ `
+  mutation ForceApply($revision: Long!) {
+    forceReapplyConfig(revision: $revision) {
+      results { instance ok err }
+      rollback_to rollback_revision rollback_message
+    }
   }
 `;
 
@@ -297,6 +308,51 @@ const onRequestRollback = async (rev: number) => {
   rollingBack.value = false;
 };
 
+// Force apply revision N (Task 5.17). Composes through the
+// backend's `forceReapplyConfig(revision)` — which rolls back to N
+// then fans out config:reload — so the SPA only emits one
+// mutation and lets the backend handle the choreography.
+//
+// We gate the action behind the shared DestructiveActionDialog so
+// a single misclick cannot re-apply the wrong revision. The
+// dialog requires the operator to type the revision number
+// verbatim before Confirm enables.
+const onRequestForceApply = (rev: number) => {
+  forceApplyTarget.value = rev;
+};
+const cancelForceApply = () => {
+  if (forceApplying.value) return;
+  forceApplyTarget.value = null;
+};
+const confirmForceApply = async () => {
+  const rev = forceApplyTarget.value;
+  if (rev == null) return;
+  forceApplying.value = true;
+  error.value = null;
+  info.value = null;
+  const res = await getClient().mutation<{
+    forceReapplyConfig: {
+      results: { instance: string; ok: boolean; err: string | null }[];
+      rollback_to: number | null;
+      rollback_revision: number | null;
+      rollback_message: string | null;
+    };
+  }>(M_FORCE_APPLY, { revision: rev }).toPromise();
+  if (res.error) {
+    error.value = res.error.message;
+  } else {
+    const r = res.data?.forceReapplyConfig;
+    if (r) {
+      info.value = r.rollback_message
+        ?? `Force-applied revision ${rev}; new commit #${r.rollback_revision ?? '?'}.`;
+      await load();
+      historyPanelRef.value?.refresh();
+    }
+  }
+  forceApplying.value = false;
+  forceApplyTarget.value = null;
+};
+
 const hasPrepared = computed(() => preparedId.value != null);
 
 onMounted(load);
@@ -359,6 +415,7 @@ onMounted(load);
         @select-revision="onSelectRevision"
         @request-diff="onRequestDiff"
         @request-rollback="onRequestRollback"
+        @request-force-apply="onRequestForceApply"
       />
     </div>
 
@@ -370,6 +427,22 @@ onMounted(load);
       :original="diffViewer.original"
       :modified="diffViewer.modified"
       @close="diffViewer.open = false"
+    />
+    <DestructiveActionDialog
+      :open="forceApplyTarget != null"
+      title="Force apply revision"
+      :description="
+        'Rolls cluster YAML back to revision #' + (forceApplyTarget ?? '?') + ' AND ' +
+          'fans out config:reload on every peer. Use this when a previous commit ' +
+          'half-landed — the rollback creates a new commit carrying the target ' +
+          'YAML, and the reload covers stragglers that missed the original.'
+      "
+      :expected="String(forceApplyTarget ?? '')"
+      :prompt="`Type the revision number (${forceApplyTarget ?? '?'}) to confirm:`"
+      confirm-label="Force apply"
+      :pending="forceApplying"
+      @cancel="cancelForceApply"
+      @confirm="confirmForceApply"
     />
   </section>
 </template>
