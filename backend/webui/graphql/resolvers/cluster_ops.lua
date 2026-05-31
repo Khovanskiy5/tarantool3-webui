@@ -88,19 +88,110 @@ end
 -- intentional operator action and should fail loudly when the
 -- source of truth is unreachable — silently editing the boot YAML
 -- behind etcd's back would create drift the operator cannot see.
+-- Read the YAML the operator is editing against. Precedence:
+--   1. etcd `<prefix>/config` — the cluster-wide source of truth
+--      after the first commit.
+--   2. On-disk file mirror — covers the fresh-bootstrap case where
+--      etcd is empty (`down -v`, first cluster boot, freshly
+--      provisioned WebUI on top of a running Tarantool). The
+--      operator gets a working preview/apply cycle without first
+--      having to navigate to /config-editor and dummy-commit.
+--   3. Hard error only when BOTH sources are unavailable.
+--
+-- The downstream twophase.commit always writes to etcd, so the
+-- file fallback is read-only here — the next round-trip reads
+-- back from etcd as usual.
 local function read_current_yaml()
     local client, client_err = etcd_client.get_client()
-    if client == nil then
-        return nil, 'etcd unavailable: ' .. tostring(client_err)
+    local etcd_unavailable_reason
+    if client ~= nil then
+        local kv, get_err = client:get('config')
+        if get_err ~= nil then
+            etcd_unavailable_reason = 'etcd read failed: '
+                .. tostring(get_err.message or get_err)
+        elseif kv ~= nil and kv.value ~= nil and #kv.value > 0 then
+            return kv.value, nil, kv.revision
+        end
+        -- etcd reachable but the `config` key is empty — fall through
+        -- to the file mirror.
+    else
+        etcd_unavailable_reason = 'etcd unavailable: ' .. tostring(client_err)
     end
-    local kv, get_err = client:get('config')
-    if get_err ~= nil then
-        return nil, 'etcd read failed: ' .. tostring(get_err.message or get_err)
+
+    -- File fallback. Imports config resolver lazily so we re-use
+    -- the same env-var precedence (TT_CONFIG_PATH → TT_CONFIG →
+    -- /opt/webui/etc/cluster.yaml → docker/configs/cluster.yaml).
+    local ok_cfg, config_resolver = pcall(require, 'webui.graphql.resolvers.config')
+    if ok_cfg and type(config_resolver._read_local_yaml) == 'function' then
+        local yaml, _ = config_resolver._read_local_yaml()
+        if yaml and #yaml > 0 then
+            return yaml, nil, 0
+        end
     end
-    if kv == nil or kv.value == nil or #kv.value == 0 then
-        return nil, 'etcd has no `config` key yet — commit an initial config first'
+
+    if etcd_unavailable_reason ~= nil then
+        return nil, etcd_unavailable_reason
     end
-    return kv.value, nil, kv.revision
+    return nil, 'no cluster YAML available — commit an initial config '
+        .. 'via /config-editor first'
+end
+
+-- Reload fan-out helper. Tarantool's etcd source does NOT poll —
+-- it only re-reads on `config:reload()`. Every mutation that
+-- writes new etcd content must therefore run a reload on each
+-- peer so the change becomes effective immediately.
+--
+-- Two layers:
+--   * self-reload — `peers.list()` returns foreign peers only,
+--     so the instance handling the GraphQL call would otherwise
+--     keep serving the pre-commit `cfg:get(...)` until the next
+--     manual reload. Operator-visible bug: setFailoverMode
+--     returns success, but the page on the same peer still
+--     shows the old mode.
+--   * fan-out — every other peer through the existing net.box
+--     RPC pool.
+local function fan_out_reload()
+    local self_outcome = ''
+    do
+        local ok_cfg, cfg = pcall(require, 'config')
+        if ok_cfg then
+            local ok, err = pcall(function() cfg:reload() end)
+            if not ok then
+                self_outcome = ' Self-reload failed: ' .. tostring(err) .. '.'
+            end
+        end
+    end
+
+    local rpc_ok, rpc = pcall(require, 'webui.cluster.rpc')
+    local peers_ok, peers = pcall(require, 'webui.cluster.peers')
+    if not (rpc_ok and peers_ok) then return self_outcome end
+    local all = {}
+    for name in pairs(peers.list() or {}) do
+        table.insert(all, name)
+    end
+    if #all == 0 then
+        return self_outcome ~= '' and self_outcome or ' Reloaded locally.'
+    end
+    local ok_call, res_each = pcall(rpc.map_eval,
+        'require("config"):reload(); return true',
+        {}, { timeout = 15, peers = all })
+    if not ok_call then
+        return self_outcome .. ' Reload fan-out errored: '
+            .. tostring(res_each) .. '.'
+    end
+    local failed = {}
+    for name, r in pairs(res_each or {}) do
+        if not (r and r.ok) then
+            table.insert(failed, name .. '=' ..
+                tostring(r and r.err or 'unknown'))
+        end
+    end
+    if #failed == 0 then
+        return self_outcome .. ' Reloaded on '
+            .. tostring(#all + 1) .. ' peer(s) (self + ' .. #all .. ').'
+    end
+    return self_outcome .. ' Reload partial: failed on '
+        .. table.concat(failed, ', ') .. '.'
 end
 
 -- Flatten ops to a stable string list (op + path) — kept bounded
@@ -944,20 +1035,64 @@ function M.mutation_set_failover_mode(root, args)
         end
     else
         new_parsed.replication.failover = args.mode
-        -- Turning election/manual ON implies disabling our agent —
-        -- otherwise two pieces of code fight for queue ownership.
-        if (args.mode == 'election' or args.mode == 'manual')
-            and type(new_parsed.roles_cfg) == 'table'
-            and type(new_parsed.roles_cfg.webui) == 'table'
-            and type(new_parsed.roles_cfg.webui.failover) == 'table' then
+        -- Agent toggle rules:
+        --   * election / manual → forcibly OFF. Tarantool itself
+        --     drives leadership; our agent would fight it for the
+        --     synchro queue.
+        --   * supervised → forcibly ON (it IS the agent path; the
+        --     other branch above explicitly maps supervised to
+        --     `off + agent: true`).
+        --   * off → operator's explicit choice via params.agent.
+        --     When unset, KEEP the existing cluster value untouched.
+        --     This avoids the off → manual → off footgun where the
+        --     agent was implicitly turned off by the first edit and
+        --     stayed off through the second, leaving the cluster
+        --     without a leader.
+        new_parsed.roles_cfg = new_parsed.roles_cfg or {}
+        new_parsed.roles_cfg.webui = new_parsed.roles_cfg.webui or {}
+        new_parsed.roles_cfg.webui.failover =
+            new_parsed.roles_cfg.webui.failover or {}
+        if args.mode == 'election' or args.mode == 'manual' then
             new_parsed.roles_cfg.webui.failover.agent = false
+        elseif args.mode == 'off' then
+            if params.agent == true then
+                new_parsed.roles_cfg.webui.failover.agent = true
+            elseif params.agent == false then
+                new_parsed.roles_cfg.webui.failover.agent = false
+            end
+            -- else: leave existing value as-is.
         end
-        if args.mode == 'off' and params.agent == true then
-            new_parsed.roles_cfg = new_parsed.roles_cfg or {}
-            new_parsed.roles_cfg.webui = new_parsed.roles_cfg.webui or {}
-            new_parsed.roles_cfg.webui.failover =
-                new_parsed.roles_cfg.webui.failover or {}
-            new_parsed.roles_cfg.webui.failover.agent = true
+    end
+
+    -- Schema rule: `database.mode` is mutually exclusive with
+    -- `replication.failover: election | manual | supervised`. The
+    -- moment we flip out of `off`, Tarantool refuses to (re)load
+    -- the cluster YAML if any instance still carries an explicit
+    -- `database.mode`. Strip it cluster-wide here so the commit
+    -- lands cleanly. Flipping back to `off` does NOT re-introduce
+    -- `database.mode: rw` — the operator can do that via
+    -- editTopology / setInstanceState when they actually want a
+    -- per-instance override; the more conservative default is
+    -- "no override" (instance follows replicaset semantics).
+    if args.mode == 'election' or args.mode == 'manual'
+        or args.mode == 'supervised' then
+        for _, group in pairs(new_parsed.groups or {}) do
+            for _, rs in pairs(group.replicasets or {}) do
+                for _, inst in pairs(rs.instances or {}) do
+                    if type(inst.database) == 'table'
+                        and inst.database.mode ~= nil then
+                        inst.database.mode = nil
+                        -- Leave an empty `database` table behind only
+                        -- if it still holds OTHER fields; otherwise
+                        -- drop the empty husk so the YAML stays clean.
+                        local has_more = false
+                        for _ in pairs(inst.database) do
+                            has_more = true; break
+                        end
+                        if not has_more then inst.database = nil end
+                    end
+                end
+            end
         end
     end
 
@@ -1042,14 +1177,16 @@ function M.mutation_set_failover_mode(root, args)
             request_id = root and root.request_id,
         })
     end)
+    local reload_outcome = fan_out_reload()
     return {
         prepared_id  = nil,
         diff_summary = { 'set_failover_mode → ' .. args.mode },
         applied      = true,
         revision     = (commit_result and commit_result.revision) or 0,
         message      = string.format(
-            'failover mode changed to %s (revision %d).',
-            args.mode, (commit_result and commit_result.revision) or 0),
+            'failover mode changed to %s (revision %d).%s',
+            args.mode, (commit_result and commit_result.revision) or 0,
+            reload_outcome),
     }
 end
 
@@ -1301,12 +1438,14 @@ function M.mutation_set_instance_state(root, args)
                 request_id = root and root.request_id,
             })
         end)
+        local reload_outcome = fan_out_reload()
         return {
             prepared_id  = nil,
             diff_summary = { 'change /election_mode → ' .. new_election_mode },
             applied      = true,
             revision     = (commit_result and commit_result.revision) or 0,
-            message      = 'election_mode set to ' .. new_election_mode,
+            message      = 'election_mode set to ' .. new_election_mode
+                .. reload_outcome,
         }
     end
 

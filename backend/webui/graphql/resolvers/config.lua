@@ -31,7 +31,9 @@ end
 -- The local config source path is taken from the env (set by the
 -- entrypoint script that boots Tarantool 3.x). Used as a fallback
 -- when etcd is unwired or empty — operators get a starting point
--- for the editor on a fresh cluster.
+-- for the editor on a fresh cluster. Exposed on the module table
+-- so other resolvers (cluster_ops) can reuse the same env-var
+-- precedence without duplicating the candidate list.
 local function read_local_yaml()
     -- ipairs stops at the first nil, so we can't put env getters
     -- straight into the table literal. Build the list defensively.
@@ -51,6 +53,7 @@ local function read_local_yaml()
     end
     return '', 'memory'
 end
+M._read_local_yaml = read_local_yaml
 
 -- Source-of-truth precedence: etcd > file > empty.
 --
