@@ -318,12 +318,31 @@ local function tick()
         results[name] = res
     end
 
+    -- Topology fed into state.apply_tick. cfg:instances() returns
+    -- only {group_name, instance_name, replicaset_name} — no URI —
+    -- so the Server.uri column on /cluster used to render empty.
+    -- Augment each entry with the advertised peer URI looked up via
+    -- cfg:instance_uri('peer', {instance = name}) so the table
+    -- shows where each instance is reachable.
     local topology = {}
     local cfg_ok, cfg = pcall(require, 'config')
     if cfg_ok then
         local instances_ok, instances = pcall(function() return cfg:instances() end)
         if instances_ok and type(instances) == 'table' then
-            topology = instances
+            for name, meta in pairs(instances) do
+                local entry = {
+                    group_name      = meta.group_name,
+                    instance_name   = meta.instance_name,
+                    replicaset_name = meta.replicaset_name,
+                }
+                local uri_ok, uri_info = pcall(function()
+                    return cfg:instance_uri('peer', { instance = name })
+                end)
+                if uri_ok and type(uri_info) == 'table' then
+                    entry.uri = uri_info.uri
+                end
+                topology[name] = entry
+            end
         end
     end
 

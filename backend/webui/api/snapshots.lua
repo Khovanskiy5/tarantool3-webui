@@ -21,7 +21,22 @@ local function memtx_dir()
     return box.cfg.memtx_dir or box.cfg.work_dir or '.'
 end
 
+-- Tarantool creates a `<signature>.snap` file in `memtx_dir` named by
+-- the current vclock signature. `box.snapshot()` is a no-op when a
+-- file already exists for that signature — common on followers in
+-- quiet clusters, where the vclock only advances when the leader
+-- produces new writes. We surface that explicitly with `created:
+-- true|false` so the operator sees whether a fresh file landed
+-- instead of inferring success from a generic 200.
+local function snap_path_for(dir, signature)
+    return string.format('%s/%020d.snap', dir, signature)
+end
+
 function M.handler_take(req)
+    local dir = memtx_dir()
+    local sig_before = box.info.signature
+    local already_at_signature = fio.path.exists(snap_path_for(dir, sig_before))
+
     local ok, err = pcall(function() return box.snapshot() end)
     if not ok then
         logger.error('box.snapshot failed', { err = tostring(err) })
@@ -32,11 +47,32 @@ function M.handler_take(req)
                 code = 'SNAPSHOT_FAILED', message = tostring(err) } }),
         }
     end
-    logger.info('snapshot taken', { user = req.user })
+
+    -- Re-read signature in case a new write landed mid-snapshot; check
+    -- both before/after positions because either could be where the
+    -- new file lives.
+    local sig_after = box.info.signature
+    local created = (not already_at_signature)
+        and (fio.path.exists(snap_path_for(dir, sig_before))
+             or fio.path.exists(snap_path_for(dir, sig_after)))
+
+    logger.info('snapshot taken', {
+        user = req.user,
+        instance = box.info.name,
+        ro = box.info.ro,
+        sig_before = sig_before, sig_after = sig_after,
+        created = created,
+    })
     return {
         status = 200,
         headers = { ['content-type'] = 'application/json' },
-        body = json.encode({ ok = true, signature = box.info.signature }),
+        body = json.encode({
+            ok = true,
+            created = created,
+            signature = sig_after,
+            instance = box.info.name,
+            read_only = box.info.ro == true,
+        }),
     }
 end
 

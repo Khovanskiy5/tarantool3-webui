@@ -30,8 +30,18 @@ const load = async () => {
 const take = async () => {
   taking.value = true; error.value = null; info.value = null;
   try {
-    const res = await restClient.post<{ ok: boolean; signature: number }>('/api/snapshots/take');
-    info.value = `Snapshot taken — signature ${res.signature}`;
+    const res = await restClient.post<{
+      ok: boolean;
+      created: boolean;
+      signature: number;
+      instance: string;
+      read_only: boolean;
+    }>('/api/snapshots/take');
+    const where = `${res.instance}${res.read_only ? ' (RO follower)' : ''}`;
+    info.value = res.created
+      ? `Snapshot written on ${where} at signature ${res.signature}.`
+      : `Already up to date on ${where}: a snapshot for signature ${res.signature} `
+        + `exists. box.snapshot() is a no-op until a new write advances the vclock.`;
     await load();
   } catch (e) {
     error.value = (e as RestApiError).message;

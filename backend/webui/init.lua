@@ -271,8 +271,8 @@ function M.start(opts)
         local space = sto_mod.webhook_dead_letter()
         if space == nil then return nil, 'dead-letter space missing' end
         local count = space:count() or 0
-        local ok, err = pcall(function() space:truncate() end)
-        if not ok then return nil, tostring(err) end
+        local trunc_ok, trunc_err = pcall(function() space:truncate() end)
+        if not trunc_ok then return nil, tostring(trunc_err) end
         return { cleared = count }
     end)
 
