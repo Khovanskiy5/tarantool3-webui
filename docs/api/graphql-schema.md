@@ -149,6 +149,48 @@ JSON-вход `{ name, group, instances?: {alias: instance-spec}, roles?, leader
 
 JSON-вход — частичный апдейт replicaset: roles/leader/failover_priority/weight/vshard_group/all_rw + `join_instances` (добавить) или `expel_instances` (удалить). На expel response получает прибавку про необходимость ручного rebalance vshard buckets.
 
+#### `addInstance(input: String!): TopologyEditResult!`
+
+JSON-вход `{alias, group, replicaset, uri, listen?, mode?, roles?, apply?}`. Добавляет инстанс в существующий replicaset через `join_instances`. Best-effort URI probe — недоступный URI выдаёт warning в `message`, но НЕ блокирует коммит (новые peer'ы часто не отвечают на iproto до момента когда репликация их подхватит).
+
+#### `expelInstance(alias: String!, force: Boolean): TopologyEditResult!`
+
+Удаляет инстанс из cluster YAML и подчищает orphan-row в `_cluster` на каждом достижимом peer'е. По умолчанию отказывается удалять последний инстанс replicaset; `force=true` обходит защиту. Подчищает упоминания в `failover_priority` других replicaset'ов автоматически.
+
+#### `setInstanceState(alias: String!, enabled: Boolean, electable: Boolean): TopologyEditResult!`
+
+Per-mode enable/disable одного инстанса.
+- `supervised`/`off+agent`: пишет `<prefix>/failover/disabled/<alias>` в etcd; agent читает на каждом cycle (≤1s) и фильтрует disabled из score map. State persistent across restarts.
+- `off` без agent: editTopology переключает `database.mode` (`rw`/`ro`).
+- `election`: editTopology переключает `replication.election_mode` (`candidate`/`voter`).
+- `manual`: отказывается отключить текущего leader'а (требует promote другого инстанса).
+
+#### `promoteInstance(alias: String!, force_inconsistency?, skip_error_on_change?, timeout?, ttl_sec?): TopologyEditResult!`
+
+Per-mode promote.
+- `off`: editTopology `mode: rw` на target + `mode: ro` на остальных в replicaset.
+- `manual`: editTopology `leader: <alias>`.
+- `election`: `box.ctl.promote()` через net.box (Tarantool гоняет raft round).
+- `supervised`/`off+agent`: пишет appointment с `manual_override_until = now + ttl_sec` (default 300s) в `<prefix>/failover/replicasets/<rs>/leader`. Coordinator уважает override и не переизбирает по score map до истечения TTL. Параллельно зовёт `box.ctl.promote` на target для немедленного перемещения synchro queue.
+
+`skip_error_on_change: true` → идемпотентность (success если уже leader).
+
+#### `demoteInstance(alias: String!): TopologyEditResult!`
+
+Per-mode demote. `off`: `mode: ro`. `supervised`: `box.ctl.demote` на target (agent выберет нового leader). `election`: `election_mode: voter`. `manual`: rejected (используйте promote другого).
+
+#### `setFailoverMode(mode: String!, params: String, apply: Boolean): TopologyEditResult!`
+
+Переключает кластер на новый failover mode (`off`/`manual`/`election`/`supervised`). `params` — JSON envelope: `synchro_quorum`, `synchro_timeout`, `election_timeout`, `election_fencing_mode` (off/soft/strict), `agent` (для off+agent варианта), `agent_params` (для supervised).
+
+`supervised` — наш OS-эквивалент: shorthand для `replication.failover: off` + `roles_cfg.webui.failover.agent: true`. Переключение на `election` или `manual` автоматически выключает наш агент чтобы не было fight за synchro queue.
+
+Reject: `synchro_quorum < N/2+1` (would allow split-brain).
+
+#### `forceReapplyConfig(instances?, revision?): LifecycleResult!`
+
+Расширение существующей мутации. Без `revision` — fan-out `config:reload()` на все (или перечисленные) peer'ы. С `revision` — сначала откат к указанной ревизии через `rollbackConfig` (audit, reload fan-out), а затем возврат с `rollback_to`, `rollback_revision`, `rollback_message` в response.
+
 ### `TopologyEditResult`
 
 ```graphql

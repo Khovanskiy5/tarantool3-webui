@@ -223,15 +223,22 @@ local function probe_replicasets()
 end
 
 -- Pick the best candidate for a replicaset given a probe map.
--- Deterministic on ties: alphabetical alias ordering.
-function M.pick_leader(replicaset_probes, max_lag_sec)
+-- Deterministic on ties: alphabetical alias ordering. `disabled`
+-- is an optional set of aliases the operator has marked as
+-- ineligible — they are filtered to score = -inf before ranking.
+function M.pick_leader(replicaset_probes, max_lag_sec, disabled)
     local best_alias, best_score = nil, -math.huge
     local aliases = {}
     for alias in pairs(replicaset_probes) do table.insert(aliases, alias) end
     table.sort(aliases)
     for _, alias in ipairs(aliases) do
-        local score = M.score_candidate(
-            replicaset_probes[alias], max_lag_sec)
+        local score
+        if disabled ~= nil and disabled[alias] == true then
+            score = -math.huge
+        else
+            score = M.score_candidate(
+                replicaset_probes[alias], max_lag_sec)
+        end
         if score > best_score then
             best_alias, best_score = alias, score
         end
@@ -244,11 +251,14 @@ end
 -- Coordinator-only: appointment cycle
 -- ─────────────────────────────────────────────────────────────────────
 
-local function write_appointment(client, rs_name, leader_alias, previous)
+local function write_appointment(client, rs_name, leader_alias, previous,
+                                 manual_override_until, by_user)
     local key = string.format(M.KEY_APPOINTMENT, rs_name)
     local payload = json.encode({
         leader = leader_alias, ts = fiber.time(),
         coordinator = STATE.self_alias, previous = previous,
+        manual_override_until = manual_override_until,
+        by_user = by_user,
     })
     -- CAS-bind the write to OUR coordinator key revision. If our
     -- lease has expired and another peer claimed coordinator (new
@@ -261,18 +271,88 @@ local function write_appointment(client, rs_name, leader_alias, previous)
     return true
 end
 
+-- Manual override entry point for promoteInstance in supervised
+-- mode. Writes a plain (non-CAS) appointment with a TTL flag so
+-- the coordinator stops auto-promoting somebody else until the
+-- window expires. Any peer can call this — we deliberately do NOT
+-- bind to the coordinator's lease here because the operator might
+-- be acting from a follower-only API instance.
+function M.appoint_manually(client, rs_name, alias, ttl_sec, by_user)
+    if client == nil then return nil, 'etcd unavailable' end
+    if type(rs_name) ~= 'string' or rs_name == '' then
+        return nil, 'replicaset name required'
+    end
+    if type(alias) ~= 'string' or alias == '' then
+        return nil, 'alias required'
+    end
+    local now = fiber.time()
+    local override_until = now + math.max(30, tonumber(ttl_sec) or 300)
+    local key = string.format(M.KEY_APPOINTMENT, rs_name)
+    local payload = json.encode({
+        leader = alias, ts = now,
+        coordinator = 'manual',
+        manual_override_until = override_until,
+        by_user = by_user or '?',
+    })
+    local _, put_err = client:put(key, payload)
+    if put_err ~= nil then return nil, put_err end
+    logger.warn('manual appointment override', {
+        replicaset = rs_name, leader = alias,
+        until_ts = override_until, by_user = by_user,
+    })
+    return { leader = alias, manual_override_until = override_until }
+end
+
 local function appointment_cycle(client)
     local rs_map = probe_replicasets()
     local now = fiber.time()
+    -- Operator-controlled disabled set (Task 5.7). Read every cycle
+    -- — cheap (one etcd range-prefix call per second on the
+    -- coordinator only) and lets the agent react within a second
+    -- of `setInstanceState(disabled=true)` without restarts.
+    local disabled
+    do
+        local ok_d, mod = pcall(require, 'webui.failover.disabled')
+        if ok_d then disabled = select(1, mod.aliases_set(client)) end
+    end
     -- Global hysteresis: any promotion (across any replicaset)
     -- in the last min_promotion_interval seconds blocks the next
     -- one. Cheap and prevents flapping when two candidates have
     -- nearly-equal scores.
     local can_change = (now - STATE.last_promotion_at)
         >= STATE.config.min_promotion_interval
+    -- Re-read the live appointment row before deciding whether to
+    -- write a new one. The coordinator memory (STATE.last_appointments)
+    -- lags reality when another process manually appointed via
+    -- M.appoint_manually — without this re-read we would overwrite
+    -- the override on the very next tick.
+    local function read_live_appointment(rs)
+        local key = string.format(M.KEY_APPOINTMENT, rs)
+        local kv, get_err = client:get(key)
+        if get_err ~= nil or kv == nil or kv.value == nil then return nil end
+        local ok, decoded = pcall(json.decode, kv.value)
+        if not ok or type(decoded) ~= 'table' then return nil end
+        return decoded
+    end
+
     for rs_name, probes in pairs(rs_map) do
+        local live = read_live_appointment(rs_name)
+        if live ~= nil
+            and tonumber(live.manual_override_until) ~= nil
+            and live.manual_override_until > now then
+            -- A manual override is in effect. Keep our memory in
+            -- sync and skip score-based re-evaluation for this rs.
+            STATE.last_appointments[rs_name] = {
+                leader = live.leader, ts = live.ts or now,
+                previous = live.previous,
+                manual_override_until = live.manual_override_until,
+            }
+            logger.debug('manual override active; skipping score cycle',
+                { replicaset = rs_name, leader = live.leader,
+                  expires_at = live.manual_override_until })
+        else
         local leader = M.pick_leader(probes,
-            STATE.config.max_replication_lag_sec)
+            STATE.config.max_replication_lag_sec, disabled)
         if leader == nil then
             logger.debug('no qualified candidate', { replicaset = rs_name })
         else
@@ -315,6 +395,7 @@ local function appointment_cycle(client)
                 end
             end
         end
+        end -- manual-override else
     end
 end
 

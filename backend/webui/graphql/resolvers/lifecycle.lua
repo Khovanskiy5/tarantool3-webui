@@ -96,6 +96,44 @@ end
 
 function M.mutation_force_reapply(root, args)
     require_role(root, 'forceReapplyConfig')
+    args = args or {}
+
+    -- Optional revision: rollback to the named history snapshot
+    -- BEFORE fanning out the reload. Composes through the existing
+    -- rollbackConfig pipeline so the audit trail is identical
+    -- (one `config.rollback` row plus the reload outcome below).
+    --
+    -- The two-step shape ("force apply revision N") is what the
+    -- /config-history UI wants: pick a revision in the timeline,
+    -- click "force apply", land the rollback + reload as a single
+    -- operator action.
+    local rollback_outcome = nil
+    if args.revision ~= nil then
+        local config_resolver = require('webui.graphql.resolvers.config')
+        local ok, res = pcall(config_resolver.mutation_rollback, root, {
+            revision = args.revision,
+        })
+        if not ok then
+            -- Surface the typed error straight through — rollback already
+            -- raised something like ROLLBACK_INCOMPATIBLE / REVISION_NOT_FOUND.
+            error(tostring(res))
+        end
+        rollback_outcome = res
+        -- After rollback the fan-out reload already ran on every peer
+        -- — additional reload calls are redundant. Return the rollback
+        -- outcome shaped to look like a force_reapply result.
+        return {
+            results = { {
+                instance = 'cluster',
+                ok = res and res.applied or false,
+                err = nil,
+            } },
+            rollback_to       = args.revision,
+            rollback_revision = res and res.revision or nil,
+            rollback_message  = res and res.message or nil,
+        }
+    end
+
     local results = rpc_call_each(args.instances or {}, 'webui.config.reload', function()
         local config = require('config')
         config:reload()

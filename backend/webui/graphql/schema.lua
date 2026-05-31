@@ -747,9 +747,24 @@ local Mutation = types.object {
                             err      = types.string,
                         },
                     })),
+                    -- When `revision` was supplied, rollback first
+                    -- and these three carry the resulting state so
+                    -- the UI can render "rolled back to N, applied
+                    -- as etcd revision M".
+                    rollback_to       = types.long,
+                    rollback_revision = types.long,
+                    rollback_message  = types.string,
                 },
             }).nonNull,
-            arguments = { instances = types.list(types.string.nonNull) },
+            arguments = {
+                instances = types.list(types.string.nonNull),
+                revision  = types.long,
+            },
+            description = 'Fan-out config:reload() on every (or selected) ' ..
+                'peer. With `revision`, first rolls cluster YAML back to ' ..
+                'that history snapshot (which itself triggers a reload), ' ..
+                'so a single mutation call covers the "force apply ' ..
+                'revision N" operator action.',
             resolve = lifecycle_resolver.mutation_force_reapply,
         },
         reloadRoles = {
@@ -834,6 +849,89 @@ local Mutation = types.object {
                 'failover_priority, weight, vshard_group, join_instances, ' ..
                 'expel_instances). JSON input mirrors ReplicasetEdit.',
             resolve = cluster_ops_resolver.mutation_edit_replicaset,
+        },
+        addInstance = {
+            kind = TopologyEditResult.nonNull,
+            arguments = { input = types.string.nonNull },
+            description = 'Alias over editTopology that joins a new ' ..
+                'instance into an existing replicaset. JSON input: ' ..
+                '`{alias, group, replicaset, uri, listen?, mode?, ' ..
+                'roles?, apply?: bool}`. Probes the URI best-effort; ' ..
+                'an unreachable URI emits a warning but does NOT block ' ..
+                'the commit (fresh peers usually need replication to ' ..
+                'join them before they answer iproto).',
+            resolve = cluster_ops_resolver.mutation_add_instance,
+        },
+        expelInstance = {
+            kind = TopologyEditResult.nonNull,
+            arguments = {
+                alias = types.string.nonNull,
+                force = types.boolean,
+            },
+            description = 'Removes the alias from cluster YAML and ' ..
+                'deletes the orphan `_cluster` row on every reachable ' ..
+                'peer. Refuses to expel the last instance of a ' ..
+                'replicaset unless `force=true`.',
+            resolve = cluster_ops_resolver.mutation_expel_instance,
+        },
+        setInstanceState = {
+            kind = TopologyEditResult.nonNull,
+            arguments = {
+                alias     = types.string.nonNull,
+                enabled   = types.boolean,
+                electable = types.boolean,
+            },
+            description = 'Per-mode enable/disable + electable knob for ' ..
+                'a single instance. supervised/off+agent: writes ' ..
+                '/failover/disabled/<alias> in etcd (agent picks up ' ..
+                'within ~1s). off (no agent): editTopology mode=ro/rw. ' ..
+                'election: editTopology election_mode=voter/candidate. ' ..
+                'manual: refuses to disable the current leader.',
+            resolve = cluster_ops_resolver.mutation_set_instance_state,
+        },
+        promoteInstance = {
+            kind = TopologyEditResult.nonNull,
+            arguments = {
+                alias                = types.string.nonNull,
+                force_inconsistency  = types.boolean,
+                skip_error_on_change = types.boolean,
+                timeout              = types.int,
+                ttl_sec              = types.int,
+            },
+            description = 'Per-mode promote. off→editTopology mode=rw on ' ..
+                'target / mode=ro on others; manual→editTopology leader; ' ..
+                'election→box.ctl.promote() via net.box; supervised/' ..
+                'off+agent→writes manual-override appointment in etcd ' ..
+                '(default TTL 300s) AND calls box.ctl.promote on target ' ..
+                'so the queue moves immediately. `ttl_sec` is only ' ..
+                'consumed by the supervised path.',
+            resolve = cluster_ops_resolver.mutation_promote_instance,
+        },
+        demoteInstance = {
+            kind = TopologyEditResult.nonNull,
+            arguments = { alias = types.string.nonNull },
+            description = 'Per-mode demote. off→mode=ro; supervised→' ..
+                'box.ctl.demote on target (agent picks new leader next ' ..
+                'tick); election→election_mode=voter on target; manual ' ..
+                'is rejected (promote elsewhere instead).',
+            resolve = cluster_ops_resolver.mutation_demote_instance,
+        },
+        setFailoverMode = {
+            kind = TopologyEditResult.nonNull,
+            arguments = {
+                mode   = types.string.nonNull,
+                params = types.string,
+                apply  = types.boolean,
+            },
+            description = 'Switch cluster failover mode to one of ' ..
+                'off|manual|election|supervised. `params` is a JSON ' ..
+                'envelope: synchro_quorum, synchro_timeout, ' ..
+                'election_timeout, election_fencing_mode, agent (for ' ..
+                'off+agent), agent_params (for supervised). ' ..
+                '`supervised` is shorthand for `off` + ' ..
+                '`roles_cfg.webui.failover.agent: true`. ' ..
+                'Rejects synchro_quorum < N/2+1 as critical.',
+            resolve = cluster_ops_resolver.mutation_set_failover_mode,
         },
     },
 }
