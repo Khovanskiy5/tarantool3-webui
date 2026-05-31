@@ -61,23 +61,27 @@ end
 
 -- Determine whether we're "really" the leader from Tarantool's
 -- perspective. `box.info.ro == false` alone is not enough — with
--- `replication.failover: off` the synchronous queue stays owned
--- by whoever last called `box.ctl.promote()`, and an instance
--- whose `box.cfg.read_only` is false but who lost the queue
--- ownership will refuse synchronous writes with
--- `ro_reason='synchro'`. The correct "I am the leader" test is
--- "RO is false AND the synchronous queue is mine".
+-- every instance declared `database.mode: rw` (required so the
+-- config-applier does not stomp our box.ctl calls), all three
+-- peers technically have ro=false. The single source of truth for
+-- "who is the leader" is the synchronous-queue ownership: only
+-- the owner can append to synchro spaces; everyone else either
+-- waits (synchro_quorum) or hits `ro_reason='synchro'`.
+--
+-- An owner of 0 means NO ONE currently owns the queue — that is
+-- the post-bootstrap state before the first box.ctl.promote()
+-- claim. Treating "no owner" as "I am leader" was a bug: it
+-- caused the watcher to skip the initial promote(), leaving
+-- every peer in a quasi-RW state where the appointed leader had
+-- never actually claimed the queue.
 local function effectively_leader()
     if box.info.ro then return false end
-    -- box.info.synchro.queue.owner is the replica id of the queue
-    -- owner; 0 means "no owner". `box.info.id` is our replica id.
     local synchro = box.info.synchro
     if synchro == nil or synchro.queue == nil then
         -- Old build without synchro info — fall back to the ro flag.
         return true
     end
-    local owner = synchro.queue.owner or 0
-    return owner == box.info.id or owner == 0
+    return synchro.queue.owner == box.info.id
 end
 
 local function apply_appointment(appt)

@@ -51,6 +51,7 @@ const leader = computed(() => getLeaderAlias(props.replicaset));
           :key="srv.alias"
           :instance="srv"
           :is-self="srv.alias === selfAlias"
+          :leader-alias="leader"
         />
       </tbody>
     </table>

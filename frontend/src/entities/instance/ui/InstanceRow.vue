@@ -4,7 +4,11 @@ import { computed } from 'vue';
 import type { Instance } from '../model/types';
 import { isLeader, reachability, shortUuid } from '../model/selectors';
 
-const props = defineProps<{ instance: Instance; isSelf?: boolean }>();
+const props = defineProps<{
+  instance: Instance;
+  isSelf?: boolean;
+  leaderAlias?: string | null;
+}>();
 
 const stateClass = computed(() => {
   const r = reachability(props.instance);
@@ -38,7 +42,7 @@ const reasonLabel = computed(() => props.instance.boxInfo?.roReason ?? '');
         title="This is the instance answering the request"
       >self</span>
       <span
-        v-if="isLeader(instance)"
+        v-if="isLeader(instance, leaderAlias)"
         class="webui-instance-row__chip webui-instance-row__chip--leader"
       >leader</span>
     </td>
