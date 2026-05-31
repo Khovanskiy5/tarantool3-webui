@@ -135,6 +135,33 @@ M.migrations = {
             })
         end
     end,
+
+    -- Make every replicated WebUI space synchronous. Required by
+    -- the open-source supervised-failover agent: writes that the
+    -- API acknowledged to the caller must survive an immediate
+    -- leader crash, otherwise the new leader returns 404 / 401 /
+    -- PREPARED_NOT_FOUND for state the caller already saw
+    -- confirmed. `_webui_meta` is local (is_local=true, never
+    -- replicates) and stays async.
+    [5] = function(box)
+        local sync_spaces = {
+            '_webui_sessions',
+            '_webui_audit',
+            '_webui_webhook_queue',
+            '_webui_webhook_dead_letter',
+            '_webui_prepared',
+        }
+        for _, name in ipairs(sync_spaces) do
+            local s = box.space[name]
+            -- Idempotent: only ALTER if not already sync. The
+            -- fresh-install path in storage/spaces.lua creates
+            -- the space with is_sync=true so the alter() here is
+            -- a no-op for new deployments.
+            if s ~= nil and s.is_sync ~= true then
+                s:alter({ is_sync = true })
+            end
+        end
+    end,
 }
 
 -- ─────────────────────────────────────────────────────────────────────

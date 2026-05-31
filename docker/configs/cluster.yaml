@@ -72,6 +72,16 @@ replication:
   # agent refuses to start when failover is not `off`, so there is
   # no risk of double leadership during transitions.
   failover: off
+  # Synchronous replication quorum + timeout. With 3 instances
+  # the default quorum is N/2+1=2, so a write is acknowledged
+  # once at least one follower confirms it. `synchro_timeout=3s`
+  # caps how long the leader waits before giving up — long enough
+  # to ride out a transient network hiccup, short enough to flip
+  # ownership through the failover agent within a few seconds.
+  # Every WebUI replicated space is created with is_sync=true so
+  # these settings apply to its writes.
+  synchro_quorum: 'N/2 + 1'
+  synchro_timeout: 3
 
 groups:
   default:

@@ -62,7 +62,13 @@ M.NAMES = {
 --       prepared entry must outlive a single instance so the user
 --       can prepare on one peer and commit on another (round-robin
 --       balanced cluster, no session-pinning required).
-M.CURRENT_SCHEMA_VERSION = 4
+--   5 — Flip every replicated WebUI space to `is_sync = true`.
+--       Required under the open-source supervised-failover agent:
+--       writes acknowledged by one peer MUST survive an
+--       immediate leader crash, otherwise the data the API just
+--       confirmed disappears on the next promote. Local space
+--       `_webui_meta` stays async because it never replicates.
+M.CURRENT_SCHEMA_VERSION = 5
 
 local SCHEMA_VERSION_KEY = 'schema_version'
 
@@ -113,6 +119,13 @@ local function ensure_sessions()
     if box.space[M.NAMES.SESSIONS] ~= nil then return false end
     box.schema.space.create(M.NAMES.SESSIONS, {
         if_not_exists = true,
+        -- is_sync=true → every INSERT/UPDATE/DELETE waits for
+        -- replication-quorum confirmation before commit. Required
+        -- under the supervised-failover agent: a session row that
+        -- is acknowledged to the user MUST survive an immediate
+        -- leader crash, otherwise the cookie we just issued points
+        -- at a non-existent row on the new leader.
+        is_sync = true,
         format = {
             { name = 'id',          type = 'string' },
             { name = 'user',        type = 'string' },
@@ -141,6 +154,13 @@ local function ensure_audit()
     if box.space[M.NAMES.AUDIT] ~= nil then return false end
     box.schema.space.create(M.NAMES.AUDIT, {
         if_not_exists = true,
+        -- is_sync=true → audit entries are quorum-confirmed before
+        -- the originating request returns. Compliance frameworks
+        -- (SOX/PCI/ISO27001) treat "security event recorded" as a
+        -- contract; an async row that is lost on leader crash
+        -- breaks the contract. The write latency cost is paid
+        -- once per request and is dwarfed by the request itself.
+        is_sync = true,
         format = {
             { name = 'id',          type = 'unsigned' },
             { name = 'ts',          type = 'unsigned' },
@@ -182,6 +202,12 @@ local function ensure_webhook_queue()
     if box.space[M.NAMES.WEBHOOK_QUEUE] ~= nil then return false end
     box.schema.space.create(M.NAMES.WEBHOOK_QUEUE, {
         if_not_exists = true,
+        -- is_sync=true → outbox guarantees at-least-once delivery
+        -- even when the dispatcher's leader crashes mid-tick.
+        -- Without sync, an enqueue that the API confirmed back to
+        -- the caller could be lost if the leader dies before
+        -- replication catches up, silently dropping the event.
+        is_sync = true,
         format = {
             { name = 'id',              type = 'unsigned' },
             { name = 'enqueued_at',     type = 'unsigned' },
@@ -216,6 +242,14 @@ local function ensure_prepared()
     if box.space[M.NAMES.PREPARED] ~= nil then return false end
     box.schema.space.create(M.NAMES.PREPARED, {
         if_not_exists = true,
+        -- is_sync=true → the two-phase commit contract demands
+        -- that a prepared bundle survives any single-instance
+        -- failure between prepare() and commit(). Without sync, a
+        -- prepare that the API acknowledged could vanish on
+        -- leader crash; the SPA would then see PREPARED_NOT_FOUND
+        -- on commit even though the operator was told prepare
+        -- succeeded.
+        is_sync = true,
         format = {
             { name = 'id',          type = 'string' },
             { name = 'yaml',        type = 'string' },
@@ -243,6 +277,12 @@ local function ensure_webhook_dead_letter()
     if box.space[M.NAMES.WEBHOOK_DEAD_LETTER] ~= nil then return false end
     box.schema.space.create(M.NAMES.WEBHOOK_DEAD_LETTER, {
         if_not_exists = true,
+        -- is_sync=true → the DLQ is the operator's source of
+        -- truth for "what we could not deliver". Losing entries
+        -- silently on a leader crash would mean operators see a
+        -- shorter problem list than reality and miss actionable
+        -- failures. Same quorum cost as the queue it complements.
+        is_sync = true,
         format = {
             { name = 'id',           type = 'unsigned' },
             { name = 'failed_at',    type = 'unsigned' },
