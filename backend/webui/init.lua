@@ -503,6 +503,30 @@ function M.start(opts)
     end
 
     STATE.status = 'ready'
+
+    -- Tarantool 3.x calls the role's `stop` when the role is
+    -- removed from the cluster config but does NOT guarantee it
+    -- fires on process SIGTERM / SIGINT. Register an explicit
+    -- `box.ctl.on_shutdown` so we get a chance to revoke the
+    -- failover coordinator lease + drain HTTP in-flight before
+    -- the process exits. Idempotent: STATE.shutdown_hook tracks
+    -- whether we already registered (apply() runs once per role
+    -- restart; without the guard a roll of the cluster config
+    -- would queue multiple hooks).
+    if box.ctl ~= nil and box.ctl.on_shutdown ~= nil
+            and not STATE.shutdown_hook_installed then
+        local ok = pcall(box.ctl.on_shutdown, function()
+            local sok, serr = pcall(M.stop)
+            if not sok then
+                logger.warn('on_shutdown stop raised', { err = tostring(serr) })
+            end
+        end)
+        if ok then
+            STATE.shutdown_hook_installed = true
+            logger.debug('on_shutdown hook installed')
+        end
+    end
+
     logger.info('webui role ready', { started_at = STATE.started_at })
     return true
 end
@@ -518,6 +542,18 @@ function M.stop()
     STATE.status = 'stopping'
     local uptime = STATE.started_at and (fiber.time() - STATE.started_at) or 0
     logger.info('webui role stopping', { uptime_sec = uptime })
+
+    -- Phase 0: release the failover coordinator lease FIRST, before
+    -- the HTTP drain wait. The lease TTL (3s) is shorter than the
+    -- drain budget (5s default), so deferring this would let the
+    -- lease expire naturally and cost the cluster the full TTL
+    -- worth of failover latency. agent.stop() revokes the lease
+    -- synchronously, so by the time the next phase starts, a
+    -- surviving peer can claim coordinator within ~1s.
+    if STATE.failover ~= nil then
+        pcall(function() STATE.failover.stop() end)
+        STATE.failover = nil
+    end
 
     -- Phase 1: flip the drain gate. New HTTP requests get 503 +
     -- Retry-After (Task 3a). /api/health stays open so load
@@ -580,14 +616,6 @@ function M.stop()
     if STATE.notifications ~= nil then
         pcall(function() STATE.notifications.stop() end)
         STATE.notifications = nil
-    end
-
-    -- Stop the failover agent + watcher (releases the coordinator
-    -- lease so a surviving peer can claim it in seconds rather
-    -- than waiting for the full TTL).
-    if STATE.failover ~= nil then
-        pcall(function() STATE.failover.stop() end)
-        STATE.failover = nil
     end
 
     -- Stop the suggestions scanner first — it reads state.snapshot()

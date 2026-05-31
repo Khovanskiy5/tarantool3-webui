@@ -175,7 +175,14 @@ roles_cfg:
     # accordingly. Requires `replication.failover: off`.
     failover:
       agent: true
-      lease_ttl_sec: 10
-      keepalive_interval: 3
-      appointment_interval: 2
+      # Lease TTL caps worst-case failover latency: when the
+      # coordinator AND the leader die in the same incident, the
+      # cluster waits for the lease to expire before another peer
+      # can claim coordinator and write a new appointment. TTL 3s
+      # keeps that window around 3-4 seconds total at the cost of
+      # roughly 3× more etcd keepalive traffic — negligible for
+      # the single coordinator that hits etcd.
+      lease_ttl_sec: 3
+      keepalive_interval: 1  # TTL/3 rule of thumb (2 missed = expiry)
+      appointment_interval: 1
       watcher_poll_interval_sec: 1

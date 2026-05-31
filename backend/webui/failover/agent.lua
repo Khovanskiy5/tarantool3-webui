@@ -435,6 +435,34 @@ function M.stop()
     if not STATE.enabled then return end
     STATE.stop_flag = true
     STATE.enabled = false
+    -- Best-effort SYNCHRONOUS release: if we hold the coordinator
+    -- lease, revoke it here so a surviving peer can claim the
+    -- vacancy on its next election tick (~1s) instead of waiting
+    -- for the full TTL to expire. The coordinator_loop also runs
+    -- release_lease on its way out, but that path is racy under
+    -- a fast SIGTERM — Tarantool may exit before the fiber wakes
+    -- from its sleep. Doing the revoke synchronously here closes
+    -- the window: even if the loop never gets to its cleanup, the
+    -- lease is already gone.
+    if STATE.is_coordinator and STATE.lease_id ~= nil then
+        local client = etcd_client.get_client()
+        if client ~= nil then
+            local lease_id = STATE.lease_id
+            local ok, err = pcall(function()
+                return client:lease_revoke(lease_id)
+            end)
+            if ok then
+                logger.info('coordinator lease revoked on stop',
+                    { lease_id = lease_id })
+            else
+                logger.warn('lease revoke on stop failed',
+                    { lease_id = lease_id, err = tostring(err) })
+            end
+        end
+        STATE.lease_id = nil
+        STATE.is_coordinator = false
+        STATE.coordinator_revision = nil
+    end
     logger.info('failover agent stop requested')
 end
 
