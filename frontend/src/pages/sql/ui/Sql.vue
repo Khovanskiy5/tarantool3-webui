@@ -21,7 +21,14 @@ import DataTable from 'primevue/datatable';
 import Column from 'primevue/column';
 import Button from 'primevue/button';
 import Message from 'primevue/message';
-import TabView from 'primevue/tabview';
+// PrimeVue 4: TabView/TabPanel deprecated in favor of the new
+// Tabs / TabList / Tab / TabPanels / TabPanel composable. The new
+// API takes an explicit `value` per Tab and addresses panels by
+// the matching `value` instead of relying on slot order.
+import Tabs from 'primevue/tabs';
+import TabList from 'primevue/tablist';
+import Tab from 'primevue/tab';
+import TabPanels from 'primevue/tabpanels';
 import TabPanel from 'primevue/tabpanel';
 import Tag from 'primevue/tag';
 import Dialog from 'primevue/dialog';
@@ -86,7 +93,10 @@ const error = ref<string | null>(null);
 const running = ref(false);
 const explainRunning = ref(false);
 const seqscanRequired = ref(false);
-const activeTab = ref(0);
+// PrimeVue 4 Tabs addresses panels by `value` (string-or-number).
+// We use the statement index converted to string so it matches the
+// `:value="idx"` binding on each Tab without TS friction.
+const activeTab = ref<string | number>(0);
 
 const session = useSessionStore();
 const savedQueries = ref<SavedQuery[]>([]);
@@ -502,12 +512,17 @@ function renderCell(v: unknown): string {
 
     <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 
-    <TabView v-if="result" v-model:active-index="activeTab" class="webui-sql__tabs">
+    <Tabs v-if="result" v-model:value="activeTab" class="webui-sql__tabs">
+      <TabList>
+        <Tab v-for="(stmt, idx) in result.statements" :key="idx" :value="idx">
+          {{ statementTabLabel(stmt, idx) }}
+        </Tab>
+      </TabList>
+      <TabPanels>
       <TabPanel
         v-for="(stmt, idx) in result.statements"
         :key="idx"
         :value="idx"
-        :header="statementTabLabel(stmt, idx)"
       >
         <div v-if="isError(stmt)" class="webui-sql__err">
           <Message severity="error" :closable="false">{{ stmt.error }}</Message>
@@ -566,7 +581,8 @@ function renderCell(v: unknown): string {
         </div>
         <div v-else class="webui-sql__muted">OK.</div>
       </TabPanel>
-    </TabView>
+      </TabPanels>
+    </Tabs>
 
     </div>
 
@@ -682,6 +698,32 @@ function renderCell(v: unknown): string {
   color: var(--webui-text-muted);
   font-size: 0.8rem;
   font-family: var(--webui-font-mono);
+  padding-left: 0.5rem;
+  border-left: 1px solid var(--webui-border);
+  margin-left: 0.25rem;
+}
+/* New PrimeVue 4 Tabs uses its own --p-tabs-* token family; the
+ * Aura dark scheme leaves those at light defaults, so without a
+ * bridge the active tab gets a white underline and a bright text
+ * row on top of our dark page. Alias the family here. */
+.webui-sql__tabs :deep(.p-tabs-tablist) {
+  background: transparent;
+  border-bottom: 1px solid var(--p-content-border-color);
+}
+.webui-sql__tabs :deep(.p-tab) {
+  color: var(--p-text-muted-color);
+  background: transparent;
+}
+.webui-sql__tabs :deep(.p-tab:hover) {
+  color: var(--p-text-color);
+}
+.webui-sql__tabs :deep(.p-tab[data-p-active="true"]) {
+  color: var(--p-highlight-color);
+  border-color: var(--p-highlight-background);
+}
+.webui-sql__tabs :deep(.p-tabpanels) {
+  background: transparent;
+  padding: 0.75rem 0;
 }
 .webui-sql__editor-wrap {
   position: relative;

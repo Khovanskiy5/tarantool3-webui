@@ -64,14 +64,80 @@ local function first_keyword(sql)
     return kw and kw:upper() or ''
 end
 
--- Pragmatic split by `;;`. Trims surrounding whitespace per
--- statement, drops empty pieces — the operator can paste a trailing
--- ` ;;` and we treat it as "end of last statement, no more".
+-- Strip leading SQL line-comments (`-- ...`) from one piece. The
+-- Tarantool SQL parser refuses to execute a body that is "only
+-- comments + whitespace" with the unhelpful `Failed to execute an
+-- empty SQL statement` error; we drop the preamble so a snippet
+-- like `-- header\nSELECT 1` runs as `SELECT 1`. We do NOT touch
+-- block comments (`/* ... */`) — those are far less common and
+-- accidentally stripping them would change semantics (e.g. SQL
+-- hints inside `/*+ ... */` blocks).
+local function strip_leading_comments(stmt)
+    local cleaned = stmt:gsub('^%s+', '')
+    while cleaned:sub(1, 2) == '--' do
+        cleaned = cleaned:gsub('^[^\n]*\n?', '')
+        cleaned = cleaned:gsub('^%s+', '')
+    end
+    return cleaned
+end
+M._strip_leading_comments = strip_leading_comments
+
+-- Split body into statements on `;;` while honouring line
+-- comments (`-- ... \n`) and single-quoted string literals — both
+-- can legitimately contain the `;;` sequence and a naive gmatch
+-- would shred them mid-comment / mid-literal.
+--
+-- Block comments (`/* ... */`) and double-quoted identifiers are
+-- treated like regular text on purpose: the former is rare in
+-- copy-pasted snippets and the latter is per-identifier, never
+-- spans `;;`. We can grow the lexer later when a real case
+-- appears.
 local function split_statements(body)
     local out = {}
-    for piece in (body .. ';;'):gmatch('(.-);;') do
-        local trimmed = piece:gsub('^%s+', ''):gsub('%s+$', '')
-        if #trimmed > 0 then table.insert(out, trimmed) end
+    local buf = {}
+    local i = 1
+    local n = #body
+    local in_line_comment = false
+    local in_string = false
+    while i <= n do
+        local ch = body:sub(i, i)
+        local nxt = body:sub(i + 1, i + 1)
+        if in_line_comment then
+            buf[#buf + 1] = ch
+            if ch == '\n' then in_line_comment = false end
+            i = i + 1
+        elseif in_string then
+            buf[#buf + 1] = ch
+            -- SQL doubles a quote to escape it: 'it''s' → "it's".
+            if ch == "'" and nxt == "'" then
+                buf[#buf + 1] = nxt; i = i + 2
+            elseif ch == "'" then
+                in_string = false; i = i + 1
+            else
+                i = i + 1
+            end
+        elseif ch == '-' and nxt == '-' then
+            in_line_comment = true
+            buf[#buf + 1] = ch; i = i + 1
+        elseif ch == "'" then
+            in_string = true
+            buf[#buf + 1] = ch; i = i + 1
+        elseif ch == ';' and nxt == ';' then
+            local stmt = table.concat(buf):gsub('^%s+', ''):gsub('%s+$', '')
+            if #stmt > 0 then
+                local cleaned = strip_leading_comments(stmt)
+                if #cleaned > 0 then table.insert(out, cleaned) end
+            end
+            buf = {}; i = i + 2
+        else
+            buf[#buf + 1] = ch; i = i + 1
+        end
+    end
+    -- Tail (no trailing `;;`).
+    local tail = table.concat(buf):gsub('^%s+', ''):gsub('%s+$', '')
+    if #tail > 0 then
+        local cleaned = strip_leading_comments(tail)
+        if #cleaned > 0 then table.insert(out, cleaned) end
     end
     return out
 end
