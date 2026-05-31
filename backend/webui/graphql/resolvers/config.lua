@@ -117,6 +117,47 @@ function M.mutation_commit(root, args)
     end
 
     local revision = (result and result.revision) or 0
+
+    -- Tarantool's etcd source does NOT poll automatically — it only
+    -- re-reads on `config:reload()`. Fan-out a reload to every peer
+    -- so the new YAML becomes effective immediately instead of
+    -- waiting for the next manual `forceReapplyConfig`. Best-effort;
+    -- partial failures land in the response message so the operator
+    -- can re-run the reload on stragglers.
+    local reload_outcome = ''
+    do
+        local rpc_ok, rpc = pcall(require, 'webui.cluster.rpc')
+        local peers_ok, peers = pcall(require, 'webui.cluster.peers')
+        if rpc_ok and peers_ok then
+            local all = {}
+            for name in pairs(peers.list() or {}) do table.insert(all, name) end
+            if #all > 0 then
+                local ok_call, res_each = pcall(rpc.map_eval,
+                    'require("config"):reload(); return true',
+                    {}, { timeout = 5, peers = all })
+                if ok_call then
+                    local failed = {}
+                    for name, r in pairs(res_each) do
+                        if not (r and r.ok) then
+                            table.insert(failed, name .. '=' ..
+                                tostring(r and r.err or 'unknown'))
+                        end
+                    end
+                    if #failed == 0 then
+                        reload_outcome = ' Reloaded on '
+                            .. tostring(#all) .. ' peer(s).'
+                    else
+                        reload_outcome = ' Reload partial: failed on '
+                            .. table.concat(failed, ', ') .. '.'
+                    end
+                else
+                    reload_outcome = ' Reload fan-out errored: '
+                        .. tostring(res_each) .. '.'
+                end
+            end
+        end
+    end
+
     logger.info('config commit ok', {
         prepared_id = args.prepared_id, revision = revision,
     })
@@ -124,8 +165,7 @@ function M.mutation_commit(root, args)
         revision = revision,
         applied  = true,
         message  = 'committed to etcd (revision ' .. tostring(revision)
-            .. '). Replicas pick up the change through `box.watch'
-            .. "('config.info')` and apply it within one poll tick.",
+            .. ').' .. reload_outcome,
     }
 end
 

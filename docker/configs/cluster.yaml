@@ -5,16 +5,23 @@
 # selected via `tarantool --name <name>` (the entrypoint passes
 # INSTANCE_NAME).
 #
-# The file remains the bootstrap source: instances read it at start and
-# use it to come up. After bootstrap, the WebUI's commitConfig writes
-# the YAML into etcd under `roles_cfg.webui.etcd_writer.prefix` so
-# future config edits flow through a cluster-wide source of truth
-# instead of being limited to whichever container has the file
-# mounted. We intentionally do NOT put endpoints under the top-level
-# `config.etcd` block — that would tell Tarantool to ALSO read its
-# own config from etcd at boot, which fails on an empty store
-# (chicken-and-egg) and would require the operator to seed etcd
-# before the cluster can come up.
+# The file is the bootstrap source: instances always read it at start
+# so a fresh cluster can come up even when etcd is empty. The
+# `config.etcd` block below makes Tarantool ALSO consult etcd as a
+# source — Tarantool merges both, with present etcd keys taking
+# precedence over file values. The custom community-edition shim
+# (`backend/internal/config/extras.lua` + the etcd source) treats a
+# missing `<prefix>/config/all` key as "no contribution" rather than
+# a fatal error, so the chicken-and-egg problem of an empty store is
+# resolved: file feeds the boot, the WebUI commitConfig populates
+# etcd on the first save, and subsequent reloads pick up that key.
+
+# Tarantool config-source merge: file first, then etcd. The shim
+# tolerates a missing key, so an empty etcd does not block boot.
+config:
+  etcd:
+    endpoints: ['http://etcd:2379']
+    prefix: '/tarantool/webui'
 
 credentials:
   users:

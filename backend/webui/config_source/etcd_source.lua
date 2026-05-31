@@ -45,6 +45,7 @@ local digest = require('digest')
 local json = require('json')
 local yaml = require('yaml')
 local fiber = require('fiber')
+local log = require('log')
 
 local M = {}
 M.__index = M
@@ -263,10 +264,31 @@ function M:sync(_config_module, iconfig)
             ssl_cfg, timeout
         )
         if body == nil then
+            -- Missing key: behave as a quiet no-op source so the
+            -- cluster can still boot from the file source. The
+            -- WebUI's commit flow seeds the key on first save, at
+            -- which point subsequent syncs pick it up and start
+            -- contributing. Only hard-fail on transport errors
+            -- (auth, DNS, TLS handshake) — those are operator
+            -- problems that need attention.
+            local err2 = revision
+            local err1_s = tostring(err1)
+            local err2_s = tostring(err2)
+            local is_not_found = err1_s:find('not found', 1, true)
+                or err2_s:find('not found', 1, true)
+            if is_not_found then
+                log.info(('%s key %q absent; falling back to other sources')
+                    :format(self._log_prefix, key_primary))
+                self._last_payload = {}
+                self._last_revision = nil
+                self._last_endpoint = nil
+                self._last_synced_at = fiber.time()
+                return
+            end
             error(self._log_prefix ..
                 ' cannot fetch cluster config from etcd:\n' ..
-                'primary key ' .. key_primary .. ': ' .. tostring(err1) ..
-                '\nlegacy key ' .. key_legacy .. ': ' .. tostring(revision), 0)
+                'primary key ' .. key_primary .. ': ' .. err1_s ..
+                '\nlegacy key ' .. key_legacy .. ': ' .. err2_s, 0)
         end
     end
 
