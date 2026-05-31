@@ -241,6 +241,15 @@ g.test_action_expressions_present = function()
     t.assert_type(sg._FORCE_APPLY_EXPR, 'string')
     t.assert_type(sg._RESTART_REPLICATION_EXPR, 'string')
     t.assert_str_contains(sg._FORCE_APPLY_EXPR, 'cfg:reload')
+    -- The restart-replication expression saves the current
+    -- `box.cfg.replication`, blanks it, and then re-applies it.
+    -- We assert on the structural pieces rather than a single
+    -- substring so a future refactor (e.g. wrapping in pcall)
+    -- does not silently break this guard.
     t.assert_str_contains(sg._RESTART_REPLICATION_EXPR,
-        'replication = box.cfg.replication')
+        'box.cfg.replication')
+    t.assert_str_contains(sg._RESTART_REPLICATION_EXPR,
+        'replication = saved')
+    t.assert_str_contains(sg._RESTART_REPLICATION_EXPR,
+        'replication = {}')
 end

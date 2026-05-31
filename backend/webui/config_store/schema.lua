@@ -86,6 +86,18 @@ end
 
 -- Parse + JSON-schema validate + cross-validate.
 -- Returns (parsed_table, nil) on success, (nil, errors[]) otherwise.
+--
+-- The JSON-Schema step uses Tarantool's own `cluster_config:validate()`
+-- — the same validator the runtime invokes inside `cfg:reload()`
+-- (`src/box/lua/config/init.lua:241`). Earlier this function only
+-- "touched" `config:jsonschema()` without actually validating the
+-- parsed payload, so values that the runtime rejects on reload
+-- (e.g. `config.etcd.endpoints[1]` as a table instead of a string,
+-- or `config.etcd.prefix: ""`) sailed through precommit, landed in
+-- etcd + the on-disk mirror, and only blew up on the follow-up
+-- `cfg:reload()` — leaving the cluster with an unloadable YAML and
+-- a stuck synchro queue. Running the same validator in precommit
+-- prevents that class of incident.
 function M.validate(yaml_text)
     if type(yaml_text) ~= 'string' or yaml_text == '' then
         return nil, { { path = '/', message = 'empty config' } }
@@ -94,15 +106,18 @@ function M.validate(yaml_text)
     if not ok or type(parsed) ~= 'table' then
         return nil, { { path = '/', message = 'invalid YAML: ' .. tostring(parsed) } }
     end
-    -- Best-effort JSON-Schema check via the runtime `config` module.
-    -- We do not block validation when `config` is unavailable
-    -- (e.g. unit-test environments) — the cross-validation still
-    -- runs as a safety net.
-    local config_ok, config = pcall(require, 'config')
-    if config_ok and type(config.jsonschema) == 'function' then
-        -- Best-effort touch of the live schema — never panic if the
-        -- runtime does not provide one (unit-test environments).
-        pcall(function() return config:jsonschema() end)
+    -- JSON-Schema check via Tarantool's own validator. The module
+    -- lives under `internal.config.*`, which is available whenever
+    -- this code runs inside Tarantool 3.x (production, integration
+    -- tests, luatest). When it is absent (pure-Lua sandboxes) we
+    -- fall through to cross-validation as a safety net.
+    local cc_ok, cluster_config = pcall(require, 'internal.config.cluster_config')
+    if cc_ok and type(cluster_config) == 'table'
+        and type(cluster_config.validate) == 'function' then
+        local vok, verr = pcall(cluster_config.validate, cluster_config, parsed)
+        if not vok then
+            return nil, { { path = '/', message = tostring(verr) } }
+        end
     end
     local cross_issues = M.cross_validate(parsed)
     if #cross_issues > 0 then

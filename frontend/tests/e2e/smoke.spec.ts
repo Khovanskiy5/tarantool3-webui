@@ -36,11 +36,14 @@ test.describe('smoke / M0 deployment', () => {
     // embed-assets pipeline actually packaged the build artifact.
     await expect(page).toHaveTitle(/Tarantool WebUI/i);
 
-    // The TopBar brand is the first SPA-rendered string the user
-    // sees. If JS fails to boot, this assertion fires before the
-    // generic title check above can mislead us.
+    // Without a session the router redirects the SPA to /login,
+    // so the TopBar brand is not visible at this point. The
+    // login page's subtitle is rendered by Vue and proves the
+    // bundle booted (if JS failed to mount we'd see the
+    // <noscript> banner instead). Once the SPA gains a true
+    // landing/marketing screen, swap this back to the TopBar.
     await expect(
-      page.getByText('Tarantool WebUI', { exact: false }).first(),
+      page.getByText(/Tarantool (WebUI|cluster administration)/i).first(),
     ).toBeVisible({ timeout: 15_000 });
   });
 
