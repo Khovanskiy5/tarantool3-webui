@@ -623,5 +623,3 @@ Source-документы (`frontend/src/shared/api/graphql/*.graphql`) — ко
 - Cluster state, poller, issues, suggestions → Tasks 13–20.
 - Two-phase commit + etcd → Tasks 30–34.
 - Failover, vshard, lifecycle → Tasks 46–53.
-
-См. план реализации в `.ai-factory/plans/tarantool-webui.md`.

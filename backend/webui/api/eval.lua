@@ -74,11 +74,27 @@ function M.handler(req)
         if fn == nil then error(lerr) end
         return fn()
     end
-    local ok_eval, result = pcall(run)
+    -- Preserve multi-return: `return a, b` from the snippet should
+    -- surface BOTH values (mirrors Tarantool's interactive console).
+    -- LuaJIT lacks `table.pack`, so we count with `select('#', ...)`
+    -- and pack manually before pcall destructuring drops the rest.
+    local function pack_count(...)
+        return select('#', ...), { ... }
+    end
+    local function safe_run()
+        return pack_count(run())
+    end
+    local ok_eval, count_or_err, results = pcall(safe_run)
     if ok_eval then
-        out = result
+        if count_or_err == 0 then
+            out = nil
+        elseif count_or_err == 1 then
+            out = results[1]
+        else
+            out = results
+        end
     else
-        err = tostring(result)
+        err = tostring(count_or_err)
     end
     local latency_ms = (clock.monotonic() - started) * 1000
 

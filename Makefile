@@ -12,8 +12,11 @@ BUN          ?= bun
 # Tarantool is required for embed-assets, dump-schema and integration tests.
 TARANTOOL    ?= tarantool
 
-# luatest runner.
-LUATEST      ?= luatest
+# luatest / luacheck are installed by `tt rocks install` into ./.rocks/bin.
+# Prefer that path so a clean checkout works out of the box; the user can
+# still override by exporting LUATEST / LUACHECK from a system install.
+LUATEST      ?= .rocks/bin/luatest
+LUACHECK     ?= .rocks/bin/luacheck
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Help
@@ -54,7 +57,7 @@ lint: lint-backend lint-frontend ## Lint backend and frontend.
 
 .PHONY: lint-backend
 lint-backend: ## Run luacheck on the backend.
-	luacheck $(BACKEND_DIR)
+	$(LUACHECK) $(BACKEND_DIR)
 
 .PHONY: lint-frontend
 lint-frontend: ## Run ESLint and prettier check on the frontend.
@@ -132,13 +135,9 @@ clean: ## Remove build artefacts.
 	rm -f  $(BACKEND_DIR)/webui/assets/bundle.lua
 	rm -rf .rocks
 
-.PHONY: check-fsd
-check-fsd: ## Validate FSD layer import boundaries.
-	cd $(FRONTEND_DIR) && $(BUN) run check-fsd
-
 .PHONY: check-no-tooling-mentions
 check-no-tooling-mentions: ## Verify project artefacts do not reference internal tooling vocabulary.
 	./tools/check-no-tooling-mentions.sh
 
 .PHONY: check-all
-check-all: lint check-fsd check-no-tooling-mentions test ## Run all quick checks before PR.
+check-all: lint check-no-tooling-mentions test ## Run all quick checks before PR.

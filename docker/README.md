@@ -75,7 +75,7 @@ docker run --rm \
 
 - Vendored sources (`cartridge-*/`, `tarantool-*/`)
 - `frontend/node_modules/`, `frontend/dist/`, `.rocks/`
-- Tooling-state (`.git/`, `.idea/`, `.claude/`, `.ai-factory/`, `AGENTS.md`, `CLAUDE.md`)
+- Локальный VCS / IDE state (`.git/`, `.idea/` и прочие dev-only каталоги)
 - Generated bundle (`backend/webui/assets/bundle.lua`)
 - Documentation (`docs/`, `README.md`)
 - Runtime артефакты (`*.snap`, `*.xlog`, `var/`)

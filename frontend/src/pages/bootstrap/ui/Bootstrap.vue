@@ -134,8 +134,10 @@ onMounted(async () => {
     <Message v-if="status && !status.needed" severity="info" :closable="false">
       Bootstrap is not required: <code>{{ status.reason }}</code>
       <div class="webui-bootstrap__actions">
-        <Button label="Go to cluster" icon="pi pi-arrow-right" size="small"
-          @click="router.push({ name: 'cluster' })" />
+        <Button
+          label="Go to cluster" icon="pi pi-arrow-right" size="small"
+          @click="router.push({ name: 'cluster' })"
+        />
       </div>
     </Message>
 
@@ -145,8 +147,10 @@ onMounted(async () => {
         <template #content>
           <div class="webui-bootstrap__field">
             <label for="clusterName">Cluster name</label>
-            <InputText id="clusterName" v-model="clusterName"
-              placeholder="my-cluster" />
+            <InputText
+              id="clusterName" v-model="clusterName"
+              placeholder="my-cluster"
+            />
             <small>Letters, digits, dash, underscore, dot. Used in the YAML header.</small>
           </div>
         </template>
@@ -155,8 +159,10 @@ onMounted(async () => {
       <Card class="webui-bootstrap__card">
         <template #title>Template</template>
         <template #content>
-          <Dropdown v-model="selectedTpl" :options="templateOptions"
-            option-label="label" option-value="value" />
+          <Dropdown
+            v-model="selectedTpl" :options="templateOptions"
+            option-label="label" option-value="value"
+          />
           <p v-if="selectedTplMeta" class="webui-bootstrap__desc">
             {{ selectedTplMeta.description }}
           </p>
@@ -172,9 +178,11 @@ onMounted(async () => {
       </Card>
 
       <div class="webui-bootstrap__actions">
-        <Button :loading="applying" :disabled="!renderedYaml || applying"
+        <Button
+          :loading="applying" :disabled="!renderedYaml || applying"
           icon="pi pi-check" label="Apply and bootstrap" severity="success"
-          @click="apply" />
+          @click="apply"
+        />
       </div>
 
       <Message v-if="applyInfo?.ok" severity="success" :closable="false">

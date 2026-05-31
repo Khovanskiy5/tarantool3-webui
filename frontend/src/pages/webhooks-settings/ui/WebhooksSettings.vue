@@ -118,7 +118,7 @@ onMounted(load);
     <header class="webui-webhooks__head">
       <h1>Webhooks</h1>
       <div class="webui-webhooks__head-actions">
-        <Button size="small" icon="pi pi-refresh" label="Reload" @click="load" :loading="loading" />
+        <Button size="small" icon="pi pi-refresh" label="Reload" :loading="loading" @click="load" />
       </div>
     </header>
 
@@ -130,12 +130,16 @@ onMounted(load);
     <Message v-if="error" severity="error" :closable="true" @close="error = null">{{ error }}</Message>
     <Message v-if="info" severity="success" :closable="true" @close="info = null">{{ info }}</Message>
 
-    <section class="webui-webhooks__queue" v-if="depth">
+    <section v-if="depth" class="webui-webhooks__queue">
       <Tag :value="`queue: ${depth.queue}`" severity="info" />
-      <Tag :value="`dead-letter: ${depth.dead_letter}`"
-        :severity="depth.dead_letter > 0 ? 'danger' : 'secondary'" />
-      <Button v-if="depth.dead_letter > 0" size="small" outlined severity="danger"
-        label="Clear dead-letter" icon="pi pi-trash" @click="clearDLQ" />
+      <Tag
+        :value="`dead-letter: ${depth.dead_letter}`"
+        :severity="depth.dead_letter > 0 ? 'danger' : 'secondary'"
+      />
+      <Button
+        v-if="depth.dead_letter > 0" size="small" outlined severity="danger"
+        label="Clear dead-letter" icon="pi pi-trash" @click="clearDLQ"
+      />
     </section>
 
     <DataTable :value="webhooks" :loading="loading" data-key="name" size="small" striped-rows>
@@ -153,8 +157,10 @@ onMounted(load);
       </Column>
       <Column header="Events">
         <template #body="{ data }">
-          <Tag v-for="e in (data.events ?? [])" :key="e" :value="e" severity="secondary"
-            class="webui-webhooks__chip" />
+          <Tag
+            v-for="e in (data.events ?? [])" :key="e" :value="e" severity="secondary"
+            class="webui-webhooks__chip"
+          />
         </template>
       </Column>
       <Column header="Enabled">
@@ -164,8 +170,10 @@ onMounted(load);
       </Column>
       <Column header="Secret">
         <template #body="{ data }">
-          <Tag :value="data.has_secret ? 'set' : 'none'"
-            :severity="data.has_secret ? 'success' : 'warn'" />
+          <Tag
+            :value="data.has_secret ? 'set' : 'none'"
+            :severity="data.has_secret ? 'success' : 'warn'"
+          />
         </template>
       </Column>
       <Column header="Stats">
@@ -176,16 +184,18 @@ onMounted(load);
             <span title="retried">retry {{ data.retried }}</span> ·
             <span title="dead-lettered">dlq {{ data.dead_lettered }}</span>
           </div>
-          <small class="webui-webhooks__hint" v-if="data.last_ok_at">last ok: {{ fmtTime(data.last_ok_at) }}</small>
-          <small class="webui-webhooks__err"   v-if="data.last_error">last err: <code>{{ data.last_error }}</code></small>
+          <small v-if="data.last_ok_at" class="webui-webhooks__hint">last ok: {{ fmtTime(data.last_ok_at) }}</small>
+          <small v-if="data.last_error" class="webui-webhooks__err">last err: <code>{{ data.last_error }}</code></small>
         </template>
       </Column>
       <Column header="Action">
         <template #body="{ data }">
-          <Button size="small" icon="pi pi-send" label="Test"
+          <Button
+            size="small" icon="pi pi-send" label="Test"
             :loading="testing === data.name"
             :disabled="!data.enabled"
-            @click="test(data.name)" />
+            @click="test(data.name)"
+          />
         </template>
       </Column>
     </DataTable>

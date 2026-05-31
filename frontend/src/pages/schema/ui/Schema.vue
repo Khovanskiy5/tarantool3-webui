@@ -46,12 +46,12 @@ onMounted(load);
     </header>
     <p v-if="error" class="webui-schema__error">{{ error }}</p>
     <DataTable
+      v-model:expanded-rows="expanded"
       :value="spaces"
       :loading="loading"
-      data-key="id"
+      :data-key="'id'"
       size="small"
       striped-rows
-      v-model:expanded-row-keys="expanded"
       :row-hover="true"
     >
       <Column expander style="width: 2rem" />

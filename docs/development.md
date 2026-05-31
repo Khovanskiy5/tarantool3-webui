@@ -53,22 +53,19 @@ make dev
 | `make gen-types-watch` | Watch SDL и регенерация TS-типов |
 | `make embed-assets` | Упаковка `frontend/dist/` в `backend/webui/assets/bundle.lua` |
 | `make docker-build` | Сборка Docker-образа инстанса |
-| `make check-fsd` | Валидация направлений импортов FSD |
-| `make check-no-tooling-mentions` | Проверка отсутствия внутренних tooling-упоминаний |
-| `make check-all` | Полный набор pre-PR проверок: lint + FSD + tooling-mentions + test |
+| `make check-all` | Полный набор pre-PR проверок: lint + test |
 | `make clean` | Удалить артефакты сборки |
 
 ## Документация — обязательное обновление per task
 
-После реализации **каждой** задачи плана соответствующая документация обновляется в **том же коммите**, что и код. Это hard rule, см. `.ai-factory/rules/base.md` (раздел «Обновление документации после каждой задачи»).
+После реализации **каждой** задачи соответствующая документация обновляется в **том же коммите**, что и код. Это hard rule проекта.
 
 Что проверять при подготовке коммита:
 
 - Изменился публичный API (GraphQL/REST) → `docs/api/*` + `docs/api/error-codes.md`.
 - Изменилось поведение для оператора → `docs/operations.md` и/или `docs/troubleshooting.md`.
-- Появились новые модули backend/frontend → `docs/architecture.md` + `AGENTS.md`.
-- Появились новые зависимости/интеграции → `README.md` + `.ai-factory/DESCRIPTION.md`.
-- Завершена задача в плане → чекбокс/статус в `.ai-factory/plans/tarantool-webui.md`.
+- Появились новые модули backend/frontend → `docs/architecture.md`.
+- Появились новые зависимости/интеграции → `README.md`.
 
 Пропуск обновления — баг, не warning.
 

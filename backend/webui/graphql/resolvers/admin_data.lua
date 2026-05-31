@@ -54,8 +54,14 @@ function M.query_spaces(root, args)
             local indexes = {}
             local space = box.space[name]
             if space ~= nil then
-                for _, idx in pairs(space.index) do
-                    if type(idx) == 'table' and idx.parts ~= nil then
+                -- `space.index` is a hybrid map: each index is reachable
+                -- by both its numeric id (0, 1, ...) AND its string name.
+                -- pairs() yields every index twice; iterate numeric keys
+                -- only to get a single entry per index.
+                for k, idx in pairs(space.index) do
+                    if type(k) == 'number'
+                            and type(idx) == 'table'
+                            and idx.parts ~= nil then
                         table.insert(indexes, describe_index(idx))
                     end
                 end

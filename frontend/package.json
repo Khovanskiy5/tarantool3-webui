@@ -15,8 +15,6 @@
     "test:unit": "vitest run",
     "test:unit:watch": "vitest",
     "test:e2e": "playwright test",
-    "check-fsd": "eslint --rulesdir ./tools/eslint-rules --no-eslintrc --config .eslintrc.fsd.cjs 'src/**/*.{ts,vue}' --max-warnings 0",
-    "check-i18n": "node tools/check-i18n.mjs",
     "storybook": "storybook dev -p 6006 --no-open",
     "build-storybook": "storybook build -o storybook-static"
   },

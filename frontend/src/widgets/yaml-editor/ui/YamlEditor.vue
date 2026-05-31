@@ -5,13 +5,6 @@
 // dynamically on mount — keeping it out of the initial SPA bundle.
 // Workers come through Vite's native `?worker` query which Rollup
 // understands at build time without a custom plugin.
-//
-// We do NOT wire `monaco-yaml` (schema-driven autocomplete) here:
-// backend validation is the source of truth, and the SPA already
-// surfaces per-path issues from `validateConfig` / `proposeConfig`.
-// Adding `monaco-yaml` later requires the JSON schema from
-// `Query.configJsonSchema` — pass it via the optional `schema` prop
-// to keep the integration point ready.
 
 import { onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import type * as Monaco from 'monaco-editor';
@@ -20,11 +13,9 @@ const props = withDefaults(defineProps<{
   modelValue: string;
   readonly?: boolean;
   height?: string;
-  schema?: string | null;
 }>(), {
   readonly: false,
   height: '60vh',
-  schema: null,
 });
 
 const emit = defineEmits<{

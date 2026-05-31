@@ -35,7 +35,7 @@ onBeforeUnmount(stopTimer);
     <header class="webui-metrics__head">
       <h1>Metrics</h1>
       <div class="webui-metrics__controls">
-        <Button size="small" icon="pi pi-refresh" label="Refresh" @click="load" :loading="loading" />
+        <Button size="small" icon="pi pi-refresh" label="Refresh" :loading="loading" @click="load" />
         <label class="webui-metrics__live">
           <ToggleSwitch v-model="live" @update:model-value="(v: boolean) => v ? startTimer() : stopTimer()" />
           <span>Live (5s)</span>

@@ -262,12 +262,9 @@ function M.status(opts)
                 reason = 'etcd already holds a config key',
             }
         end
-        if existing == nil then
-            -- get() returned nil — could be `KEY_NOT_FOUND` (good)
-            -- or a transport error (ambiguous). Defer the decision
-            -- to the file check below; the operator will see the
-            -- explicit reason text.
-        end
+        -- existing == nil: get() returned nil — could be KEY_NOT_FOUND
+        -- (good) or a transport error (ambiguous). Defer to the file
+        -- check below; the operator sees the explicit reason text.
     end
 
     if local_yaml ~= nil and #local_yaml > 0 then

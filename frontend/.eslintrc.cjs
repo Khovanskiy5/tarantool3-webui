@@ -58,7 +58,7 @@ module.exports = {
     '@typescript-eslint/no-explicit-any': 'warn',
     // Vue templates compile away unused props; this rule flags them.
     'vue/no-unused-properties': ['warn', { groups: ['props'] }],
-    // Match the project naming convention from `.ai-factory/rules/base.md`.
+    // Match the project naming convention: PascalCase for components.
     'vue/component-name-in-template-casing': ['error', 'PascalCase'],
     // The multi-word rule is relaxed: under FSD, slice folder names
     // disambiguate components, so `Sidebar.vue` inside `widgets/sidebar/`

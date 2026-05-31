@@ -16,7 +16,7 @@ read_globals = {
     '_TARANTOOL',
 
     -- Standard library extensions Tarantool ships with.
-    table = { fields = { 'copy', 'deepcopy', 'clear' } },
+    table = { fields = { 'copy', 'deepcopy', 'clear', 'unpack' } },
     string = { fields = {
         'startswith', 'endswith', 'split', 'strip',
         'lstrip', 'rstrip', 'hex', 'fromhex'
@@ -75,4 +75,20 @@ files['tools/'] = {
     -- ceiling defined for library code.
     std = '+luajit',
     max_cyclomatic_complexity = 60,
+}
+
+-- M.start orchestrates the role bootstrap end-to-end (config read,
+-- session/audit init, HTTP routes, fiber pool spin-up, graceful
+-- shutdown hook). Splitting it would scatter the boot order across
+-- helpers and obscure the single linear sequence.
+files['backend/webui/init.lua'] = {
+    max_cyclomatic_complexity = 35,
+}
+
+-- M.send walks the SMTP protocol state machine (HELO/STARTTLS/AUTH/
+-- MAIL/RCPT/DATA/QUIT, each with its own error branches). It is
+-- inherently sequential and reads top-to-bottom; refactoring would
+-- replace one readable function with several less readable ones.
+files['backend/webui/notifications/smtp.lua'] = {
+    max_cyclomatic_complexity = 40,
 }
