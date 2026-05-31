@@ -5,7 +5,7 @@ import Column from 'primevue/column';
 import Tag from 'primevue/tag';
 import Button from 'primevue/button';
 import Message from 'primevue/message';
-import Select from 'primevue/select';
+import Dropdown from 'primevue/dropdown';
 
 import { getClient } from '@/shared/api/graphql';
 
@@ -116,7 +116,7 @@ onMounted(load);
     <section v-if="knownGroups.length > 0" class="webui-vshard__bootstrap">
       <header class="webui-vshard__bootstrap-head">
         <h2>Bootstrap</h2>
-        <Select v-model="selectedGroup" :options="groupOptions" placeholder="Select group" @update:model-value="load" />
+        <Dropdown v-model="selectedGroup" :options="groupOptions" placeholder="Select group" size="small" @update:model-value="load" />
       </header>
       <Message v-if="canBoot && !canBoot.ok" severity="warn" :closable="false">
         Preconditions failed for <code>{{ canBoot.group }}</code>:

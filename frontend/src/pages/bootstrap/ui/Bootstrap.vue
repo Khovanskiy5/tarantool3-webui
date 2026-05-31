@@ -11,7 +11,7 @@ import { useRouter } from 'vue-router';
 import Button from 'primevue/button';
 import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
-import Select from 'primevue/select';
+import Dropdown from 'primevue/dropdown';
 import Card from 'primevue/card';
 
 import { getClient } from '@/shared/api/graphql';
@@ -155,7 +155,7 @@ onMounted(async () => {
       <Card class="webui-bootstrap__card">
         <template #title>Template</template>
         <template #content>
-          <Select v-model="selectedTpl" :options="templateOptions"
+          <Dropdown v-model="selectedTpl" :options="templateOptions"
             option-label="label" option-value="value" />
           <p v-if="selectedTplMeta" class="webui-bootstrap__desc">
             {{ selectedTplMeta.description }}

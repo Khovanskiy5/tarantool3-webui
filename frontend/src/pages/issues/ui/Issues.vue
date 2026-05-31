@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia';
+import Dropdown from 'primevue/dropdown';
+import Button from 'primevue/button';
 
 import { useIssueStore, IssueRow } from '@/entities/issue';
 
@@ -10,14 +12,14 @@ const severityOptions = [
   { value: null, label: 'all' },
   { value: 'CRITICAL', label: 'critical' },
   { value: 'WARNING', label: 'warning' },
-] as const;
+];
 
 const scopeOptions = [
   { value: null, label: 'all' },
   { value: 'CLUSTER', label: 'cluster' },
   { value: 'REPLICASET', label: 'replicaset' },
   { value: 'INSTANCE', label: 'instance' },
-] as const;
+];
 
 const categoryOptions = [
   { value: null, label: 'all' },
@@ -25,7 +27,7 @@ const categoryOptions = [
   { value: 'MEMORY', label: 'memory' },
   { value: 'CLOCK', label: 'clock' },
   { value: 'CONFIG', label: 'config' },
-] as const;
+];
 </script>
 
 <template>
@@ -45,42 +47,50 @@ const categoryOptions = [
 
     <fieldset class="webui-issues-page__filters">
       <label>
-        Severity
-        <select v-model="filters.severity">
-          <option
-            v-for="opt in severityOptions"
-            :key="String(opt.value)"
-            :value="opt.value"
-          >{{ opt.label }}</option>
-        </select>
+        <span class="webui-issues-page__filter-label">Severity</span>
+        <Dropdown
+          v-model="filters.severity"
+          :options="severityOptions"
+          option-label="label"
+          option-value="value"
+          placeholder="all"
+          size="small"
+          class="webui-issues-page__select"
+        />
       </label>
       <label>
-        Scope
-        <select v-model="filters.scope">
-          <option
-            v-for="opt in scopeOptions"
-            :key="String(opt.value)"
-            :value="opt.value"
-          >{{ opt.label }}</option>
-        </select>
+        <span class="webui-issues-page__filter-label">Scope</span>
+        <Dropdown
+          v-model="filters.scope"
+          :options="scopeOptions"
+          option-label="label"
+          option-value="value"
+          placeholder="all"
+          size="small"
+          class="webui-issues-page__select"
+        />
       </label>
       <label>
-        Category
-        <select v-model="filters.category">
-          <option
-            v-for="opt in categoryOptions"
-            :key="String(opt.value)"
-            :value="opt.value"
-          >{{ opt.label }}</option>
-        </select>
+        <span class="webui-issues-page__filter-label">Category</span>
+        <Dropdown
+          v-model="filters.category"
+          :options="categoryOptions"
+          option-label="label"
+          option-value="value"
+          placeholder="all"
+          size="small"
+          class="webui-issues-page__select"
+        />
       </label>
-      <button
+      <Button
         type="button"
+        label="Reset"
+        severity="secondary"
+        outlined
+        size="small"
         class="webui-issues-page__reset"
         @click="store.resetFilters"
-      >
-        Reset
-      </button>
+      />
     </fieldset>
 
     <p v-if="fetching && items.length === 0" class="webui-issues-page__empty">
@@ -161,31 +171,21 @@ const categoryOptions = [
   display: inline-flex;
   flex-direction: column;
   gap: 0.25rem;
+}
+
+.webui-issues-page__filter-label {
   font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--webui-text-muted);
 }
 
-.webui-issues-page__filters select {
-  background: rgba(255, 255, 255, 0.02);
-  color: var(--webui-text);
-  border: 1px solid var(--webui-border);
-  border-radius: var(--webui-radius);
-  padding: 0.3rem 0.55rem;
-  font: inherit;
-  font-size: 0.85rem;
+.webui-issues-page__select {
+  min-width: 9rem;
 }
 
 .webui-issues-page__reset {
-  background: transparent;
-  color: var(--webui-text);
-  border: 1px solid var(--webui-border);
-  border-radius: var(--webui-radius);
-  padding: 0.25rem 0.75rem;
-  cursor: pointer;
   align-self: flex-end;
-  font: inherit;
 }
 
 .webui-issues-page__list {

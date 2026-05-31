@@ -90,9 +90,10 @@ const submit = async () => {
   gap: 0.75rem;
   width: 320px;
   padding: 2rem;
+  border: 1px solid var(--p-content-border-color, transparent);
   border-radius: 12px;
   background: var(--p-content-background, #fff);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
 }
 .webui-login-form__title {
   margin: 0;
@@ -114,5 +115,26 @@ const submit = async () => {
 }
 .webui-login-form__submit {
   margin-top: 0.5rem;
+}
+
+/* PrimeVue Password puts input + toggle-icon side-by-side in a flex
+ * wrapper, so the input ends short of the wrapper edge and the icon
+ * sits on a strip of bare wrapper background. Stretch the input to
+ * fill the wrapper and add right-padding so the icon overlays inside. */
+.webui-login-form :deep(.p-password) {
+  display: block;
+  width: 100%;
+}
+.webui-login-form :deep(.p-password input) {
+  width: 100%;
+  padding-inline-end: 2.25rem;
+}
+.webui-login-form :deep(.p-password-toggle-mask-icon) {
+  right: 0.75rem;
+  color: var(--p-text-muted-color, #888);
+  cursor: pointer;
+}
+.webui-login-form :deep(input.p-inputtext) {
+  width: 100%;
 }
 </style>

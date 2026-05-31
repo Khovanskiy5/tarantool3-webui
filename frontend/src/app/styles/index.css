@@ -75,3 +75,92 @@ a:hover {
     scroll-behavior: auto !important;
   }
 }
+
+/*
+ * PrimeVue 4 (Aura) dark-mode bridge.
+ *
+ * Aura's dark scheme overrides only semantic form-field tokens
+ * (`--p-form-field-*`). Per-component tokens
+ * (`--p-inputtext-*`, `--p-select-*`, `--p-datatable-*` …) keep their
+ * LIGHT root values, so inputs and DataTable surfaces render white
+ * over the dark shell. We alias each component token to the dark
+ * semantic token here so PrimeVue components stay consistent.
+ */
+.webui-dark {
+  --p-inputtext-background: var(--p-form-field-background);
+  --p-inputtext-color: var(--p-form-field-color);
+  --p-inputtext-border-color: var(--p-form-field-border-color);
+  --p-inputtext-hover-border-color: var(--p-form-field-hover-border-color);
+  --p-inputtext-focus-border-color: var(--p-form-field-focus-border-color);
+  --p-inputtext-placeholder-color: var(--p-form-field-placeholder-color);
+  --p-inputtext-filled-background: var(--p-form-field-filled-background);
+  --p-inputtext-filled-focus-background: var(--p-form-field-filled-focus-background);
+  --p-inputtext-disabled-background: var(--p-form-field-disabled-background);
+  --p-inputtext-disabled-color: var(--p-form-field-disabled-color);
+
+  --p-textarea-background: var(--p-form-field-background);
+  --p-textarea-color: var(--p-form-field-color);
+  --p-textarea-border-color: var(--p-form-field-border-color);
+  --p-textarea-hover-border-color: var(--p-form-field-hover-border-color);
+  --p-textarea-focus-border-color: var(--p-form-field-focus-border-color);
+  --p-textarea-placeholder-color: var(--p-form-field-placeholder-color);
+
+  --p-password-background: var(--p-form-field-background);
+  --p-password-color: var(--p-form-field-color);
+  --p-password-overlay-background: var(--p-content-background);
+  --p-password-overlay-color: var(--p-form-field-color);
+
+  --p-select-background: var(--p-form-field-background);
+  --p-select-color: var(--p-form-field-color);
+  --p-select-border-color: var(--p-form-field-border-color);
+  --p-select-hover-border-color: var(--p-form-field-hover-border-color);
+  --p-select-focus-border-color: var(--p-form-field-focus-border-color);
+  --p-select-placeholder-color: var(--p-form-field-placeholder-color);
+  --p-select-dropdown-color: var(--p-text-muted-color);
+  --p-select-overlay-background: var(--p-content-background);
+  --p-select-overlay-color: var(--p-form-field-color);
+  --p-select-overlay-border-color: var(--p-content-border-color);
+  --p-select-option-color: var(--p-form-field-color);
+  --p-select-option-focus-background: var(--p-content-hover-background);
+  --p-select-option-focus-color: var(--p-form-field-color);
+  --p-select-option-selected-background: var(--p-highlight-background);
+  --p-select-option-selected-color: var(--p-highlight-color);
+  --p-select-option-selected-focus-background: var(--p-highlight-background);
+  --p-select-option-selected-focus-color: var(--p-highlight-color);
+
+  --p-multiselect-background: var(--p-form-field-background);
+  --p-multiselect-color: var(--p-form-field-color);
+  --p-multiselect-border-color: var(--p-form-field-border-color);
+  --p-multiselect-overlay-background: var(--p-content-background);
+  --p-multiselect-overlay-color: var(--p-form-field-color);
+
+  --p-autocomplete-background: var(--p-form-field-background);
+  --p-autocomplete-color: var(--p-form-field-color);
+  --p-autocomplete-overlay-background: var(--p-content-background);
+  --p-autocomplete-overlay-color: var(--p-form-field-color);
+
+  --p-datatable-header-background: var(--p-content-background);
+  --p-datatable-header-color: var(--p-text-color);
+  --p-datatable-header-border-color: var(--p-content-border-color);
+  --p-datatable-header-cell-background: var(--p-content-background);
+  --p-datatable-header-cell-color: var(--p-text-muted-color);
+  --p-datatable-header-cell-border-color: var(--p-content-border-color);
+  --p-datatable-header-cell-hover-background: var(--p-content-hover-background);
+  --p-datatable-row-background: var(--p-content-background);
+  --p-datatable-row-color: var(--p-text-color);
+  --p-datatable-row-striped-background: rgba(255, 255, 255, 0.025);
+  --p-datatable-row-hover-background: var(--p-content-hover-background);
+  --p-datatable-row-hover-color: var(--p-text-color);
+  --p-datatable-row-selected-background: var(--p-highlight-background);
+  --p-datatable-row-selected-color: var(--p-highlight-color);
+  --p-datatable-body-cell-border-color: var(--p-content-border-color);
+  --p-datatable-footer-cell-background: var(--p-content-background);
+  --p-datatable-footer-cell-color: var(--p-text-color);
+  --p-datatable-footer-cell-border-color: var(--p-content-border-color);
+  --p-datatable-footer-background: var(--p-content-background);
+  --p-datatable-footer-color: var(--p-text-color);
+  --p-datatable-footer-border-color: var(--p-content-border-color);
+  --p-datatable-border-color: var(--p-content-border-color);
+  --p-datatable-paginator-top-border-color: var(--p-content-border-color);
+  --p-datatable-paginator-bottom-border-color: var(--p-content-border-color);
+}
