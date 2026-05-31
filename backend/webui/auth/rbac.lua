@@ -121,6 +121,7 @@ M.GRAPHQL_FIELD = {
     promote       = 'admin',
     expel         = 'admin',
     joinInstance  = 'admin',
+    rebootstrapInstance = 'admin',
     setUserRoles  = 'admin',
     setLabels     = 'operator',
     setVshardWeight = 'admin',

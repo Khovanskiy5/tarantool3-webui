@@ -1,4 +1,3 @@
-# Tarantool 3.7 cluster configuration for the local dev compose.
 #
 # A single YAML file describes all three instances and is mounted into
 # every container. The instance to bring up inside a given container is
@@ -186,3 +185,5 @@ roles_cfg:
       keepalive_interval: 1  # TTL/3 rule of thumb (2 missed = expiry)
       appointment_interval: 1
       watcher_poll_interval_sec: 1
+# atomic-mirror-probe 1780238997
+# history-fix-probe 1780239417

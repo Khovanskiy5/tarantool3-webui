@@ -29,9 +29,9 @@ local function require_role(root, field)
 end
 
 -- The local config source path is taken from the env (set by the
--- entrypoint script that boots Tarantool 3.x). Returning whatever
--- is on disk gives operators a starting point for the editor even
--- before etcd is wired.
+-- entrypoint script that boots Tarantool 3.x). Used as a fallback
+-- when etcd is unwired or empty — operators get a starting point
+-- for the editor on a fresh cluster.
 local function read_local_yaml()
     -- ipairs stops at the first nil, so we can't put env getters
     -- straight into the table literal. Build the list defensively.
@@ -52,8 +52,43 @@ local function read_local_yaml()
     return '', 'memory'
 end
 
+-- Source-of-truth precedence: etcd > file > empty.
+--
+-- etcd is the SoT once commitConfig populates `<prefix>/config`. We
+-- read from there so the editor reflects what the cluster is actually
+-- running on, not the boot-time file (which is immutable in the
+-- container and would always reset the editor on reload).
+--
+-- The fallback file read covers two cases:
+--   1. Fresh cluster, etcd empty — give operators the bootstrap YAML.
+--   2. etcd unreachable — surface the file at least, with `source=file`
+--      so the operator knows the dataset is stale.
 function M.query_current(root)
     require_role(root, 'config')
+
+    local client, client_err = etcd_client.get_client()
+    if client ~= nil then
+        local kv, e = client:get('config')
+        if kv ~= nil and kv.value ~= nil and #kv.value > 0 then
+            logger.debug('config read from etcd', {
+                revision = kv.revision, size = #kv.value,
+            })
+            return {
+                yaml     = kv.value,
+                revision = kv.revision or 0,
+                source   = 'etcd',
+            }
+        end
+        if e ~= nil then
+            -- Don't fail the query — surface the etcd error path
+            -- through `source` and fall back to the file so the
+            -- editor still renders something useful.
+            logger.warn('config etcd read failed', { err = e.message })
+        end
+    elseif client_err then
+        logger.debug('config etcd unavailable', { reason = client_err })
+    end
+
     local yaml, source = read_local_yaml()
     return { yaml = yaml, revision = 0, source = source }
 end
@@ -132,14 +167,34 @@ end
 
 function M.mutation_prepare(root, args)
     require_role(root, 'proposeConfig')
-    local current_yaml = read_local_yaml()
+    -- Diff against the LIVE etcd YAML (etcd is the source of truth
+    -- after the SoT switch). Falling back to the disk file would let
+    -- a no-op edit slip through whenever the file and etcd disagree
+    -- (which they shouldn't, but defensive — etcd wins).
+    local current_yaml
+    do
+        local client = etcd_client.get_client()
+        if client ~= nil then
+            local kv = select(1, client:get('config'))
+            if kv ~= nil and kv.value ~= nil then current_yaml = kv.value end
+        end
+        if current_yaml == nil then current_yaml = read_local_yaml() end
+    end
     local res, errs = twophase.prepare({
         yaml = args.yaml or '',
         user = root and root.user,
         current_yaml = current_yaml,
     })
     if res == nil then
-        error('VALIDATION_FAILED: ' .. (errs and errs[1] and errs[1].message or '?'))
+        -- Distinct error class for no-op submissions so the SPA can
+        -- render an inline info banner instead of a red validation
+        -- error. Anything else stays under VALIDATION_FAILED.
+        local first = errs and errs[1] or {}
+        if first.code == 'NO_CHANGES' then
+            error('NO_CHANGES: ' .. tostring(first.message
+                or 'nothing to commit'))
+        end
+        error('VALIDATION_FAILED: ' .. tostring(first.message or '?'))
     end
     -- The plain Lua table comes through verbatim; the rock turns
     -- the `diff` list into GraphQL DiffOp records.
@@ -234,6 +289,19 @@ function M.mutation_commit(root, args)
         end
     end
 
+    local mirror_outcome = ''
+    if result and result.file_mirror then
+        local m = result.file_mirror
+        if #m.failed == 0 and #m.ok > 0 then
+            mirror_outcome = ' cluster.yaml mirrored on ' ..
+                tostring(#m.ok) .. ' instance(s).'
+        elseif #m.failed > 0 then
+            mirror_outcome = ' cluster.yaml mirror partial: ok=' ..
+                tostring(#m.ok) .. ', failed=' ..
+                table.concat(m.failed, '; ') .. '.'
+        end
+    end
+
     logger.info('config commit ok', {
         prepared_id = args.prepared_id, revision = revision,
     })
@@ -241,7 +309,7 @@ function M.mutation_commit(root, args)
         revision = revision,
         applied  = true,
         message  = 'committed to etcd (revision ' .. tostring(revision)
-            .. ').' .. reload_outcome,
+            .. ').' .. reload_outcome .. mirror_outcome,
     }
 end
 

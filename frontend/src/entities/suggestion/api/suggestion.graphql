@@ -44,6 +44,18 @@ mutation ApplyRestartReplication($instanceUuids: [String!]!) {
   }
 }
 
+# Destructive recovery for a follower stuck in split-brain. Wipes
+# WAL/snap on the target and triggers Docker restart-policy re-launch
+# — replication catches up fresh from healthy peers.
+mutation RebootstrapInstance($alias: String!) {
+  rebootstrapInstance(alias: $alias) {
+    ok
+    alias
+    deleted_count
+    message
+  }
+}
+
 fragment ForceApplyFields on ForceApplySuggestion {
   id
   instanceAlias

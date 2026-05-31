@@ -138,6 +138,13 @@ local function register_builtin_routes(httpd, role_opts)
     if diag_ok then
         httpd:route({ path = '/api/diagnostics/bundle', method = 'GET' },
             middleware.wrap('diagnostics', diag.handler, { auth = 'admin' }))
+        -- Destructive recovery: wipe WAL/snap on this instance and
+        -- exit so Docker's restart policy spins up a fresh process
+        -- that bootstraps clean from healthy peers. Refused on the
+        -- synchro queue owner (would lose uncommitted txns).
+        httpd:route({ path = '/api/diagnostics/rebootstrap', method = 'POST' },
+            middleware.wrap('diagnostics_rebootstrap',
+                diag.rebootstrap_handler, { auth = 'admin' }))
     end
 
     -- Lua/SQL eval (Task 44).

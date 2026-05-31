@@ -311,6 +311,52 @@ function M.start(opts)
         return { cleared = count }
     end)
 
+    -- Re-bootstrap this instance: wipe WAL/snap and trigger a process
+    -- exit so Docker's restart policy launches a fresh process that
+    -- bootstraps clean from healthy peers. Used by the rebootstrap
+    -- GraphQL mutation to fan out a recovery action to a specific
+    -- follower (queue owner refused — see api.diagnostics).
+    rawset(_G, 'webui_rebootstrap_remote', function()
+        local ok_mod, diag = pcall(require, 'webui.api.diagnostics')
+        if not ok_mod then return { err = 'diagnostics module unavailable' } end
+        local fake_req = { request_id = 'peer:rebootstrap' }
+        local resp = diag.rebootstrap_handler(fake_req)
+        if type(resp) ~= 'table' then return { err = 'bad response' } end
+        local body_ok, body = pcall(require('json').decode, resp.body or '')
+        if not body_ok or type(body) ~= 'table' then
+            return { err = 'rebootstrap response unparseable',
+                     status = resp.status }
+        end
+        if body.error then
+            return { err = body.error.code or 'UNKNOWN',
+                     message = body.error.message,
+                     status = resp.status }
+        end
+        return {
+            ok            = body.ok == true,
+            instance      = body.instance,
+            deleted_count = body.deleted_count,
+            message       = body.message,
+            status        = resp.status,
+        }
+    end)
+
+    -- Mirror the committed cluster YAML to the on-disk file on this
+    -- peer. The two-phase commit pipeline fans this call out to every
+    -- instance after the etcd put lands so the file (recovery snapshot)
+    -- always matches the etcd source of truth. Atomic write semantics
+    -- live in webui.config_store.file_writer.
+    rawset(_G, 'webui_config_file_write_remote', function(payload)
+        if type(payload) ~= 'string' or #payload == 0 then
+            return { err = 'EMPTY_PAYLOAD' }
+        end
+        local ok_mod, fw = pcall(require, 'webui.config_store.file_writer')
+        if not ok_mod then return { err = 'file_writer unavailable' } end
+        local ok, res = fw.write_local(payload)
+        if ok == nil then return { err = tostring(res) } end
+        return { path = res }
+    end)
+
     -- Expose _webui_prepared replace / delete over net.box. The
     -- two-phase commit pipeline stores its prepared bundle there;
     -- a follower forwards prepare() / commit() writes through these

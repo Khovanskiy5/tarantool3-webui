@@ -21,6 +21,8 @@ M.MAX_HISTORY = 200
 
 -- ── Pure helpers ─────────────────────────────────────────────────────
 
+-- Full-path form (with the configured client prefix) — used by parse
+-- helpers and tests that match against fully-qualified etcd keys.
 function M.history_key(prefix, revision)
     return string.format('%s/history/%010d', prefix or '/webui', revision or 0)
 end
@@ -28,6 +30,19 @@ end
 function M.metadata_key(prefix, revision)
     return string.format('%s/history-meta/%010d',
         prefix or '/webui', revision or 0)
+end
+
+-- Relative-path form (NO leading prefix) — what every `etcd:*` method
+-- on the client expects, because the client adds the configured
+-- `state.prefix` itself via `full_key()`. Passing the full path here
+-- would double-prefix the write and the matching `list()` reader
+-- would never find it.
+local function rel_history_key(revision)
+    return string.format('history/%010d', revision or 0)
+end
+
+local function rel_metadata_key(revision)
+    return string.format('history-meta/%010d', revision or 0)
 end
 
 -- Extract the integer revision from a `<prefix>/history/<010d-rev>`
@@ -58,7 +73,7 @@ end
 -- Persist a full YAML snapshot under `<prefix>/history/<010d-rev>`.
 function M.record(etcd, revision, yaml)
     if etcd == nil then return nil, 'NO_ETCD' end
-    local _, err = etcd:put(M.history_key(etcd.prefix, revision), yaml)
+    local _, err = etcd:put(rel_history_key(revision), yaml)
     if err then return nil, err end
     return true
 end
@@ -72,14 +87,14 @@ function M.record_metadata(etcd, revision, meta)
     if etcd == nil then return nil, 'NO_ETCD' end
     local ok, encoded = pcall(json.encode, meta or {})
     if not ok then return nil, 'ENCODE_FAILED' end
-    local _, err = etcd:put(M.metadata_key(etcd.prefix, revision), encoded)
+    local _, err = etcd:put(rel_metadata_key(revision), encoded)
     if err then return nil, err end
     return true
 end
 
 function M.get(etcd, revision)
     if etcd == nil then return nil, 'NO_ETCD' end
-    return etcd:get(M.history_key(etcd.prefix, revision))
+    return etcd:get(rel_history_key(revision))
 end
 
 -- Read metadata for a revision; returns (table, nil) on success,
@@ -87,7 +102,7 @@ end
 -- error. JSON decode failure surfaces as (nil, 'DECODE_FAILED').
 function M.get_metadata(etcd, revision)
     if etcd == nil then return nil, 'NO_ETCD' end
-    local kv, err = etcd:get(M.metadata_key(etcd.prefix, revision))
+    local kv, err = etcd:get(rel_metadata_key(revision))
     if err then return nil, err end
     if kv == nil or kv.value == nil then return nil, nil end
     local ok, decoded = pcall(json.decode, kv.value)
@@ -129,11 +144,11 @@ function M.list(etcd, opts)
     -- support `keys-only` per-call — we accept the over-fetch
     -- (cap = MAX_HISTORY items, payload of one YAML each is small
     -- enough to be negligible at admin scale).
-    local prefix = string.format('%s/history/', etcd.prefix)
-    -- Strip the leading state.prefix because range_prefix accepts a
-    -- prefix RELATIVE to the configured prefix (mirroring :get()).
-    local rel = prefix:sub(#etcd.prefix + 1)
-    local range, err = etcd:range_prefix(rel)
+    --
+    -- range_prefix accepts a prefix RELATIVE to the configured
+    -- client prefix (mirroring :get() / :put()), so we pass plain
+    -- 'history/' — the client adds `state.prefix` itself.
+    local range, err = etcd:range_prefix('history/')
     if range == nil then return nil, err end
 
     local rows = {}

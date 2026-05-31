@@ -191,7 +191,7 @@ onMounted(load);
         <code>{{ agent.watcher_last_leader ?? '—' }}</code>, currently
         <strong>{{ agent.watcher_current_ro === false ? 'leader (RW)'
           : agent.watcher_current_ro === true ? 'follower (RO)'
-          : 'unknown' }}</strong>.
+            : 'unknown' }}</strong>.
       </p>
     </section>
 

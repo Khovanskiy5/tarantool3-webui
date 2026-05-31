@@ -750,6 +750,25 @@ local Mutation = types.object {
             arguments = { instances = types.list(types.string.nonNull) },
             resolve = lifecycle_resolver.mutation_reload_roles,
         },
+        rebootstrapInstance = {
+            kind = types.object({
+                name = 'RebootstrapResult',
+                fields = {
+                    ok            = types.boolean.nonNull,
+                    alias         = types.string.nonNull,
+                    deleted_count = types.long.nonNull,
+                    message       = types.string,
+                },
+            }).nonNull,
+            arguments = { alias = types.string.nonNull },
+            description = 'Destructive recovery for a follower stuck in ' ..
+                'split-brain. Wipes WAL/snap on the target and triggers ' ..
+                'Docker restart-policy re-launch — replication catches up ' ..
+                'fresh from healthy peers. Refused when the target owns ' ..
+                'the synchro queue (would lose uncommitted txns); ' ..
+                'promote another peer first.',
+            resolve = lifecycle_resolver.mutation_rebootstrap_instance,
+        },
     },
 }
 

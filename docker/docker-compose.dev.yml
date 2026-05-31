@@ -29,6 +29,15 @@ x-tarantool-common: &tarantool-common
     dockerfile: docker/Dockerfile.instance
   image: webui-instance:dev
   restart: unless-stopped
+  # 10s of graceful shutdown before SIGKILL. The role's
+  # box.ctl.on_shutdown hook (webui.init.M.stop -> failover.agent.stop)
+  # needs that window to demote out of the synchro queue and drain
+  # the limbo — without it, a fast SIGTERM leaves uncommitted sync
+  # txns on disk that turn into "Split-Brain discovered" once peers
+  # resume replication after restart. Default docker stop_grace_period
+  # is 10s, but make it explicit so a tweak elsewhere doesn't quietly
+  # tighten the window.
+  stop_grace_period: 10s
   environment: &tarantool-env
     # Cluster config visible to every instance. tarantool --name picks
     # the per-instance section out of it.
@@ -46,7 +55,7 @@ x-tarantool-common: &tarantool-common
     # the legacy anonymous path open for engineers exploring /ws without
     # logging in first. Production compose intentionally omits it.
   volumes:
-    - ./configs/cluster.yaml:/opt/webui/etc/cluster.yaml:ro
+    - ./configs/cluster.yaml:/opt/webui/etc/cluster.yaml
   healthcheck:
     test: ['CMD', 'curl', '-fsS', 'http://127.0.0.1:8081/api/health']
     interval: 5s
@@ -98,7 +107,7 @@ services:
       <<: *tarantool-env
       INSTANCE_NAME: tt-1
     volumes:
-      - ./configs/cluster.yaml:/opt/webui/etc/cluster.yaml:ro
+      - ./configs/cluster.yaml:/opt/webui/etc/cluster.yaml
       - tt-1-data:/opt/webui/var/lib
     ports:
       # Direct access useful for debugging individual instances.
@@ -116,7 +125,7 @@ services:
       <<: *tarantool-env
       INSTANCE_NAME: tt-2
     volumes:
-      - ./configs/cluster.yaml:/opt/webui/etc/cluster.yaml:ro
+      - ./configs/cluster.yaml:/opt/webui/etc/cluster.yaml
       - tt-2-data:/opt/webui/var/lib
     ports:
       - '8082:8081'
@@ -137,7 +146,7 @@ services:
       <<: *tarantool-env
       INSTANCE_NAME: tt-3
     volumes:
-      - ./configs/cluster.yaml:/opt/webui/etc/cluster.yaml:ro
+      - ./configs/cluster.yaml:/opt/webui/etc/cluster.yaml
       - tt-3-data:/opt/webui/var/lib
     ports:
       - '8083:8081'

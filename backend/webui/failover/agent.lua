@@ -435,6 +435,61 @@ function M.stop()
     if not STATE.enabled then return end
     STATE.stop_flag = true
     STATE.enabled = false
+
+    -- ── Graceful synchro queue handover (split-brain prevention) ──
+    --
+    -- If this instance owns the synchronous queue (i.e. it is the
+    -- effective leader), demote it BEFORE we revoke the coordinator
+    -- lease. `box.ctl.demote()` synchronously drains the limbo:
+    -- every pending synchro transaction either reaches quorum and
+    -- gets a CONFIRM record in the WAL, or hits ROLLBACK. Both
+    -- outcomes are durable.
+    --
+    -- Without this drain, a fast SIGTERM (e.g. `docker stop -t 1`,
+    -- `--force-recreate`) kills the process while some sync txn is
+    -- still in limbo. On restart that txn's LSN is on disk but with
+    -- no CONFIRM/ROLLBACK marker. A peer that later writes its OWN
+    -- transaction at the same LSN — the agent might appoint a
+    -- different peer as the new leader, which starts writing from
+    -- the highest confirmed LSN — produces the canonical
+    -- "got a request with lsn from an already processed range"
+    -- split-brain on every applier connection.
+    --
+    -- Best-effort + bounded: don't block the shutdown forever if
+    -- demote can't reach quorum. 3s is comfortably above the
+    -- default synchro_timeout for an unburdened cluster.
+    local has_box = rawget(_G, 'box') ~= nil and box.info ~= nil
+    if has_box then
+        local synchro = box.info.synchro or {}
+        local owner = (synchro.queue and synchro.queue.owner) or 0
+        if owner == box.info.id then
+            logger.info('graceful demote: this instance owns the synchro ' ..
+                'queue; draining limbo before exit')
+            local demote_ok, demote_err = pcall(function()
+                box.ctl.demote()
+            end)
+            if not demote_ok then
+                logger.warn('graceful demote failed', {
+                    err = tostring(demote_err),
+                })
+            else
+                -- Wait until we observe ourselves transition to RO —
+                -- that confirms the demote() actually landed and the
+                -- limbo has handed ownership off (or expired).
+                local wait_ok, wait_err = pcall(function()
+                    box.ctl.wait_ro(3)
+                end)
+                if not wait_ok then
+                    logger.warn('wait_ro after demote failed', {
+                        err = tostring(wait_err),
+                    })
+                else
+                    logger.info('graceful demote: limbo drained, instance RO')
+                end
+            end
+        end
+    end
+
     -- Best-effort SYNCHRONOUS release: if we hold the coordinator
     -- lease, revoke it here so a surviving peer can claim the
     -- vacancy on its next election tick (~1s) instead of waiting

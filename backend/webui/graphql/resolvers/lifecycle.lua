@@ -122,4 +122,63 @@ function M.mutation_reload_roles(root, args)
     return M.mutation_force_reapply(root, args)
 end
 
+-- rebootstrapInstance(alias) — destructive recovery for a single
+-- follower stuck in split-brain. Routes through the peer net.box
+-- pool to the named alias, calls the `webui_rebootstrap_remote`
+-- shim there. The target wipes its WAL/snap and exits; Docker
+-- restart policy spins up a fresh process that bootstraps clean
+-- from healthy peers. The endpoint refuses to act on the synchro
+-- queue owner (would lose uncommitted txns) — operators promote
+-- another peer first.
+function M.mutation_rebootstrap_instance(root, args)
+    require_role(root, 'rebootstrapInstance')
+    if args == nil or type(args.alias) ~= 'string' or args.alias == '' then
+        error('VALIDATION_ERROR: alias is required')
+    end
+    local rpc_ok, rpc = pcall(require, 'webui.cluster.rpc')
+    if not rpc_ok then
+        error('UNAVAILABLE: peer pool not ready')
+    end
+    local results, call_err = pcall(rpc.map_call,
+        'webui_rebootstrap_remote', {}, {
+            timeout = 5,
+            peers   = { args.alias },
+        })
+    if not results then
+        error('UNAVAILABLE: rebootstrap call failed: ' .. tostring(call_err))
+    end
+    local per_peer = call_err
+    if type(per_peer) ~= 'table' or per_peer[args.alias] == nil then
+        error('NOT_FOUND: peer ' .. args.alias .. ' is not in the pool')
+    end
+    local r = per_peer[args.alias]
+    if not (r and r.ok) then
+        local peer_err = (r and r.err) or 'unknown'
+        error('UNAVAILABLE: rebootstrap on ' .. args.alias ..
+            ' failed: ' .. tostring(peer_err))
+    end
+    local v = r.value or {}
+    -- Backend shim returns {err, message, status} when target refused
+    -- (e.g. tried to wipe the queue owner). Surface the typed code
+    -- straight through.
+    if v.err then
+        if v.err == 'FORBIDDEN' then
+            error('FORBIDDEN: ' .. tostring(v.message
+                or 'queue owner refused rebootstrap'))
+        end
+        error('UNAVAILABLE: ' .. tostring(v.message or v.err))
+    end
+    logger.warn('rebootstrap dispatched', {
+        target_alias = args.alias,
+        deleted_count = v.deleted_count,
+        user = root and root.user,
+    })
+    return {
+        ok = v.ok == true,
+        alias = args.alias,
+        deleted_count = tonumber(v.deleted_count) or 0,
+        message = v.message or 'rebootstrap initiated',
+    }
+end
+
 return M

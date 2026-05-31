@@ -223,9 +223,37 @@ local FORCE_APPLY_EXPR = [[
     return { status = cfg:info().status }
 ]]
 
+-- Force-reset every upstream by detaching and re-attaching the
+-- replication URI list. `box.cfg{replication=box.cfg.replication}`
+-- alone is a no-op for sockets that are already established —
+-- Tarantool short-circuits on equality. Going through the empty list
+-- tears every connection down, then re-attaching forces a fresh
+-- handshake. This recovers from transient-network outages.
+--
+-- IMPORTANT: this is NOT enough to fix a real split-brain (lsn
+-- divergence) — those report `upstream.status == 'stopped'` with a
+-- reason like "Split-Brain discovered". Surface still-stopped peers
+-- in the result so the UI can render a clear "manual rebootstrap
+-- required" hint instead of pretending the click solved it.
 local RESTART_REPLICATION_EXPR = [[
-    box.cfg{ replication = box.cfg.replication }
-    return { upstream_count = #(box.info.replication or {}) }
+    local saved = box.cfg.replication
+    pcall(function() box.cfg{ replication = {} } end)
+    pcall(function() box.cfg{ replication = saved } end)
+    local still_stopped = {}
+    for _, r in pairs(box.info.replication or {}) do
+        if r.upstream and r.upstream.status == 'stopped' then
+            table.insert(still_stopped, {
+                id     = r.id,
+                uuid   = r.uuid,
+                reason = r.upstream.message or 'stopped',
+            })
+        end
+    end
+    return {
+        upstream_count = #(box.info.replication or {}),
+        still_stopped  = still_stopped,
+        recovered      = #still_stopped == 0,
+    }
 ]]
 
 local function execute(expr, aliases)
@@ -258,12 +286,62 @@ function M.apply(type_, payload, opts)
         return { ok = true, results = results, unknown = resolved.unknown }
     elseif type_ == M.TYPES.RESTART_REPLICATION then
         local results = execute(RESTART_REPLICATION_EXPR, resolved.aliases)
+        -- Honest outcome: count peers that came back vs ones still
+        -- stuck. `box.cfg{replication={}}; box.cfg{replication=saved}`
+        -- recovers ordinary connection blips but does NOT fix split-
+        -- brain (lsn divergence). Surface the difference in the
+        -- message so operators stop clicking the button uselessly.
+        local recovered, still_stopped, peer_fail = 0, {}, {}
+        for peer, r in pairs(results or {}) do
+            if not (r and r.ok) then
+                table.insert(peer_fail, peer .. '=' ..
+                    tostring(r and r.err or 'unknown'))
+            else
+                local v = r.value or {}
+                if v.recovered == true then
+                    recovered = recovered + 1
+                end
+                if type(v.still_stopped) == 'table' and #v.still_stopped > 0 then
+                    for _, s in ipairs(v.still_stopped) do
+                        table.insert(still_stopped, string.format(
+                            '%s upstream id=%s: %s',
+                            peer, tostring(s.id), tostring(s.reason)))
+                    end
+                end
+            end
+        end
+        local parts = {}
+        if recovered > 0 then
+            table.insert(parts, string.format('reconnected on %d peer(s)',
+                recovered))
+        end
+        if #still_stopped > 0 then
+            table.insert(parts, string.format(
+                'STILL STOPPED on %d upstream(s): %s — likely split-brain, ' ..
+                'manual rebootstrap required (see docs/troubleshooting.md)',
+                #still_stopped, table.concat(still_stopped, '; ')))
+        end
+        if #peer_fail > 0 then
+            table.insert(parts, 'peer error(s): ' ..
+                table.concat(peer_fail, '; '))
+        end
+        if #parts == 0 then
+            table.insert(parts, string.format(
+                'dispatched to %d peer(s)', #resolved.aliases))
+        end
         logger.info('applied restart_replication suggestion', {
-            targets = resolved.aliases,
-            unknown = resolved.unknown,
-            count   = #resolved.aliases,
+            targets       = resolved.aliases,
+            unknown       = resolved.unknown,
+            count         = #resolved.aliases,
+            recovered     = recovered,
+            still_stopped = #still_stopped,
         })
-        return { ok = true, results = results, unknown = resolved.unknown }
+        return {
+            ok      = #still_stopped == 0 and #peer_fail == 0,
+            message = table.concat(parts, '; '),
+            results = results,
+            unknown = resolved.unknown,
+        }
     end
     return nil, string.format('suggestion type %q is not implemented yet', type_)
 end

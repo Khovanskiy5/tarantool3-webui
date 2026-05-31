@@ -14,6 +14,21 @@ const { entries, pending, error, hasMore } = storeToRefs(store);
 
 const filter = reactive({ user: '', action: '', scope: '' });
 
+// Curated quick-filter chips for the most operationally interesting
+// actions. Order: most-used first. New action types added to other
+// audit-emitting code paths should land here too so operators have a
+// one-click filter without remembering string names.
+const actionPresets: { label: string; action: string }[] = [
+  { label: 'Config rollback',   action: 'config.rollback' },
+  { label: 'Config commit',     action: 'config.commit' },
+  { label: 'Login',             action: 'auth.login' },
+  { label: 'Login failed',      action: 'auth.login_failed' },
+  { label: 'Logout',            action: 'auth.logout' },
+  { label: 'RBAC denied',       action: 'rbac.denied' },
+  { label: 'Console (Lua)',     action: 'eval.lua' },
+  { label: 'Console (SQL)',     action: 'eval.sql' },
+];
+
 const buildFilter = () => ({
   user:   filter.user.trim()   || undefined,
   action: filter.action.trim() || undefined,
@@ -23,6 +38,16 @@ const buildFilter = () => ({
 const apply = () => { store.load(buildFilter()); };
 const loadMore = () => { store.load(buildFilter(), { append: true }); };
 const exportNow = () => { downloadExportedAudit(buildFilter()); };
+const resetFilters = () => {
+  filter.user = '';
+  filter.action = '';
+  filter.scope = '';
+  store.load({});
+};
+const setPreset = (action: string) => {
+  filter.action = action;
+  store.load(buildFilter());
+};
 
 const fmtTs = (us: number) => new Date(Math.floor(us / 1000)).toISOString();
 
@@ -40,6 +65,31 @@ onMounted(() => { store.load({}); });
         @click="exportNow"
       />
     </header>
+
+    <div class="webui-audit__presets">
+      <span class="webui-audit__presets-label">Quick filters:</span>
+      <button
+        v-for="preset in actionPresets"
+        :key="preset.action"
+        type="button"
+        :class="[
+          'webui-audit__preset',
+          { 'webui-audit__preset--active': filter.action === preset.action },
+        ]"
+        :title="`Filter by action ${preset.action}`"
+        @click="setPreset(preset.action)"
+      >
+        {{ preset.label }}
+      </button>
+      <button
+        v-if="filter.user || filter.action || filter.scope"
+        type="button"
+        class="webui-audit__reset"
+        @click="resetFilters"
+      >
+        Reset
+      </button>
+    </div>
 
     <form class="webui-audit__filters" @submit.prevent="apply">
       <InputText v-model="filter.user" placeholder="user" />
@@ -87,6 +137,48 @@ onMounted(() => { store.load({}); });
 <style scoped>
 .webui-audit { padding: 1rem 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
 .webui-audit__head { display: flex; justify-content: space-between; align-items: center; }
+.webui-audit__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  font-size: 0.8rem;
+}
+.webui-audit__presets-label {
+  color: var(--webui-text-muted, #8a93a6);
+  margin-right: 0.25rem;
+}
+.webui-audit__preset {
+  font-size: 0.75rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--webui-border, #2a2f3a);
+  background: var(--webui-bg-elevated, #161a23);
+  color: inherit;
+  cursor: pointer;
+  font-family: var(--webui-font-mono, monospace);
+}
+.webui-audit__preset:hover {
+  border-color: var(--webui-accent, #4ea8de);
+}
+.webui-audit__preset--active {
+  background: var(--webui-accent, #4ea8de);
+  color: var(--webui-bg, #11141d);
+  border-color: var(--webui-accent, #4ea8de);
+}
+.webui-audit__reset {
+  font-size: 0.75rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  background: transparent;
+  border: 1px dashed var(--webui-border, #2a2f3a);
+  color: var(--webui-text-muted, #8a93a6);
+  cursor: pointer;
+}
+.webui-audit__reset:hover {
+  border-color: var(--webui-danger, #c0392b);
+  color: var(--webui-danger, #c0392b);
+}
 .webui-audit__filters { display: flex; gap: 0.5rem; }
 .webui-audit__error { color: var(--p-message-error-color, #d83535); }
 .webui-audit__payload { font-family: var(--webui-font-mono); font-size: 0.8rem; }

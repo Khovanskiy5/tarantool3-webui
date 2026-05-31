@@ -152,6 +152,33 @@ function M.prepare(opts)
     local parsed, errs = schema.validate(opts.yaml)
     if parsed == nil then return nil, errs end
 
+    -- No-op guard: if a current YAML is supplied AND the structural
+    -- diff comes out empty, reject the prepare. Without this, the UI
+    -- happily prepared and committed identical YAML over and over,
+    -- bumping etcd revision and adding meaningless rows to the
+    -- /history/ timeline. NO_CHANGES is a distinct error class — the
+    -- resolver translates it into a friendly UI message instead of a
+    -- red error banner.
+    --
+    -- Diff is computed BEFORE writing the prepared row so a no-op
+    -- request leaves no garbage behind in `_webui_prepared`.
+    local diff_ops
+    if opts.current_yaml then
+        local current_parsed = select(1, schema.validate(opts.current_yaml))
+        if current_parsed ~= nil then
+            diff_ops = diff.structural(current_parsed, parsed)
+            if #diff_ops == 0 then
+                logger.info('prepare no-op rejected', {
+                    user = opts.user, size = #opts.yaml,
+                })
+                return nil, { {
+                    code    = 'NO_CHANGES',
+                    message = 'submitted YAML is identical to current',
+                } }
+            end
+        end
+    end
+
     local now = fiber.time()
     local entry = {
         id          = new_prepared_id(),
@@ -162,14 +189,6 @@ function M.prepare(opts)
     }
     local stored, put_err = put_prepared(entry)
     if stored == nil then return nil, { { message = put_err } } end
-
-    local diff_ops
-    if opts.current_yaml then
-        local current_parsed = select(1, schema.validate(opts.current_yaml))
-        if current_parsed ~= nil then
-            diff_ops = diff.structural(current_parsed, parsed)
-        end
-    end
 
     logger.info('prepare ok', { id = entry.id, user = opts.user, size = #opts.yaml })
     return {
@@ -211,6 +230,66 @@ function M.commit(prepared_id, opts)
     logger.info('commit ok', {
         id = prepared_id, revision = result.revision, user = entry.user,
     })
+
+    -- Mirror the YAML to the on-disk file on EVERY peer (atomic rename
+    -- or in-place truncate-and-write — see file_writer.lua). The file
+    -- is the recovery source when etcd is unreachable at cold start;
+    -- keep it in lockstep with the etcd source of truth. Fan-out is
+    -- best-effort: per-peer outcome is captured in `result.file_mirror`
+    -- so the resolver can surface partial failures (e.g. one read-only
+    -- volume on a single peer) to the operator without rolling back
+    -- the etcd commit. etcd is authoritative — the file is the cache.
+    do
+        local mirror = { ok = {}, failed = {}, skipped_no_peers = true }
+        local fw_ok, fw = pcall(require, 'webui.config_store.file_writer')
+        if fw_ok then
+            local self_ok, self_err = fw.write_local(payload)
+            if self_ok then
+                table.insert(mirror.ok, '_self')
+            else
+                table.insert(mirror.failed, '_self=' .. tostring(self_err))
+            end
+        end
+        local rpc_ok, rpc = pcall(require, 'webui.cluster.rpc')
+        local peers_ok, peers = pcall(require, 'webui.cluster.peers')
+        if rpc_ok and peers_ok then
+            local peer_names = {}
+            for name in pairs(peers.list() or {}) do
+                table.insert(peer_names, name)
+            end
+            if #peer_names > 0 then
+                mirror.skipped_no_peers = false
+                local call_ok, per_peer = pcall(rpc.map_call,
+                    'webui_config_file_write_remote', { payload },
+                    { timeout = 5, peers = peer_names })
+                if call_ok and type(per_peer) == 'table' then
+                    for name, r in pairs(per_peer) do
+                        if r and r.ok and r.value and r.value.path
+                            and not r.value.err then
+                            table.insert(mirror.ok, name)
+                        else
+                            local msg = (r and r.err)
+                                or (r and r.value and r.value.err)
+                                or 'unknown'
+                            table.insert(mirror.failed,
+                                name .. '=' .. tostring(msg))
+                        end
+                    end
+                else
+                    table.insert(mirror.failed,
+                        'fan-out errored: ' .. tostring(per_peer))
+                end
+            end
+        end
+        result.file_mirror = mirror
+        if #mirror.failed > 0 then
+            logger.warn('cluster.yaml mirror partial', {
+                ok = mirror.ok, failed = mirror.failed,
+            })
+        else
+            logger.info('cluster.yaml mirror ok', { peers = mirror.ok })
+        end
+    end
 
     -- Record the snapshot in our own /history/ timeline. We deliberately
     -- key the history entry by etcd's commit revision so the timeline

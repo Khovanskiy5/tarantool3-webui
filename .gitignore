@@ -46,6 +46,9 @@ coverage/
 playwright-report/
 test-results/
 .last-run.json
+# Playwright MCP server traces (browser screenshots + console logs from
+# the dev-time MCP browser session). Auto-regenerated; never commit.
+.playwright-mcp/
 
 # Logs
 npm-debug.log*

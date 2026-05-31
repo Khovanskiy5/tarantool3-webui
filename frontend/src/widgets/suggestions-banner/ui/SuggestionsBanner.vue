@@ -13,11 +13,22 @@ const forceApply = computed(() => data.value?.forceApply ?? []);
 const restartReplication = computed(() => data.value?.restartReplication ?? []);
 
 const lastAction = ref<{
-  type: 'force_apply' | 'restart_replication';
+  type: 'force_apply' | 'restart_replication' | 'rebootstrap';
   ok: boolean;
   message: string;
+  // Set after a failed restart_replication so the banner can offer
+  // the destructive follow-up ("Re-bootstrap this instance") next
+  // to the message instead of forcing the operator to remember the
+  // recovery procedure.
+  rebootstrap_for_alias?: string | null;
 } | null>(null);
 const busy = ref(false);
+
+const restartReplicationFailed = computed(() =>
+  lastAction.value?.type === 'restart_replication'
+  && !lastAction.value.ok
+  && Boolean(lastAction.value.rebootstrap_for_alias),
+);
 
 async function runForceApply(uuid: string | null | undefined) {
   if (!uuid || busy.value) return;
@@ -38,20 +49,54 @@ async function runForceApply(uuid: string | null | undefined) {
   }
 }
 
-async function runRestartReplication(uuid: string | null | undefined) {
+async function runRestartReplication(
+  uuid: string | null | undefined,
+  alias: string,
+) {
   if (!uuid || busy.value) return;
   busy.value = true;
   try {
     const res = await store.applyRestartReplication([uuid]);
     if (res) {
+      // When `ok: false` comes back the backend already crafted a
+      // human message that says STILL STOPPED — usually split-brain
+      // that can't be recovered by `box.cfg{replication=...}` alone.
+      // Stash the alias so the banner can offer the destructive
+      // re-bootstrap follow-up button.
       lastAction.value = {
         type: 'restart_replication',
         ok: res.ok,
         message: res.message ?? `dispatched to ${res.results.length} peer(s)`,
+        rebootstrap_for_alias: res.ok ? null : alias,
       };
     }
   } catch (err) {
     log.error('apply restart_replication failed', { err: String(err) });
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function runRebootstrap(alias: string) {
+  if (busy.value) return;
+  const confirmed = window.confirm(
+    `Re-bootstrap instance "${alias}"?\n\n`
+    + 'This wipes WAL/snap on the target and triggers Docker restart-policy.\n'
+    + 'Replication will catch up fresh from healthy peers (~10–30s downtime\n'
+    + 'for this instance). Refused if the target owns the synchronous queue\n'
+    + '(promote another peer first).',
+  );
+  if (!confirmed) return;
+  busy.value = true;
+  try {
+    const res = await store.rebootstrapInstance(alias);
+    lastAction.value = {
+      type: 'rebootstrap',
+      ok: res.ok,
+      message: res.message ?? '(no message)',
+    };
+  } catch (err) {
+    log.error('rebootstrap dispatch failed', { err: String(err) });
   } finally {
     busy.value = false;
   }
@@ -88,7 +133,7 @@ async function runRestartReplication(uuid: string | null | undefined) {
           type="button"
           class="webui-suggestions-banner__action"
           :disabled="busy"
-          @click="runRestartReplication(s.instanceUuid)"
+          @click="runRestartReplication(s.instanceUuid, s.instanceAlias)"
         >
           Restart replication
         </button>
@@ -105,6 +150,28 @@ async function runRestartReplication(uuid: string | null | undefined) {
       ]"
     >
       {{ lastAction.type }}: {{ lastAction.message }}
+    </p>
+
+    <!--
+      Restart replication recovered nothing (typical split-brain
+      symptom). Offer the destructive recovery — re-bootstrap the
+      affected instance to clean state, then replication catches up
+      from healthy peers. The button is guarded by a native confirm()
+      and a backend-side refusal on the queue owner.
+    -->
+    <p v-if="restartReplicationFailed" class="webui-suggestions-banner__followup">
+      <strong>Replication did not recover.</strong>
+      Likely split-brain (LSN divergence in the synchronous queue).
+      Manual recovery:
+      <button
+        type="button"
+        class="webui-suggestions-banner__action
+               webui-suggestions-banner__action--danger"
+        :disabled="busy"
+        @click="runRebootstrap(lastAction!.rebootstrap_for_alias!)"
+      >
+        Re-bootstrap {{ lastAction!.rebootstrap_for_alias }}
+      </button>
     </p>
   </section>
 </template>
@@ -186,4 +253,22 @@ async function runRestartReplication(uuid: string | null | undefined) {
 
 .webui-suggestions-banner__result--ok  { color: var(--webui-success); }
 .webui-suggestions-banner__result--err { color: var(--webui-danger);  }
+
+.webui-suggestions-banner__followup {
+  margin: 0.5rem 0 0;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+  border-radius: var(--webui-radius);
+  background: rgba(220, 80, 80, 0.08);
+  border: 1px solid rgba(220, 80, 80, 0.35);
+  color: var(--webui-text-muted);
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.webui-suggestions-banner__action--danger {
+  background: var(--webui-danger, #c0392b);
+  color: #fff;
+}
 </style>

@@ -128,72 +128,141 @@ end
 -- The probe collects only the fields the scanner cares about
 -- (status / lag / idle / message) so this rule is a straightforward
 -- threshold check.
+-- luacheck: ignore 561
 function M.check_replication(snapshot, thresholds, now)
     thresholds = thresholds or M.DEFAULT_THRESHOLDS
     now = now or fiber.clock()
     local out = {}
     for alias, server in pairs((snapshot and snapshot.servers) or {}) do
         if server.reachable and type(server.replication) == 'table' then
+            -- Per-instance aggregation: classify every upstream entry
+            -- and emit ONE issue per (instance, problem-class) instead
+            -- of one per upstream UUID. The previous per-upstream
+            -- granularity surfaced two identical "Split-Brain" rows
+            -- when a follower lost sync with both peers, which read as
+            -- noise — the cluster-level symptom is the same.
+            local stopped, lagging, idle_peers = {}, {}, {}
             for _, entry in pairs(server.replication) do
                 local upstream = entry.upstream
-                if upstream ~= nil then
-                    if upstream.status == nil then
-                        -- `upstream.status == nil` is the local
-                        -- self-entry of box.info.replication; skip
-                        -- without raising an issue. Explicit `_`
-                        -- assignment keeps luacheck quiet.
-                        local _ = nil
-                    elseif upstream.status ~= 'follow' then
-                        table.insert(out, make_issue {
-                            id = M.make_id('replication', 'instance', alias,
-                                'upstream-status-' .. tostring(entry.uuid or entry.id)),
-                            category = M.CATEGORIES.REPLICATION,
-                            severity = M.SEVERITY.CRITICAL,
-                            scope    = M.SCOPE.INSTANCE,
-                            instance = alias,
-                            replicaset = server.replicaset_name,
-                            message = string.format(
-                                'replication upstream from %s is %s%s',
-                                entry.uuid or '?',
-                                tostring(upstream.status),
-                                upstream.message and (': ' .. upstream.message) or ''),
-                            now = now,
+                if upstream ~= nil and upstream.status ~= nil then
+                    -- `follow` is the steady state; `sync` and `connect`
+                    -- are healthy transients on initial boot (peers are
+                    -- still negotiating); `ready` is the brief window
+                    -- after handshake before the first follow tick.
+                    -- None of these are operator-actionable — only
+                    -- `stopped` / `disconnected` / `auth` warrant an issue.
+                    local s = upstream.status
+                    -- `loading` covers the first few seconds of a cold
+                    -- bootstrap before applier starts streaming.
+                    if s ~= 'follow' and s ~= 'sync'
+                        and s ~= 'connect' and s ~= 'ready'
+                        and s ~= 'loading' then
+                        table.insert(stopped, {
+                            uuid    = entry.uuid or '?',
+                            status  = tostring(s),
+                            message = upstream.message,
                         })
                     elseif type(upstream.lag) == 'number'
                         and upstream.lag > thresholds.replication_sync_lag then
-                        table.insert(out, make_issue {
-                            id = M.make_id('replication', 'instance', alias,
-                                'lag-' .. tostring(entry.uuid or entry.id)),
-                            category = M.CATEGORIES.REPLICATION,
-                            severity = M.SEVERITY.WARNING,
-                            scope    = M.SCOPE.INSTANCE,
-                            instance = alias,
-                            replicaset = server.replicaset_name,
-                            message = string.format(
-                                'replication lag %.2fs from %s exceeds threshold %.2fs',
-                                upstream.lag, entry.uuid or '?',
-                                thresholds.replication_sync_lag),
-                            now = now,
+                        table.insert(lagging, {
+                            uuid = entry.uuid or '?',
+                            lag  = upstream.lag,
                         })
                     elseif type(upstream.idle) == 'number'
                         and upstream.idle > thresholds.replication_idle_factor
                             * thresholds.default_replication_timeout then
-                        table.insert(out, make_issue {
-                            id = M.make_id('replication', 'instance', alias,
-                                'idle-' .. tostring(entry.uuid or entry.id)),
-                            category = M.CATEGORIES.REPLICATION,
-                            severity = M.SEVERITY.WARNING,
-                            scope    = M.SCOPE.INSTANCE,
-                            instance = alias,
-                            replicaset = server.replicaset_name,
-                            message = string.format(
-                                'replication idle %.2fs from %s exceeds %dx timeout',
-                                upstream.idle, entry.uuid or '?',
-                                thresholds.replication_idle_factor),
-                            now = now,
+                        table.insert(idle_peers, {
+                            uuid = entry.uuid or '?',
+                            idle = upstream.idle,
                         })
                     end
                 end
+            end
+
+            if #stopped > 0 then
+                -- Same reason text on multiple upstreams? Collapse to
+                -- one row with peer count. Different reasons? Show
+                -- each in the message so operators see the full
+                -- picture without expanding rows.
+                local sample = stopped[1]
+                local same_reason = true
+                for _, s in ipairs(stopped) do
+                    if s.message ~= sample.message
+                        or s.status ~= sample.status then
+                        same_reason = false; break
+                    end
+                end
+                local msg
+                if same_reason then
+                    msg = string.format(
+                        '%d upstream(s) %s%s',
+                        #stopped, sample.status,
+                        sample.message and (': ' .. sample.message) or '')
+                else
+                    local parts = {}
+                    for _, s in ipairs(stopped) do
+                        table.insert(parts, string.format(
+                            '%s %s%s',
+                            s.uuid:sub(1, 8), s.status,
+                            s.message and (': ' .. s.message) or ''))
+                    end
+                    msg = 'replication upstreams stopped: ' ..
+                        table.concat(parts, '; ')
+                end
+                table.insert(out, make_issue {
+                    -- Stable id per instance (NOT per upstream uuid) so
+                    -- a transient `e82d…` / `07aa…` flicker doesn't
+                    -- generate a new row each tick.
+                    id = M.make_id('replication', 'instance', alias,
+                        'upstream-stopped'),
+                    category = M.CATEGORIES.REPLICATION,
+                    severity = M.SEVERITY.CRITICAL,
+                    scope    = M.SCOPE.INSTANCE,
+                    instance = alias,
+                    replicaset = server.replicaset_name,
+                    message  = msg,
+                    now      = now,
+                })
+            end
+
+            if #lagging > 0 then
+                local max_lag = 0
+                for _, l in ipairs(lagging) do
+                    if l.lag > max_lag then max_lag = l.lag end
+                end
+                table.insert(out, make_issue {
+                    id = M.make_id('replication', 'instance', alias, 'lag'),
+                    category = M.CATEGORIES.REPLICATION,
+                    severity = M.SEVERITY.WARNING,
+                    scope    = M.SCOPE.INSTANCE,
+                    instance = alias,
+                    replicaset = server.replicaset_name,
+                    message = string.format(
+                        'replication lag on %d upstream(s) up to %.2fs ' ..
+                        '(threshold %.2fs)',
+                        #lagging, max_lag, thresholds.replication_sync_lag),
+                    now = now,
+                })
+            end
+
+            if #idle_peers > 0 then
+                local max_idle = 0
+                for _, i in ipairs(idle_peers) do
+                    if i.idle > max_idle then max_idle = i.idle end
+                end
+                table.insert(out, make_issue {
+                    id = M.make_id('replication', 'instance', alias, 'idle'),
+                    category = M.CATEGORIES.REPLICATION,
+                    severity = M.SEVERITY.WARNING,
+                    scope    = M.SCOPE.INSTANCE,
+                    instance = alias,
+                    replicaset = server.replicaset_name,
+                    message = string.format(
+                        '%d upstream(s) idle up to %.2fs (%dx default timeout)',
+                        #idle_peers, max_idle,
+                        thresholds.replication_idle_factor),
+                    now = now,
+                })
             end
         end
     end

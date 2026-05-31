@@ -10,10 +10,12 @@ import { computed, onScopeDispose, ref, shallowRef } from 'vue';
 import {
   ApplyForceApplyDocument,
   ApplyRestartReplicationDocument,
+  RebootstrapInstanceDocument,
   SuggestionsOverviewDocument,
   type SuggestionsOverviewQuery,
   type ApplyForceApplyMutation,
   type ApplyRestartReplicationMutation,
+  type RebootstrapInstanceMutation,
 } from '@/shared/api/generated';
 import { getClient } from '@/shared/api/graphql';
 import { wsClient } from '@/shared/api/ws';
@@ -98,12 +100,36 @@ export const useSuggestionStore = defineStore('suggestions', () => {
     return payload;
   }
 
+  // Destructive recovery for a follower stuck in split-brain. The
+  // backend wipes WAL/snap on the target and triggers Docker's
+  // restart policy; replication catches up clean from healthy peers.
+  // Errors come back as urql `error` — the caller is expected to
+  // surface them inline (FORBIDDEN when the target owns the queue,
+  // NOT_FOUND when the alias is unknown, etc).
+  async function rebootstrapInstance(alias: string) {
+    const result = await client
+      .mutation(RebootstrapInstanceDocument, { alias })
+      .toPromise();
+    if (result.error) {
+      log.warn('rebootstrap failed', { alias, err: result.error.message });
+      return { ok: false, alias, message: result.error.message };
+    }
+    const payload = (result.data as RebootstrapInstanceMutation | undefined)
+      ?.rebootstrapInstance ?? null;
+    log.info('rebootstrap dispatched', {
+      alias, ok: payload?.ok ?? false,
+    });
+    void refresh();
+    return payload ?? { ok: false, alias, message: 'unknown' };
+  }
+
   return {
     data,
     total,
     fetching,
     applyForceApply,
     applyRestartReplication,
+    rebootstrapInstance,
     refresh,
   };
 });

@@ -176,12 +176,32 @@ function M.handler(req)
     local latency_ms = (clock.monotonic() - started) * 1000
 
     if not ok_exec then
-        -- A resolver crashed without returning (nil, err). The real
-        -- message lives in the structured log; the public envelope is
-        -- intentionally generic.
+        -- A resolver crashed. Resolvers raise `error('CODE: message')`
+        -- as their public contract (FORBIDDEN, NOT_FOUND, NO_CHANGES,
+        -- ROLLBACK_INCOMPATIBLE, …) — strip the line/file Lua prefix
+        -- and surface the typed code so the SPA can render a
+        -- targeted UI instead of a red 500 banner.
+        local raw = tostring(exec_result)
+        local typed_code, typed_msg = raw:match(':%d+:%s*([A-Z][A-Z0-9_]+):%s*(.+)$')
+        if typed_code == nil then
+            typed_code, typed_msg = raw:match('^([A-Z][A-Z0-9_]+):%s*(.+)$')
+        end
+        if typed_code ~= nil then
+            -- Known error class — log at info, return the typed code
+            -- (HTTP status comes from error_envelope.http_status).
+            logger.info('graphql resolver error', {
+                request_id = req.request_id,
+                code = typed_code,
+                operation_name = operation_name,
+                latency_ms = latency_ms,
+            })
+            return error_response(req.request_id, typed_code, typed_msg)
+        end
+        -- Untyped crash — keep generic INTERNAL envelope and route
+        -- the real stack to the structured log.
         logger.error('graphql execute crash', {
             request_id = req.request_id,
-            err = tostring(exec_result),
+            err = raw,
             operation_name = operation_name,
             latency_ms = latency_ms,
         })
