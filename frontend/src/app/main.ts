@@ -44,13 +44,22 @@ app.use(PrimeVue, {
 
 installUrql(app);
 
-app.mount('#app');
+// Wait for the router's initial navigation to settle before painting
+// anything. The `beforeEach` guard awaits `session.refresh()` on the
+// first nav, so by the time `isReady()` resolves the SPA already
+// knows whether to land on /login or on the requested admin page.
+// Without this await the shell (TopBar + Sidebar) renders for a
+// frame, then snaps to /login — visible as a flicker on slow networks
+// or on first load against a fresh `_webui_sessions` space.
+router.isReady().finally(() => {
+  app.mount('#app');
 
-// Start the live cluster subscription right after mount. The client
-// has its own backoff loop; if /ws is unreachable (production
-// without WEBUI_DEV_ANONYMOUS_WS) the stores keep working via
-// network-only urql refetches.
-import('@/shared/api/ws').then(({ wsClient }) => {
-  wsClient.connect();
-  info('webui SPA mounted', { app_version: APP_VERSION });
+  // Start the live cluster subscription right after mount. The
+  // client has its own backoff loop; if /ws is unreachable
+  // (production without WEBUI_DEV_ANONYMOUS_WS) the stores keep
+  // working via network-only urql refetches.
+  import('@/shared/api/ws').then(({ wsClient }) => {
+    wsClient.connect();
+    info('webui SPA mounted', { app_version: APP_VERSION });
+  });
 });
