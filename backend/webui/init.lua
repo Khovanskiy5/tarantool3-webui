@@ -111,6 +111,11 @@ function M.validate(cfg)
         or cfg.audit_retention_days < 1) then
         return nil, 'roles_cfg.webui.audit_retention_days must be a positive number'
     end
+    if cfg.shutdown_timeout ~= nil
+        and (type(cfg.shutdown_timeout) ~= 'number'
+        or cfg.shutdown_timeout < 0) then
+        return nil, 'roles_cfg.webui.shutdown_timeout must be a non-negative number'
+    end
     if cfg.rbac ~= nil then
         if type(cfg.rbac) ~= 'table' then
             return nil, 'roles_cfg.webui.rbac must be a table'
@@ -162,6 +167,13 @@ function M.start(opts)
     STATE.status = 'starting'
     STATE.config = opts
     STATE.instance = instance_alias()
+
+    -- Reset the graceful-shutdown gate. A role reload (config change
+    -- → stop() + start()) must not leave the registry in the
+    -- `draining=true` state from the previous run; otherwise every
+    -- request would 503 forever.
+    local sh_ok, sh_mod = pcall(require, 'webui.http.shutdown')
+    if sh_ok then sh_mod.reset() end
 
     configure_logging(opts)
 
@@ -374,9 +386,44 @@ function M.stop()
     local uptime = STATE.started_at and (fiber.time() - STATE.started_at) or 0
     logger.info('webui role stopping', { uptime_sec = uptime })
 
-    -- Graceful shutdown sequence is extended in Task 3a with WS connection
-    -- close, etcd lock release and HTTP drain. For now we stop the server
-    -- and the heartbeat fiber.
+    -- Phase 1: flip the drain gate. New HTTP requests get 503 +
+    -- Retry-After (Task 3a). /api/health stays open so load
+    -- balancers can confirm the `degraded`/`stopping` state.
+    local sh_ok, shutdown_mod = pcall(require, 'webui.http.shutdown')
+    if sh_ok then
+        shutdown_mod.mark_draining()
+        logger.info('shutdown: draining',
+            { inflight = shutdown_mod.inflight_count() })
+    end
+
+    -- Phase 2: wait for in-flight HTTP requests to finish, bounded
+    -- by `roles_cfg.webui.shutdown_timeout` (default 5s). The wait
+    -- wakes up exactly when the last request releases its slot.
+    --
+    -- The default is intentionally well under Tarantool's own
+    -- `on_shutdown` grace and docker's default 10s SIGTERM window:
+    -- 5s drain + the remaining teardown (audit / poller / peer
+    -- pool / WS close) fits comfortably under both. Operators can
+    -- raise this for long-running internal handlers — but pair the
+    -- bump with `docker stop -t <N>` / Tarantool's own
+    -- `shutdown_timeout` so the role is not cut off mid-drain.
+    local drain_timeout = 5
+    if STATE.config ~= nil and type(STATE.config.shutdown_timeout) == 'number' then
+        drain_timeout = STATE.config.shutdown_timeout
+    end
+    if sh_ok then
+        local drained = shutdown_mod.wait_drain(drain_timeout)
+        if drained then
+            logger.info('shutdown: in-flight drained')
+        else
+            logger.warn('shutdown: drain timeout, forcing close', {
+                inflight = shutdown_mod.inflight_count(),
+                timeout_sec = drain_timeout,
+            })
+        end
+    end
+
+    -- Phase 3: stop accepting new connections.
     local ok, err = pcall(function() http_srv.stop() end)
     if not ok then
         logger.error('http server stop raised', { err = tostring(err) })

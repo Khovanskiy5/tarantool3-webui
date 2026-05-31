@@ -80,6 +80,15 @@ function M.make_handler(status_provider)
             -- their owners register a checker via M.register_check().
         }
 
+        -- Drain gate (Task 3a). When the role's M.stop() flips the
+        -- shutdown registry to draining=true the health probe must
+        -- advertise that explicitly so operators / load balancers
+        -- can see the transition before the instance disappears.
+        local sh_ok, shutdown_mod = pcall(require, 'webui.http.shutdown')
+        if sh_ok and shutdown_mod.is_draining() then
+            checks.shutdown = true
+        end
+
         for name, fn in pairs(M._extra_checks) do
             local ok_call, verdict = pcall(fn)
             if not ok_call then

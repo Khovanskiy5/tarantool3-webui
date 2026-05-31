@@ -42,6 +42,7 @@ build = {
         ['webui.errors']             = 'backend/webui/errors.lua',
         ['webui.http.server']        = 'backend/webui/http/server.lua',
         ['webui.http.middleware']    = 'backend/webui/http/middleware.lua',
+        ['webui.http.shutdown']      = 'backend/webui/http/shutdown.lua',
         ['webui.http.error_envelope']= 'backend/webui/http/error_envelope.lua',
         ['webui.http.static']        = 'backend/webui/http/static.lua',
         ['webui.http.ws_frame']      = 'backend/webui/http/ws_frame.lua',

@@ -27,6 +27,15 @@ local M = {}
 
 local logger = log_util.with_tag('http')
 
+-- Loaded lazily so unit tests that import middleware without the
+-- shutdown module (rare but possible) do not blow up. In the real
+-- role start path the module is always present.
+local function lazy_shutdown()
+    local ok, mod = pcall(require, 'webui.http.shutdown')
+    if ok then return mod end
+    return nil
+end
+
 -- Mandatory response headers for security. Applied unconditionally.
 -- CSP allows blob: workers because Monaco needs them; if no Monaco page
 -- is open this still costs nothing.
@@ -285,6 +294,27 @@ function M.wrap(name, sub, opts)
             return { status = 204, headers = headers, body = '' }
         end
 
+        -- Drain gate (Task 3a). New requests get 503 + Retry-After
+        -- while the role is shutting down so a load balancer pulls
+        -- this instance out of rotation cleanly. /api/health stays
+        -- exempt so monitoring can still observe `degraded`.
+        local shutdown = lazy_shutdown()
+        if shutdown ~= nil and shutdown.is_draining()
+            and not shutdown.bypasses_drain(req.path) then
+            local body = error_envelope.respond_with_code(
+                'SHUTDOWN_IN_PROGRESS', 'instance is shutting down',
+                request_id, 503)
+            body.headers = body.headers or {}
+            body.headers['retry-after'] = '5'
+            body.headers['x-request-id'] = request_id
+            apply_security_headers(body.headers)
+            handler_logger.info('request rejected: draining', {
+                request_id = request_id, handler = name,
+                method = req.method, path = req.path,
+            })
+            return body
+        end
+
         -- Auth pipeline. Runs before the handler and can short-circuit.
         local rejected = enforce_auth(req, opts, request_id, handler_logger, name)
         if rejected ~= nil then
@@ -300,7 +330,14 @@ function M.wrap(name, sub, opts)
             return rejected
         end
 
+        -- Track this request as in-flight for the duration of the
+        -- handler call. The release closure pairs with mark_draining
+        -- → wait_drain in M.stop(). Detached (WS upgrade) handlers
+        -- return a numeric DETACHED below; release runs anyway so
+        -- the WS lifecycle does not pin the shutdown waiter.
+        local release_inflight = shutdown and shutdown.acquire() or nil
         local ok, response = pcall(sub, req)
+        if release_inflight then release_inflight() end
 
         local latency_ms = (clock.monotonic() - started) * 1000
 

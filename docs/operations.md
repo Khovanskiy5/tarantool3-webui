@@ -213,7 +213,21 @@ URL'ы:
 - `groups.default.replicasets.rs-1` — один replicaset c initial leader tt-1; raft при failover'е автоматически переизбирает.
 - `roles: [webui]` — наша Lua-роль активируется на каждом инстансе.
 - `roles_cfg.webui` — `listen: 0.0.0.0:8081`, `log_level: debug`, `graphiql_enabled: true` (только в dev), `console_enabled: true` (dev включает консоль; production-манифесты обязаны держать `false`).
+- `roles_cfg.webui.shutdown_timeout` — сколько секунд `M.stop()` ждёт дренажа in-flight HTTP перед принудительным закрытием. Default `5`; держать ниже Tarantool's on_shutdown grace и `docker stop -t`. Подняв этот таймаут — поднять и оба окружающих окна.
 - `credentials.users.*_dev` — четыре dev-фикстуры под все роли RBAC: `viewer_dev`, `operator_dev`, `admin_dev`, `superuser_dev` (последний нужен для /console и `POST /api/eval`).
+
+### Graceful shutdown (Task 3a)
+
+Когда роль получает `M.stop()` (rolling deploy, `docker stop`, изменение `roles_cfg.webui`, требующее перезапуска):
+
+1. **Draining gate.** `webui.http.shutdown.mark_draining()` ставит флаг → middleware начинает отвечать `503 SHUTDOWN_IN_PROGRESS` с `Retry-After: 5` на новые запросы. `/api/health` обходит гейт и сообщает `status: degraded, role_state: stopping, checks.shutdown: true` — HAProxy выводит инстанс из ротации.
+2. **In-flight drain.** Внутренний счётчик in-flight HTTP-обработчиков (через `acquire/release` обёртку в middleware) и `fiber.cond:wait` ждут реальную нагрузку до `shutdown_timeout` секунд. Если за это окно не успели — пишется `shutdown: drain timeout, forcing close` warn и переходим дальше.
+3. **HTTP stop.** `http.server:stop()` — больше не принимаем соединений.
+4. **WS shutdown.** `webui.http.ws.shutdown()` закрывает все WebSocket-соединения кодом `1001` (Going Away).
+5. **Background fibers.** Audit-retention → suggestions scanner → issues scanner → peer poller — в порядке зависимостей.
+6. **Peer pool.** `peers.close_all()` рвёт исходящие net.box.
+
+`Phase 1` логируется как `shutdown: draining` (с количеством in-flight), `Phase 2` — `shutdown: in-flight drained` либо `shutdown: drain timeout` (warn), остальные шаги — как раньше. Полный лог можно отфильтровать `grep -E "shutdown:|drained|drain timeout|draining|stopping|stopped"`.
 
 ### HAProxy (Task 10a) — `docker/haproxy/haproxy.dev.cfg`
 
