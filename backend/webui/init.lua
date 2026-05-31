@@ -568,14 +568,31 @@ function M.start(opts)
     -- `roles_cfg.webui.failover.agent: true`. The wrapper refuses
     -- to start when `replication.failover` is not "off" — Tarantool
     -- raft would fight us over `box.cfg.read_only` otherwise.
+    --
+    -- Apply is re-entered on every `config:reload()`. When the
+    -- operator flips agent: true → false (e.g. via setFailoverMode
+    -- election / manual), STOP the running fibers before
+    -- swallowing the new opts; otherwise the stale agent keeps
+    -- coordinating against the new mode. Symmetric on the reverse
+    -- transition: a previously-stopped agent must be re-started.
     local fo_ok, fo = pcall(require, 'webui.failover')
     if fo_ok then
         local fo_cfg = opts.failover or {}
-        local fo_started, fo_err = fo.start(fo_cfg)
-        if fo_started == true then
-            STATE.failover = fo
-        elseif fo_err ~= nil and fo_err ~= 'disabled' then
-            logger.warn('failover agent not started', { reason = fo_err })
+        local want_agent = fo_cfg.agent == true
+        if STATE.failover ~= nil and not want_agent then
+            pcall(function() STATE.failover.stop() end)
+            STATE.failover = nil
+            logger.info('failover agent stopped via config reload',
+                { reason = 'roles_cfg.webui.failover.agent != true' })
+        end
+        if want_agent and STATE.failover == nil then
+            local fo_started, fo_err = fo.start(fo_cfg)
+            if fo_started == true then
+                STATE.failover = fo
+            elseif fo_err ~= nil and fo_err ~= 'disabled' then
+                logger.warn('failover agent not started',
+                    { reason = fo_err })
+            end
         end
     end
 

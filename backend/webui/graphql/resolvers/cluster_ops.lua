@@ -180,19 +180,51 @@ local function fan_out_reload()
     if #all == 0 then
         return self_outcome ~= '' and self_outcome or ' Reloaded locally.'
     end
-    local ok_call, res_each = pcall(rpc.map_eval,
-        'require("config"):reload(); return true',
-        {}, { timeout = 15, peers = all })
-    if not ok_call then
-        return self_outcome .. ' Reload fan-out errored: '
-            .. tostring(res_each) .. '.'
-    end
-    local failed = {}
-    for name, r in pairs(res_each or {}) do
-        if not (r and r.ok) then
-            table.insert(failed, name .. '=' ..
-                tostring(r and r.err or 'unknown'))
+
+    -- The local cfg:reload() above may have rotated iproto
+    -- credentials / advertise URIs, which closes every existing
+    -- net.box socket in the peer pool. If we fire the fan-out
+    -- immediately, every call comes back "not connected" — the
+    -- pool's reconnect_after hasn't fired yet. Best-effort retry
+    -- with a brief sleep gives the pool time to rebuild the
+    -- connections. The retry budget is bounded (3 attempts at
+    -- 1s spacing) so a genuinely dead peer still surfaces.
+    local function fan_out_attempt()
+        local ok_call, res_each = pcall(rpc.map_eval,
+            'require("config"):reload(); return true',
+            {}, { timeout = 15, peers = all })
+        if not ok_call then return nil, tostring(res_each) end
+        local failed = {}
+        for name, r in pairs(res_each or {}) do
+            if not (r and r.ok) then
+                table.insert(failed, name .. '=' ..
+                    tostring(r and r.err or 'unknown'))
+            end
         end
+        return failed
+    end
+
+    local failed, call_err
+    local fiber = require('fiber')
+    for attempt = 1, 3 do
+        failed, call_err = fan_out_attempt()
+        if call_err ~= nil then break end
+        if #failed == 0 then break end
+        -- Only retry on transient "not connected" — anything else
+        -- is a real failure we should surface immediately.
+        local all_transient = true
+        for _, f in ipairs(failed) do
+            if not f:find('not connected', 1, true) then
+                all_transient = false; break
+            end
+        end
+        if not all_transient or attempt == 3 then break end
+        fiber.sleep(1)
+    end
+
+    if call_err ~= nil then
+        return self_outcome .. ' Reload fan-out errored: '
+            .. tostring(call_err) .. '.'
     end
     if #failed == 0 then
         return self_outcome .. ' Reloaded on '
@@ -1264,6 +1296,62 @@ function M.mutation_set_failover_mode(root, args)
         })
     end)
     local reload_outcome = fan_out_reload()
+
+    -- Manual mode handoff: Tarantool 3.x sets `ro=false` on the
+    -- named leader during `config:reload()` but does NOT call
+    -- `box.ctl.promote()` automatically — the synchro queue
+    -- stays without an owner, so the very next sync write (our
+    -- own audit row of *this* mutation) deadlocks on
+    -- "queue doesn't belong to any instance". Drive the promote
+    -- explicitly from here: walk the assembled YAML for each
+    -- replicaset that names a leader, find the matching peer,
+    -- call promote via net.box. Best-effort — failures land in
+    -- the message so the operator can re-run.
+    if args.mode == 'manual' then
+        local rpc_ok, rpc = pcall(require, 'webui.cluster.rpc')
+        local self_alias
+        if box.info and box.info.name then self_alias = box.info.name end
+        for _, group in pairs(new_parsed.groups or {}) do
+            for _, rs in pairs(group.replicasets or {}) do
+                local leader_alias = rs.leader
+                if type(leader_alias) == 'string' and leader_alias ~= '' then
+                    if leader_alias == self_alias then
+                        pcall(function() box.ctl.promote() end)
+                    elseif rpc_ok then
+                        pcall(rpc.map_eval,
+                            'pcall(function() box.ctl.promote() end);'
+                            .. 'return { ok = true }',
+                            {}, { timeout = 5, peers = { leader_alias } })
+                    end
+                end
+            end
+        end
+    end
+
+    -- Wait for the cluster to converge on a leader. A mode change
+    -- often demotes the current writer (failover: off → manual
+    -- strips database.mode, every peer becomes RO transiently)
+    -- and the new leader takes a couple of agent/watcher ticks to
+    -- appear. The login endpoint refuses to forward to "no leader"
+    -- so returning success here while find_leader() still returns
+    -- nil makes the SPA show a misleading "[GraphQL] no leader"
+    -- right after a successful Apply. Bounded wait (default 8s) +
+    -- a 250ms poll interval; covers both the supervised path
+    -- (coordinator lease + watcher promote) and the raft path
+    -- (election timeout, 5s default).
+    do
+        local ok_state, cluster_state = pcall(require, 'webui.cluster.state')
+        if ok_state then
+            local fiber = require('fiber')
+            local deadline = fiber.time() + 8
+            while fiber.time() < deadline do
+                local leader = cluster_state.find_leader()
+                if leader ~= nil then break end
+                fiber.sleep(0.25)
+            end
+        end
+    end
+
     return {
         prepared_id  = nil,
         diff_summary = { 'set_failover_mode → ' .. args.mode },
