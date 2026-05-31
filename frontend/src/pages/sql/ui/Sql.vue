@@ -313,13 +313,29 @@ function csvEscape(v: unknown): string {
 }
 
 function downloadBlob(filename: string, contents: string, mime: string) {
+  // Two browser quirks that turn well-named downloads into
+  // "Blob" without extension:
+  //   1. Some Chromium builds ignore the `download` attribute
+  //      on an anchor that was never attached to the document.
+  //      We append it briefly, click, then remove it.
+  //   2. Revoking the blob URL synchronously after .click() can
+  //      race the download dispatcher — Firefox in particular
+  //      ends up using the bare object-URL filename ("Blob").
+  //      Defer the revoke a frame so the browser has captured
+  //      both the URL and the `download` filename first.
   const blob = new Blob([contents], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
+  a.rel = 'noopener';
+  a.style.display = 'none';
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  setTimeout(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 0);
 }
 
 function exportCsv(stmt: SelectResult, idx: number) {
