@@ -163,4 +163,23 @@ a:hover {
   --p-datatable-border-color: var(--p-content-border-color);
   --p-datatable-paginator-top-border-color: var(--p-content-border-color);
   --p-datatable-paginator-bottom-border-color: var(--p-content-border-color);
+
+  /* Paginator (PrimeVue's standalone Paginator component, which
+   * the DataTable embeds when paginator=true). The
+   * --p-datatable-paginator-* tokens above only touch the wrapper
+   * borders; the actual buttons + active page chip are governed
+   * by the --p-paginator-* family. Without these the paginator
+   * row renders white on every dark page (cluster commands
+   * history, failover commands history, audit log). */
+  --p-paginator-background: var(--p-content-background);
+  --p-paginator-color: var(--p-text-color);
+  --p-paginator-border-color: var(--p-content-border-color);
+  --p-paginator-nav-button-background: transparent;
+  --p-paginator-nav-button-color: var(--p-text-muted-color);
+  --p-paginator-nav-button-hover-background: var(--p-content-hover-background);
+  --p-paginator-nav-button-hover-color: var(--p-text-color);
+  --p-paginator-nav-button-focus-ring-color: var(--p-content-border-color);
+  --p-paginator-nav-button-selected-background: var(--p-highlight-background);
+  --p-paginator-nav-button-selected-color: var(--p-highlight-color);
+  --p-paginator-current-page-report-color: var(--p-text-muted-color);
 }

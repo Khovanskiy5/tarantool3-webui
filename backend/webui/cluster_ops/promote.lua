@@ -66,6 +66,17 @@ end
 local function remote_promote(alias, opts)
     opts = opts or {}
     local timeout = tonumber(opts.timeout) or 5
+    -- Self-loopback shortcut. `rpc.map_eval` routes through the
+    -- peer pool, which deliberately does NOT include the current
+    -- instance ("not connected" otherwise on every self-call).
+    -- Promote-on-self happens directly via box.ctl.
+    local self_alias
+    if box.info and box.info.name then self_alias = box.info.name end
+    if alias == self_alias then
+        local ok, err = pcall(box.ctl.promote)
+        if not ok then return nil, tostring(err) end
+        return { promoted = true, forced = opts.force_inconsistency == true }
+    end
     local rpc_ok, rpc = pcall(require, 'webui.cluster.rpc')
     if not rpc_ok or type(rpc.map_eval) ~= 'function' then
         return nil, 'rpc module unavailable'
