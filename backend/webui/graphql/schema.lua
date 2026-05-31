@@ -40,6 +40,7 @@ local lifecycle_resolver   = require('webui.graphql.resolvers.lifecycle')
 local failover_resolver    = require('webui.graphql.resolvers.failover')
 local vshard_resolver      = require('webui.graphql.resolvers.vshard')
 local admin_data_resolver  = require('webui.graphql.resolvers.admin_data')
+local data_explorer_types  = require('webui.graphql.types.data_explorer')
 local bootstrap_resolver   = require('webui.graphql.resolvers.bootstrap')
 local webhooks_resolver    = require('webui.graphql.resolvers.webhooks')
 local cluster_ops_resolver = require('webui.graphql.resolvers.cluster_ops')
@@ -404,10 +405,15 @@ local Query = types.object {
                     spaces = types.list(types.object({
                         name = 'SpaceInfo',
                         fields = {
-                            id = types.long.nonNull,
-                            name = types.string.nonNull,
-                            engine = types.string,
-                            row_count = types.long,
+                            id              = types.long.nonNull,
+                            name            = types.string.nonNull,
+                            engine          = types.string,
+                            row_count       = types.long,
+                            size_bytes      = types.long,
+                            is_sync         = types.boolean,
+                            triggers_count  = types.long,
+                            sequence        = types.string,
+                            format          = types.list(data_explorer_types.FieldFormat),
                             indexes = types.list(types.object({
                                 name = 'IndexInfo',
                                 fields = {
@@ -423,8 +429,30 @@ local Query = types.object {
                 },
             }).nonNull,
             arguments = { include_system = types.boolean },
-            description = 'Local spaces with row counts and index definitions.',
+            description = 'Local spaces with row counts, format, sync flag, ' ..
+                'attached sequence, on_replace trigger count, on-disk size ' ..
+                '(bsize) and index definitions.',
             resolve = admin_data_resolver.query_spaces,
+        },
+        tuples = {
+            kind = data_explorer_types.TupleConnection.nonNull,
+            arguments = {
+                space            = types.string.nonNull,
+                -- inputObject does not auto-expose `.nonNull` like
+                -- object/enum/scalar do — wrap explicitly.
+                filter           = types.list(types.nonNull(data_explorer_types.TupleFilterInput)),
+                index            = types.string,
+                limit            = types.int,
+                after            = types.string,
+                allow_full_scan  = types.boolean,
+            },
+            description = 'Paged scan of a space. AND-combined filter; ' ..
+                '`pick_index` chooses the best-covering index; residual ' ..
+                'conditions apply post-scan and set `partial_scan: true`. ' ..
+                'Hard cap 1000 rows / call; `truncated: true` + ' ..
+                '`next_cursor` when more pages exist. `total` is set only ' ..
+                'when the iterator collapses to EQ on a non-vinyl engine.',
+            resolve = admin_data_resolver.query_tuples,
         },
         users = {
             kind = types.object({

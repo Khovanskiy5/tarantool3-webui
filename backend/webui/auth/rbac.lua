@@ -104,6 +104,7 @@ M.GRAPHQL_FIELD = {
     configHistory  = 'viewer',
     configRevision = 'operator',
     schema         = 'viewer',
+    tuples         = 'viewer',
     users        = 'admin',
     audit        = 'admin',
     issues       = 'viewer',
