@@ -40,6 +40,7 @@ local lifecycle_resolver   = require('webui.graphql.resolvers.lifecycle')
 local failover_resolver    = require('webui.graphql.resolvers.failover')
 local vshard_resolver      = require('webui.graphql.resolvers.vshard')
 local admin_data_resolver  = require('webui.graphql.resolvers.admin_data')
+local bootstrap_resolver   = require('webui.graphql.resolvers.bootstrap')
 
 local M = {}
 
@@ -335,6 +336,53 @@ local Query = types.object {
             },
             resolve = audit_resolver.query_audit,
         },
+        bootstrapStatus = {
+            kind = types.object({
+                name = 'BootstrapStatus',
+                fields = {
+                    needed         = types.boolean.nonNull,
+                    reason         = types.string,
+                    source         = types.string,
+                    etcd_available = types.boolean,
+                    etcd_error     = types.string,
+                },
+            }).nonNull,
+            description = 'Whether the initial bootstrap wizard should activate. '
+                .. 'Returns `needed=false` when any existing config is detected.',
+            resolve = bootstrap_resolver.query_status,
+        },
+        bootstrapTemplates = {
+            kind = types.object({
+                name = 'BootstrapTemplates',
+                fields = {
+                    templates = types.list(types.object({
+                        name = 'BootstrapTemplate',
+                        fields = {
+                            name        = types.string.nonNull,
+                            title       = types.string.nonNull,
+                            description = types.string,
+                        },
+                    })).nonNull,
+                },
+            }).nonNull,
+            description = 'Available wizard templates.',
+            resolve = bootstrap_resolver.query_templates,
+        },
+        bootstrapRender = {
+            kind = types.object({
+                name = 'BootstrapRender',
+                fields = {
+                    yaml  = types.string,
+                    error = types.string,
+                },
+            }).nonNull,
+            arguments = {
+                template     = types.string.nonNull,
+                cluster_name = types.string,
+            },
+            description = 'Preview the YAML the wizard would commit, without writing it.',
+            resolve = bootstrap_resolver.query_render,
+        },
     },
 }
 
@@ -410,6 +458,28 @@ local Mutation = types.object {
                 instanceUuids = types.list(types.string.nonNull).nonNull,
             },
             resolve = suggestions_resolver.apply_bootstrap_vshard,
+        },
+        bootstrapInitialize = {
+            kind = types.object({
+                name = 'BootstrapInitResult',
+                fields = {
+                    ok          = types.boolean.nonNull,
+                    yaml        = types.string,
+                    revision    = types.long,
+                    dry_run     = types.boolean,
+                    etcd_used   = types.boolean,
+                    etcd_error  = types.string,
+                    error_code  = types.string,
+                    message     = types.string,
+                },
+            }).nonNull,
+            arguments = {
+                template     = types.string.nonNull,
+                cluster_name = types.string,
+            },
+            description = 'Render the chosen template and commit it through the '
+                .. 'two-phase pipeline. Refuses to run when status.needed is false.',
+            resolve = bootstrap_resolver.mutation_initialize,
         },
         bootstrapVshard = {
             kind = types.object({

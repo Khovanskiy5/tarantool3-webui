@@ -37,6 +37,10 @@ CSRF: cookie `webui_csrf` (не HttpOnly) дублируется в заголо
 | Query     | `vshardKnownGroups` | session    | Имена vshard-групп, объявленных в cluster config. |
 | Query     | `canBootstrapVshard(group)` | session | Pre-check на bootstrap (members реачебельны).   |
 | Mutation  | `bootstrapVshard(group)`    | admin   | Вызов `vshard.router.bootstrap()` через peer pool. |
+| Query     | `bootstrapStatus`           | admin   | Нужен ли initial bootstrap (пустой etcd + пустой cluster.yaml). |
+| Query     | `bootstrapTemplates`        | admin   | Список шаблонов: single-instance / replicaset-3 / vshard-3x3. |
+| Query     | `bootstrapRender(template, cluster_name)` | admin | Preview YAML без записи. |
+| Mutation  | `bootstrapInitialize(template, cluster_name)` | admin | Render → validate → 2PC commit. Возвращает `{ok, error_code, message, revision, dry_run, etcd_used}`. |
 | Query     | `config`            | viewer     | Текущий YAML + source (`file`/`memory`/`etcd`).|
 | Query     | `audit`             | admin      | Paginated audit-log с фильтрами.              |
 | Mutation  | `validateConfig`    | operator   | Schema + cross-validate YAML.                 |

@@ -33,6 +33,7 @@ import { VSHARD_ROUTE } from '@/pages/vshard';
 import { METRICS_ROUTE } from '@/pages/metrics';
 import { SNAPSHOTS_ROUTE } from '@/pages/snapshots';
 import { CONSOLE_ROUTE } from '@/pages/console';
+import { BOOTSTRAP_ROUTE } from '@/pages/bootstrap';
 import { useSessionStore, type Role } from '@/entities/session';
 
 // Per-route role gating. Routes not listed inherit `viewer`
@@ -59,6 +60,7 @@ const routes: RouteRecordRaw[] = [
   METRICS_ROUTE,
   SNAPSHOTS_ROUTE,
   CONSOLE_ROUTE,
+  BOOTSTRAP_ROUTE,
   AUDIT_ROUTE,
   FORBIDDEN_ROUTE,
   NETWORK_ERROR_ROUTE,
