@@ -319,12 +319,35 @@ function M.apply(type_, payload, opts)
         })
         return { ok = true, results = results, unknown = resolved.unknown }
     elseif type_ == M.TYPES.RESTART_REPLICATION then
-        local results = execute(RESTART_REPLICATION_EXPR, resolved.aliases)
-        -- Honest outcome: count peers that came back vs ones still
-        -- stuck. `box.cfg{replication={}}; box.cfg{replication=saved}`
-        -- recovers ordinary connection blips but does NOT fix split-
-        -- brain (lsn divergence). Surface the difference in the
-        -- message so operators stop clicking the button uselessly.
+        -- Decision up-front: if the snapshot says the affected
+        -- upstreams are in split-brain right now, a reconnect
+        -- cycle won't fix anything — Tarantool would just hit
+        -- the same conflicting term on the next applier round.
+        -- We escalate straight to rebootstrap on those peers.
+        -- The non-split-brain peers still get the regular
+        -- reconnect path.
+        local split_brain_peers = {}
+        local reconnect_peers = {}
+        for _, alias in ipairs(resolved.aliases) do
+            local server = snapshot.servers and snapshot.servers[alias]
+            local broken_reason = nil
+            if server and type(server.replication) == 'table' then
+                for _, entry in pairs(server.replication) do
+                    if entry.upstream and entry.upstream.status ~= 'follow' then
+                        broken_reason = entry.upstream.message or ''
+                        break
+                    end
+                end
+            end
+            if broken_reason ~= nil
+                and broken_reason:lower():find('split.brain', 1, false) then
+                split_brain_peers[alias] = true
+            else
+                table.insert(reconnect_peers, alias)
+            end
+        end
+
+        local results = execute(RESTART_REPLICATION_EXPR, reconnect_peers)
         local recovered, still_stopped, peer_fail = 0, {}, {}
         for peer, r in pairs(results or {}) do
             if not (r and r.ok) then
@@ -337,9 +360,63 @@ function M.apply(type_, payload, opts)
                 end
                 if type(v.still_stopped) == 'table' and #v.still_stopped > 0 then
                     for _, s in ipairs(v.still_stopped) do
+                        local reason = tostring(s.reason or '')
                         table.insert(still_stopped, string.format(
                             '%s upstream id=%s: %s',
-                            peer, tostring(s.id), tostring(s.reason)))
+                            peer, tostring(s.id), reason))
+                        -- Late-detected split-brain: applier came
+                        -- back STOPPED after our reconnect cycle.
+                        if reason:lower():find('split.brain', 1, false) then
+                            split_brain_peers[peer] = true
+                        end
+                    end
+                end
+            end
+        end
+
+        -- Auto-escalate: any peer reporting "Split-Brain" gets a
+        -- rebootstrap kick. The receiver refuses if the peer owns
+        -- the synchro queue (Phase 5 contract), so a healthy
+        -- queue-owner cannot be wiped by accident.
+        --
+        -- Self-loop: rpc.map_eval routes through the peer pool,
+        -- which deliberately excludes the current instance ("not
+        -- connected" otherwise on every self-call). For the
+        -- self-rebootstrap path we call the global directly so
+        -- the operator can recover the very peer they are
+        -- connected to.
+        local self_alias
+        if box.info and box.info.name then self_alias = box.info.name end
+        local rebooted, reboot_fail = {}, {}
+        for peer in pairs(split_brain_peers) do
+            if peer == self_alias then
+                local fn = rawget(_G, 'webui_rebootstrap_remote')
+                if type(fn) == 'function' then
+                    local ok_self, res_self = pcall(fn)
+                    if ok_self and (res_self == nil or res_self.err == nil) then
+                        table.insert(rebooted, peer)
+                    else
+                        table.insert(reboot_fail, peer .. '=' ..
+                            tostring((res_self and res_self.err) or res_self or 'self-call failed'))
+                    end
+                else
+                    table.insert(reboot_fail, peer .. '=no rebootstrap rpc on self')
+                end
+            else
+                local ok_reboot, reboot_res = pcall(rpc.map_eval,
+                    'return _G.webui_rebootstrap_remote and ' ..
+                    '_G.webui_rebootstrap_remote() or { err = "no rebootstrap rpc" }',
+                    {}, { timeout = 5, peers = { peer } })
+                if not ok_reboot or type(reboot_res) ~= 'table'
+                    or reboot_res[peer] == nil then
+                    table.insert(reboot_fail, peer .. '=transport-err')
+                else
+                    local rr = reboot_res[peer]
+                    if rr.ok and rr.value and rr.value.err == nil then
+                        table.insert(rebooted, peer)
+                    else
+                        table.insert(reboot_fail, peer .. '=' ..
+                            tostring((rr.value and rr.value.err) or rr.err or 'unknown'))
                     end
                 end
             end
@@ -349,10 +426,20 @@ function M.apply(type_, payload, opts)
             table.insert(parts, string.format('reconnected on %d peer(s)',
                 recovered))
         end
-        if #still_stopped > 0 then
+        if #rebooted > 0 then
             table.insert(parts, string.format(
-                'STILL STOPPED on %d upstream(s): %s — likely split-brain, ' ..
-                'manual rebootstrap required (see docs/troubleshooting.md)',
+                'split-brain detected, dispatched rebootstrap to: %s ' ..
+                '(container will restart and bootstrap clean from the leader)',
+                table.concat(rebooted, ', ')))
+        end
+        if #reboot_fail > 0 then
+            table.insert(parts, 'rebootstrap failures: ' ..
+                table.concat(reboot_fail, '; '))
+        end
+        if #still_stopped > 0 and #rebooted == 0 then
+            table.insert(parts, string.format(
+                'STILL STOPPED on %d upstream(s): %s — manual rebootstrap ' ..
+                'required (POST /api/diagnostics/rebootstrap)',
                 #still_stopped, table.concat(still_stopped, '; ')))
         end
         if #peer_fail > 0 then

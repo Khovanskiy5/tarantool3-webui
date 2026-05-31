@@ -105,6 +105,7 @@ M.GRAPHQL_FIELD = {
     configRevision = 'operator',
     schema         = 'viewer',
     tuples         = 'viewer',
+    savedQueries   = 'operator',
     users        = 'admin',
     audit        = 'admin',
     issues       = 'viewer',
@@ -148,6 +149,9 @@ M.GRAPHQL_FIELD = {
     alterSpace            = 'admin',
     createIndex           = 'admin',
     dropIndex             = 'admin',
+    -- Phase 3 Task 3.4 — SQL workbench snippet library.
+    saveQuery             = 'operator',
+    deleteSavedQuery      = 'operator',
     setUserRoles  = 'admin',
     setLabels     = 'operator',
     setVshardWeight = 'admin',

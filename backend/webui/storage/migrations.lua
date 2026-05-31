@@ -198,6 +198,38 @@ M.migrations = {
             })
         end
     end,
+
+    -- SQL workbench library: `_webui_saved_queries` (Phase 3
+    -- Task 3.4). Idempotent on existing deployments — the
+    -- bootstrap path also creates the space on a fresh install;
+    -- this step covers the rolling upgrade case where an
+    -- existing cluster jumps from schema_version 6 to 7.
+    [7] = function(box)
+        if box.space._webui_saved_queries == nil then
+            box.schema.space.create('_webui_saved_queries', {
+                if_not_exists = true,
+                is_sync       = true,
+                format = {
+                    { name = 'id',         type = 'unsigned' },
+                    { name = 'name',       type = 'string' },
+                    { name = 'sql',        type = 'string' },
+                    { name = 'owner',      type = 'string' },
+                    { name = 'created_at', type = 'number' },
+                    { name = 'shared',     type = 'boolean' },
+                    { name = 'tags',       type = 'array', is_nullable = true },
+                },
+            })
+            box.space._webui_saved_queries:create_index('primary', {
+                parts = { 'id' }, sequence = true, if_not_exists = true,
+            })
+            box.space._webui_saved_queries:create_index('by_owner', {
+                parts = { 'owner', 'id' }, unique = false, if_not_exists = true,
+            })
+            box.space._webui_saved_queries:create_index('by_shared', {
+                parts = { 'shared', 'id' }, unique = false, if_not_exists = true,
+            })
+        end
+    end,
 }
 
 -- ─────────────────────────────────────────────────────────────────────

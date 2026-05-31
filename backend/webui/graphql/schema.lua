@@ -41,6 +41,7 @@ local failover_resolver    = require('webui.graphql.resolvers.failover')
 local vshard_resolver      = require('webui.graphql.resolvers.vshard')
 local admin_data_resolver  = require('webui.graphql.resolvers.admin_data')
 local data_explorer_types  = require('webui.graphql.types.data_explorer')
+local saved_queries_resolver = require('webui.graphql.resolvers.saved_queries')
 local bootstrap_resolver   = require('webui.graphql.resolvers.bootstrap')
 local webhooks_resolver    = require('webui.graphql.resolvers.webhooks')
 local cluster_ops_resolver = require('webui.graphql.resolvers.cluster_ops')
@@ -453,6 +454,31 @@ local Query = types.object {
                 '`next_cursor` when more pages exist. `total` is set only ' ..
                 'when the iterator collapses to EQ on a non-vinyl engine.',
             resolve = admin_data_resolver.query_tuples,
+        },
+        -- Phase 3 Task 3.4 — SQL workbench snippet library.
+        savedQueries = {
+            kind = types.object({
+                name = 'SavedQueriesPayload',
+                fields = {
+                    items = types.list(types.object({
+                        name = 'SavedQuery',
+                        fields = {
+                            id         = types.long.nonNull,
+                            name       = types.string.nonNull,
+                            sql        = types.string.nonNull,
+                            owner      = types.string.nonNull,
+                            created_at = types.float.nonNull,
+                            shared     = types.boolean.nonNull,
+                            tags       = types.list(types.string),
+                        },
+                    })).nonNull,
+                },
+            }).nonNull,
+            description = 'SQL snippet library. Visibility: owner ' ..
+                'always; admins always; everyone else only when ' ..
+                '`shared = true`. Empty list when storage is not yet ' ..
+                'bootstrapped (e.g. first boot before leader elects).',
+            resolve = saved_queries_resolver.query_saved_queries,
         },
         users = {
             kind = types.object({
@@ -1149,6 +1175,59 @@ local Mutation = types.object {
                 return require('webui.graphql.resolvers.data_mutations')
                     .drop_index(root, args)
             end,
+        },
+        -- Phase 3 Task 3.4 — SQL workbench snippet save / delete.
+        saveQuery = {
+            kind = types.object({
+                name = 'SaveQueryResult',
+                fields = {
+                    ok        = types.boolean.nonNull,
+                    item      = types.object({
+                        name = 'SaveQueryItem',
+                        fields = {
+                            id         = types.long.nonNull,
+                            name       = types.string.nonNull,
+                            sql        = types.string.nonNull,
+                            owner      = types.string.nonNull,
+                            created_at = types.float.nonNull,
+                            shared     = types.boolean.nonNull,
+                        },
+                    }),
+                    forwarded = types.boolean,
+                    leader    = types.string,
+                },
+            }).nonNull,
+            arguments = {
+                name   = types.string.nonNull,
+                sql    = types.string.nonNull,
+                shared = types.boolean,
+                tags   = types.list(types.string.nonNull),
+            },
+            description = 'Save a SQL snippet. Owner is the calling user; ' ..
+                '`shared = true` makes it visible to every operator+.',
+            resolve = saved_queries_resolver.mutation_save,
+        },
+        deleteSavedQuery = {
+            kind = types.object({
+                name = 'DeleteSavedQueryResult',
+                fields = {
+                    ok        = types.boolean.nonNull,
+                    item      = types.object({
+                        name = 'DeleteSavedQueryItem',
+                        fields = {
+                            id    = types.long.nonNull,
+                            name  = types.string.nonNull,
+                            owner = types.string.nonNull,
+                        },
+                    }),
+                    forwarded = types.boolean,
+                    leader    = types.string,
+                },
+            }).nonNull,
+            arguments = { id = types.long.nonNull },
+            description = 'Delete one snippet by id. Only the owner or an ' ..
+                'admin may delete; everyone else gets FORBIDDEN.',
+            resolve = saved_queries_resolver.mutation_delete,
         },
     },
 }

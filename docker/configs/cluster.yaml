@@ -1,189 +1,96 @@
-#
-# A single YAML file describes all three instances and is mounted into
-# every container. The instance to bring up inside a given container is
-# selected via `tarantool --name <name>` (the entrypoint passes
-# INSTANCE_NAME).
-#
-# The file is the bootstrap source: instances always read it at start
-# so a fresh cluster can come up even when etcd is empty. The
-# `config.etcd` block below makes Tarantool ALSO consult etcd as a
-# source — Tarantool merges both, with present etcd keys taking
-# precedence over file values. The custom community-edition shim
-# (`backend/internal/config/extras.lua` + the etcd source) treats a
-# missing `<prefix>/config/all` key as "no contribution" rather than
-# a fatal error, so the chicken-and-egg problem of an empty store is
-# resolved: file feeds the boot, the WebUI commitConfig populates
-# etcd on the first save, and subsequent reloads pick up that key.
-
-# Tarantool config-source merge: file first, then etcd. The shim
-# tolerates a missing key, so an empty etcd does not block boot.
-config:
-  etcd:
-    endpoints: ['http://etcd:2379']
-    prefix: '/tarantool/webui'
-
+---
 credentials:
   users:
-    # Replication account — used by Tarantool itself between peers.
-    replicator:
-      password: 'replicator-dev-password'
-      roles: [replication]
-    # WebUI peer account — used by the role's net.box pool to query
-    # box.info on neighbours (Task 15). Privileges will be narrowed
-    # to read-only specific functions once Task 15 actually wires up
-    # the pool. For M0 it gets super so the role can stand on its own.
     webui_peer:
-      password: 'webui-peer-dev-password'
-      roles: [super]
-    # Human accounts for the dev cluster. WebUI RBAC mapping
-    # (viewer / operator / admin) is set in `roles_cfg.webui.rbac`
-    # below; the Tarantool privileges below are only the minimum
-    # `box.schema.user.auth_password` needs to validate the
-    # credentials at login time.
+      password: webui-peer-dev-password
+      roles:
+      - super
     admin_dev:
-      password: 'admin-dev-password'
-      roles: [public]
+      password: admin-dev-password
+      roles:
+      - public
     operator_dev:
-      password: 'operator-dev-password'
-      roles: [public]
-    viewer_dev:
-      password: 'viewer-dev-password'
-      roles: [public]
+      password: operator-dev-password
+      roles:
+      - public
+    replicator:
+      password: replicator-dev-password
+      roles:
+      - replication
     superuser_dev:
-      password: 'superuser-dev-password'
-      roles: [public]
-
-iproto:
-  advertise:
-    peer:
-      login: replicator
-
+      password: superuser-dev-password
+      roles:
+      - public
+    viewer_dev:
+      password: viewer-dev-password
+      roles:
+      - public
 replication:
-  # `off`: Tarantool delegates leader selection to per-instance
-  # `database.mode`. The WebUI's open-source supervised-failover
-  # agent (`roles_cfg.webui.failover.agent`) then takes over at
-  # runtime: it elects a coordinator via etcd lease, writes an
-  # appointment per replicaset, and each instance's watcher calls
-  # `box.cfg{read_only=...}` to honour it.
-  #
-  # Switching back to raft is a one-line edit: set `failover:
-  # election` and remove the `database.mode` overrides below. The
-  # agent refuses to start when failover is not `off`, so there is
-  # no risk of double leadership during transitions.
+  synchro_quorum: N/2 + 1
   failover: off
-  # Synchronous replication quorum + timeout. With 3 instances
-  # the default quorum is N/2+1=2, so a write is acknowledged
-  # once at least one follower confirms it. `synchro_timeout=3s`
-  # caps how long the leader waits before giving up — long enough
-  # to ride out a transient network hiccup, short enough to flip
-  # ownership through the failover agent within a few seconds.
-  # Every WebUI replicated space is created with is_sync=true so
-  # these settings apply to its writes.
-  synchro_quorum: 'N/2 + 1'
   synchro_timeout: 3
-
+roles:
+- webui
 groups:
   default:
     replicasets:
       rs-1:
-        # Every instance declares `database.mode: rw`. In
-        # `replication.failover: off` mode this would normally
-        # produce master-master, but our supervised agent uses
-        # the synchronous-queue ownership (`box.ctl.promote /
-        # demote`) as the single-writer lock: at most one
-        # instance owns the queue at a time, so writes to
-        # synchronous spaces (which everything safety-critical
-        # is) are linearisable through the queue owner. Plain
-        # asynchronous writes to non-synchro spaces would be
-        # multi-master; the WebUI itself only uses synchro
-        # spaces, so that is not a concern.
-        #
-        # We intentionally do NOT set `database.mode: ro` on the
-        # followers — Tarantool would then keep re-applying RO at
-        # every config reload, fighting the agent's `box.ctl
-        # .promote()`. With all instances declared RW, the agent
-        # controls leadership end-to-end via the synchro queue.
         instances:
+          tt-2:
+            iproto:
+              listen:
+              - uri: 0.0.0.0:3301
+              advertise:
+                peer:
+                  uri: tt-2:3301
+          tt-3:
+            iproto:
+              listen:
+              - uri: 0.0.0.0:3301
+              advertise:
+                peer:
+                  uri: tt-3:3301
           tt-1:
             database:
               mode: rw
             iproto:
               listen:
-                - uri: '0.0.0.0:3301'
+              - uri: 0.0.0.0:3301
               advertise:
                 peer:
-                  uri: 'tt-1:3301'
-          tt-2:
-            database:
-              mode: rw
-            iproto:
-              listen:
-                - uri: '0.0.0.0:3301'
-              advertise:
-                peer:
-                  uri: 'tt-2:3301'
-          tt-3:
-            database:
-              mode: rw
-            iproto:
-              listen:
-                - uri: '0.0.0.0:3301'
-              advertise:
-                peer:
-                  uri: 'tt-3:3301'
-
-# The webui role wakes up on every instance once roles_cfg.webui is
-# applied. The role module lives at /usr/share/tarantool/webui/init.lua
-# inside the image (see docker/Dockerfile.instance) so package.path
-# finds it.
-roles:
-  - webui
-
+                  uri: tt-1:3301
 roles_cfg:
   webui:
-    listen: '0.0.0.0:8081'
     log_level: debug
-    # Lua/SQL console — ON in the dev compose only. Production
-    # manifests keep this `false`.
-    console_enabled: true
-    # GraphiQL explorer is convenient in dev.
     graphiql_enabled: true
-    # Outbound webhooks fixture. The target is intentionally
-    # unreachable (port 1) so the local smoke can observe the
-    # retry → dead-letter flow without an external receiver.
-    webhooks:
-      - name: 'dev-loopback'
-        type: 'generic'
-        url: 'http://127.0.0.1:1/sink'
-        events: ['audit.security', 'issue.appeared', 'config.committed', 'webhook.test']
-        enabled: true
-    # Where commitConfig persists YAML. The block is read by
-    # `webui.config_store.client.get_client()`. Unlike the top-level
-    # `config.etcd` Tarantool source, this block ONLY drives the
-    # WebUI write path — no boot-time read attempt, so an empty etcd
-    # is fine.
-    etcd_writer:
-      endpoints: ['http://etcd:2379']
-      prefix: '/tarantool/webui'
-    # Open-source supervised-failover agent. With this flag the
-    # WebUI runs a coordinator-election fiber on every peer (etcd
-    # lease on `<prefix>/failover/coordinator`) and the elected
-    # coordinator writes per-replicaset appointments to
-    # `<prefix>/failover/replicasets/<rs>/leader`. Every instance
-    # polls its appointment and reconciles `box.cfg{read_only}`
-    # accordingly. Requires `replication.failover: off`.
     failover:
+      keepalive_interval: 1
       agent: true
-      # Lease TTL caps worst-case failover latency: when the
-      # coordinator AND the leader die in the same incident, the
-      # cluster waits for the lease to expire before another peer
-      # can claim coordinator and write a new appointment. TTL 3s
-      # keeps that window around 3-4 seconds total at the cost of
-      # roughly 3× more etcd keepalive traffic — negligible for
-      # the single coordinator that hits etcd.
-      lease_ttl_sec: 3
-      keepalive_interval: 1  # TTL/3 rule of thumb (2 missed = expiry)
-      appointment_interval: 1
       watcher_poll_interval_sec: 1
-# atomic-mirror-probe 1780238997
-# history-fix-probe 1780239417
+      lease_ttl_sec: 3
+      appointment_interval: 1
+    listen: 0.0.0.0:8081
+    console_enabled: true
+    etcd_writer:
+      endpoints:
+      - http://etcd:2379
+      prefix: /tarantool/webui
+    webhooks:
+    - events:
+      - audit.security
+      - issue.appeared
+      - config.committed
+      - webhook.test
+      type: generic
+      enabled: true
+      name: dev-loopback
+      url: http://127.0.0.1:1/sink
+iproto:
+  advertise:
+    peer:
+      login: replicator
+config:
+  etcd:
+    endpoints:
+    - http://etcd:2379
+    prefix: /tarantool/webui

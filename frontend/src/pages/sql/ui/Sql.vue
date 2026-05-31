@@ -15,7 +15,7 @@
   embedded commas, newlines and quotes per RFC 4180.
 -->
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref, shallowRef } from 'vue';
+import { nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue';
 import type * as Monaco from 'monaco-editor';
 import DataTable from 'primevue/datatable';
 import Column from 'primevue/column';
@@ -24,6 +24,13 @@ import Message from 'primevue/message';
 import TabView from 'primevue/tabview';
 import TabPanel from 'primevue/tabpanel';
 import Tag from 'primevue/tag';
+import Dialog from 'primevue/dialog';
+import InputText from 'primevue/inputtext';
+import Checkbox from 'primevue/checkbox';
+
+import { getClient } from '@/shared/api/graphql';
+import { useSessionStore } from '@/entities/session';
+import { restClient, RestApiError } from '@/shared/api/rest/client';
 
 // ── types matching the backend response ───────────────────────────
 
@@ -49,6 +56,17 @@ interface ExplainResponse {
   instance?: string;
 }
 
+// Saved-query library (Task 3.4).
+interface SavedQuery {
+  id: number;
+  name: string;
+  sql: string;
+  owner: string;
+  created_at: number;
+  shared: boolean;
+  tags?: string[] | null;
+}
+
 // ── state ──────────────────────────────────────────────────────────
 
 const editorContainer = ref<HTMLElement | null>(null);
@@ -69,6 +87,26 @@ const running = ref(false);
 const explainRunning = ref(false);
 const seqscanRequired = ref(false);
 const activeTab = ref(0);
+
+const session = useSessionStore();
+const savedQueries = ref<SavedQuery[]>([]);
+const savedQueriesLoading = ref(false);
+const saveDialogOpen = ref(false);
+const saveName = ref('');
+const saveShared = ref(false);
+const savingNow = ref(false);
+
+// Built-in cookbook — non-deletable curated snippets the operator
+// can drop into the editor with one click. Kept outside the saved
+// space because a fresh install should not need a write to be
+// useful, and these are dialect-stable across deployments.
+const BUILTIN_SNIPPETS: { name: string; sql: string }[] = [
+  { name: 'cluster identity', sql: 'SELECT "name", "uuid" FROM "_cluster"' },
+  { name: 'spaces overview',  sql: 'SELECT id, name, engine FROM "_vspace" WHERE name NOT LIKE \'\\_%\' ESCAPE \'\\\'' },
+  { name: 'index list',       sql: 'SELECT id, name, type FROM "_vindex" LIMIT 50' },
+  { name: 'users + roles',    sql: 'SELECT id, name, type FROM "_vuser"' },
+  { name: 'session settings', sql: 'SELECT name, value FROM "_session_settings"' },
+];
 
 // ── Monaco bootstrap (shared bundle with config-editor) ───────────
 
@@ -127,22 +165,10 @@ onBeforeUnmount(disposeEditor);
 
 // ── API calls ─────────────────────────────────────────────────────
 
-const xhrJson = async (path: string, payload: unknown) => {
-  const csrf = document.cookie
-    .split('; ')
-    .find((c) => c.startsWith('csrf_token='))
-    ?.split('=')[1] ?? '';
-  const res = await fetch(path, {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-CSRF-Token': csrf,
-    },
-    body: JSON.stringify(payload),
-  });
-  return { status: res.status, body: await res.json() };
-};
+// restClient owns CSRF cookie ↔ header coupling (`webui_csrf`
+// cookie → `x-csrf-token` header) plus 401 redirect. Hand-rolled
+// fetch on the page would read the wrong cookie name and every
+// call dies with `csrf token missing or invalid`.
 
 async function runQuery(opts: { seqscanAllowed?: boolean } = {}) {
   if (running.value) return;
@@ -150,39 +176,116 @@ async function runQuery(opts: { seqscanAllowed?: boolean } = {}) {
   error.value = null;
   seqscanRequired.value = false;
   try {
-    const { status, body } = await xhrJson('/api/sql', {
+    const body = await restClient.post<SqlResponse>('/api/sql', {
       statement: currentSql.value,
       seqscan_allowed: opts.seqscanAllowed === true,
     });
-    if (status !== 200) {
-      error.value = body?.error?.message ?? `HTTP ${status}`;
-      result.value = null;
-      latency.value = null;
-      return;
-    }
-    result.value = body as SqlResponse;
+    result.value = body;
     latency.value = body.latency_ms ?? null;
     seqscanRequired.value = body.seqscan_required === true;
     activeTab.value = 0;
   } catch (e) {
-    error.value = String(e);
+    if (e instanceof RestApiError) {
+      error.value = `${e.code}: ${e.message}`;
+    } else {
+      error.value = (e as Error).message;
+    }
+    result.value = null;
+    latency.value = null;
   } finally {
     running.value = false;
   }
 }
 
+// ── saved queries ──────────────────────────────────────────────────
+
+const SAVED_Q_QUERY = /* GraphQL */ `
+  query SqlSavedQueries {
+    savedQueries { items { id name sql owner created_at shared tags } }
+  }
+`;
+const SAVED_Q_SAVE_M = /* GraphQL */ `
+  mutation SqlSaveQuery($name: String!, $sql: String!, $shared: Boolean) {
+    saveQuery(name: $name, sql: $sql, shared: $shared) {
+      ok item { id name sql owner created_at shared }
+    }
+  }
+`;
+const SAVED_Q_DELETE_M = /* GraphQL */ `
+  mutation SqlDeleteSavedQuery($id: Long!) {
+    deleteSavedQuery(id: $id) { ok item { id name owner } }
+  }
+`;
+
+async function loadSavedQueries() {
+  savedQueriesLoading.value = true;
+  const res = await getClient()
+    .query<{ savedQueries: { items: SavedQuery[] } }>(
+      SAVED_Q_QUERY, {}, { requestPolicy: 'network-only' })
+    .toPromise();
+  savedQueriesLoading.value = false;
+  if (res.error) return;
+  savedQueries.value = res.data?.savedQueries?.items ?? [];
+}
+
+function openSaveDialog() {
+  saveName.value = '';
+  saveShared.value = false;
+  saveDialogOpen.value = true;
+}
+
+async function saveCurrentQuery() {
+  if (!saveName.value.trim() || !currentSql.value.trim()) return;
+  savingNow.value = true;
+  const res = await getClient()
+    .mutation(SAVED_Q_SAVE_M, {
+      name: saveName.value.trim(),
+      sql: currentSql.value,
+      shared: saveShared.value,
+    })
+    .toPromise();
+  savingNow.value = false;
+  if (res.error) {
+    error.value = res.error.message;
+    return;
+  }
+  saveDialogOpen.value = false;
+  await loadSavedQueries();
+}
+
+async function deleteSnippet(s: SavedQuery) {
+  if (!window.confirm(`Delete saved query "${s.name}"?`)) return;
+  const res = await getClient()
+    .mutation(SAVED_Q_DELETE_M, { id: s.id })
+    .toPromise();
+  if (res.error) {
+    error.value = res.error.message;
+    return;
+  }
+  await loadSavedQueries();
+}
+
+function loadIntoEditor(sql: string) {
+  currentSql.value = sql;
+  monacoEditor.value?.setValue(sql);
+}
+
+const currentUser = () => session.user ?? '';
+
+onMounted(() => {
+  void loadSavedQueries();
+});
+
 async function runExplain() {
   if (explainRunning.value) return;
   explainRunning.value = true;
   try {
-    const { status, body } = await xhrJson('/api/sql/explain', {
-      statement: currentSql.value,
-    });
-    if (status !== 200) {
-      explain.value = null;
-      return;
-    }
-    explain.value = body as ExplainResponse;
+    explain.value = await restClient.post<ExplainResponse>(
+      '/api/sql/explain', { statement: currentSql.value });
+  } catch (e) {
+    if (e instanceof RestApiError) error.value = `${e.code}: ${e.message}`;
+    else error.value = (e as Error).message;
+    explain.value = null;
   } finally {
     explainRunning.value = false;
   }
@@ -255,6 +358,89 @@ function renderCell(v: unknown): string {
 
 <template>
   <section class="webui-sql">
+    <aside class="webui-sql__sidebar">
+      <header class="webui-sql__sidebar-head">
+        <h2>Library</h2>
+        <Button
+          icon="pi pi-save"
+          severity="success"
+          text
+          size="small"
+          aria-label="Save current query"
+          @click="openSaveDialog"
+        />
+      </header>
+      <section class="webui-sql__section">
+        <header class="webui-sql__section-head">
+          <strong>Mine</strong>
+        </header>
+        <ul class="webui-sql__list">
+          <li
+            v-for="s in savedQueries.filter((q) => q.owner === currentUser() && !q.shared)"
+            :key="s.id"
+            class="webui-sql__list-item"
+          >
+            <span class="webui-sql__list-name" @click="loadIntoEditor(s.sql)">{{ s.name }}</span>
+            <Button
+              icon="pi pi-trash"
+              text
+              severity="danger"
+              size="small"
+              aria-label="Delete snippet"
+              @click="deleteSnippet(s)"
+            />
+          </li>
+          <li v-if="!savedQueriesLoading && savedQueries.filter((q) => q.owner === currentUser() && !q.shared).length === 0" class="webui-sql__muted">
+            No private snippets.
+          </li>
+        </ul>
+      </section>
+      <section class="webui-sql__section">
+        <header class="webui-sql__section-head">
+          <strong>Shared</strong>
+        </header>
+        <ul class="webui-sql__list">
+          <li
+            v-for="s in savedQueries.filter((q) => q.shared)"
+            :key="s.id"
+            class="webui-sql__list-item"
+          >
+            <span class="webui-sql__list-name" @click="loadIntoEditor(s.sql)">
+              {{ s.name }}
+              <small class="webui-sql__list-owner">@{{ s.owner }}</small>
+            </span>
+            <Button
+              v-if="s.owner === currentUser()"
+              icon="pi pi-trash"
+              text
+              severity="danger"
+              size="small"
+              aria-label="Delete shared snippet"
+              @click="deleteSnippet(s)"
+            />
+          </li>
+          <li v-if="!savedQueriesLoading && savedQueries.filter((q) => q.shared).length === 0" class="webui-sql__muted">
+            No shared snippets.
+          </li>
+        </ul>
+      </section>
+      <section class="webui-sql__section">
+        <header class="webui-sql__section-head">
+          <strong>Built-in</strong>
+        </header>
+        <ul class="webui-sql__list">
+          <li
+            v-for="b in BUILTIN_SNIPPETS"
+            :key="b.name"
+            class="webui-sql__list-item"
+          >
+            <span class="webui-sql__list-name" @click="loadIntoEditor(b.sql)">{{ b.name }}</span>
+          </li>
+        </ul>
+      </section>
+    </aside>
+
+    <div class="webui-sql__main">
     <header class="webui-sql__head">
       <h1>SQL</h1>
       <div class="webui-sql__actions">
@@ -274,6 +460,14 @@ function renderCell(v: unknown): string {
           text
           :loading="explainRunning"
           @click="runExplain"
+        />
+        <Button
+          label="Save"
+          icon="pi pi-bookmark"
+          severity="secondary"
+          size="small"
+          text
+          @click="openSaveDialog"
         />
         <span v-if="latency !== null" class="webui-sql__latency">
           {{ latency.toFixed(1) }} ms
@@ -374,6 +568,38 @@ function renderCell(v: unknown): string {
       </TabPanel>
     </TabView>
 
+    </div>
+
+    <Dialog
+      v-model:visible="saveDialogOpen"
+      modal
+      header="Save SQL snippet"
+      :style="{ width: '32rem' }"
+    >
+      <div class="webui-sql__save-row">
+        <label>Name</label>
+        <InputText v-model="saveName" placeholder="my query" />
+      </div>
+      <div class="webui-sql__save-row">
+        <label>Share</label>
+        <label class="webui-sql__inline">
+          <Checkbox v-model="saveShared" binary />
+          <span>Visible to every operator+</span>
+        </label>
+      </div>
+      <template #footer>
+        <Button label="Cancel" severity="secondary" text @click="saveDialogOpen = false" />
+        <Button
+          label="Save"
+          icon="pi pi-save"
+          severity="success"
+          :loading="savingNow"
+          :disabled="!saveName.trim() || !currentSql.trim()"
+          @click="saveCurrentQuery"
+        />
+      </template>
+    </Dialog>
+
     <section v-if="explain" class="webui-sql__plans">
       <h2>EXPLAIN QUERY PLAN</h2>
       <div v-for="(p, idx) in explain.plans" :key="idx" class="webui-sql__plan">
@@ -401,13 +627,46 @@ function renderCell(v: unknown): string {
 
 <style scoped>
 .webui-sql {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  height: 100%;
+  min-height: calc(100vh - 4rem);
+}
+.webui-sql__sidebar {
+  border-right: 1px solid var(--webui-border);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  overflow-y: auto;
+}
+.webui-sql__sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.webui-sql__sidebar-head h2 { margin: 0; font-size: 1rem; }
+.webui-sql__section { display: flex; flex-direction: column; gap: 0.25rem; }
+.webui-sql__section-head { color: var(--webui-text-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.webui-sql__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.1rem; }
+.webui-sql__list-item {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 0.3rem 0.4rem; border-radius: var(--webui-radius);
+  font-size: 0.85rem;
+}
+.webui-sql__list-item:hover { background: var(--p-content-hover-background, rgba(255,255,255,0.04)); }
+.webui-sql__list-name { cursor: pointer; flex: 1 1 auto; }
+.webui-sql__list-owner { color: var(--webui-text-muted); font-size: 0.7rem; margin-left: 0.3rem; }
+.webui-sql__main {
   padding: 1rem 1.5rem;
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  height: 100%;
-  min-height: calc(100vh - 4rem);
+  overflow: hidden;
 }
+.webui-sql__save-row { display: grid; grid-template-columns: 6rem 1fr; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
+.webui-sql__save-row label { color: var(--webui-text-muted); font-size: 0.85rem; }
+.webui-sql__inline { display: inline-flex; align-items: center; gap: 0.4rem; }
 .webui-sql__head {
   display: flex;
   align-items: center;

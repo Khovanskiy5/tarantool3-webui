@@ -47,6 +47,7 @@ M.NAMES = {
     WEBHOOK_DEAD_LETTER = '_webui_webhook_dead_letter',
     PREPARED            = '_webui_prepared',
     FAILOVER_COMMANDS   = '_webui_failover_commands',
+    SAVED_QUERIES       = '_webui_saved_queries',
 }
 
 -- Bumped by migrations. Every schema change adds an entry to
@@ -74,7 +75,11 @@ M.NAMES = {
 --       force_apply, expel, set_failover_mode). Replicated +
 --       sync. Time-based retention (default 30 days, 1000/tick)
 --       runs on the leader; see backend/webui/failover/commands.lua.
-M.CURRENT_SCHEMA_VERSION = 6
+--   7 — `_webui_saved_queries` (SQL workbench library — Phase 3
+--       Task 3.4). Per-user snippets with optional `shared = true`
+--       visibility. Replicated + sync so a saved query the
+--       operator wrote on leader survives an immediate failover.
+M.CURRENT_SCHEMA_VERSION = 7
 
 local SCHEMA_VERSION_KEY = 'schema_version'
 
@@ -348,6 +353,45 @@ local function ensure_failover_commands()
     return true
 end
 
+-- SQL workbench library (Phase 3 Task 3.4). One row per saved
+-- snippet: id (auto), name, sql, owner, created_at, shared,
+-- tags. Visibility rules (enforced in the resolver): the owner
+-- always sees; admins always see; shared = true means every
+-- authenticated user with at least `operator` sees. Replicated +
+-- sync so an operator's library survives a leader crash.
+local function ensure_saved_queries()
+    if box.space[M.NAMES.SAVED_QUERIES] ~= nil then return false end
+    box.schema.space.create(M.NAMES.SAVED_QUERIES, {
+        if_not_exists = true,
+        is_sync       = true,
+        format = {
+            { name = 'id',         type = 'unsigned' },
+            { name = 'name',       type = 'string' },
+            { name = 'sql',        type = 'string' },
+            { name = 'owner',      type = 'string' },
+            { name = 'created_at', type = 'number' },
+            { name = 'shared',     type = 'boolean' },
+            { name = 'tags',       type = 'array', is_nullable = true },
+        },
+    })
+    box.space[M.NAMES.SAVED_QUERIES]:create_index('primary', {
+        parts          = { 'id' },
+        sequence       = true,
+        if_not_exists  = true,
+    })
+    box.space[M.NAMES.SAVED_QUERIES]:create_index('by_owner', {
+        parts          = { 'owner', 'id' },
+        unique         = false,
+        if_not_exists  = true,
+    })
+    box.space[M.NAMES.SAVED_QUERIES]:create_index('by_shared', {
+        parts          = { 'shared', 'id' },
+        unique         = false,
+        if_not_exists  = true,
+    })
+    return true
+end
+
 -- ─────────────────────────────────────────────────────────────────────
 -- Schema version
 -- ─────────────────────────────────────────────────────────────────────
@@ -380,6 +424,7 @@ local function bootstrap_as_leader()
     local created_webhook_dead_letter = ensure_webhook_dead_letter()
     local created_prepared            = ensure_prepared()
     local created_failover_commands   = ensure_failover_commands()
+    local created_saved_queries       = ensure_saved_queries()
 
     local current = M.get_schema_version()
     local migrations_applied = 0
@@ -416,6 +461,7 @@ local function bootstrap_as_leader()
         created_webhook_dead_letter = created_webhook_dead_letter,
         created_prepared    = created_prepared,
         created_failover_commands   = created_failover_commands,
+        created_saved_queries       = created_saved_queries,
         migrations_applied  = migrations_applied,
     })
 
@@ -428,6 +474,7 @@ local function bootstrap_as_leader()
         created_webhook_queue       = created_webhook_queue,
         created_webhook_dead_letter = created_webhook_dead_letter,
         created_failover_commands   = created_failover_commands,
+        created_saved_queries       = created_saved_queries,
         deferred          = false,
     }
 end
@@ -499,6 +546,7 @@ function M.prepared()     return box.space[M.NAMES.PREPARED]     end
 function M.webhook_queue()       return box.space[M.NAMES.WEBHOOK_QUEUE]       end
 function M.webhook_dead_letter() return box.space[M.NAMES.WEBHOOK_DEAD_LETTER] end
 function M.failover_commands()   return box.space[M.NAMES.FAILOVER_COMMANDS]   end
+function M.saved_queries()       return box.space[M.NAMES.SAVED_QUERIES]       end
 
 -- Generic key/value helpers around _webui_meta.
 function M.meta_get(key)

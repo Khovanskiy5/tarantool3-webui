@@ -320,6 +320,14 @@ function M.start(opts)
         return mut.space_remote_entry(op, payload, ctx)
     end)
 
+    -- SQL workbench snippet save/delete forwarder (Phase 3 Task 3.4).
+    rawset(_G, 'webui_saved_query_remote', function(op, payload, ctx)
+        local ok_mod, sq = pcall(require,
+            'webui.graphql.resolvers.saved_queries')
+        if not ok_mod then return { _error = 'saved_queries module unavailable' } end
+        return sq.remote_entry(op, payload, ctx)
+    end)
+
     -- Expose the dead-letter truncate over net.box. clearDeadLetter
     -- from the SPA lands on a random instance through round-robin;
     -- the leader is the only one that can actually truncate the
