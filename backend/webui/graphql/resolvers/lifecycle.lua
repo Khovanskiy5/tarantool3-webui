@@ -101,6 +101,17 @@ function M.mutation_force_reapply(root, args)
         config:reload()
         return true
     end)
+    pcall(function()
+        require('webui.notifications').emit({
+            type     = 'config.reloaded',
+            severity = 'info',
+            scope    = table.concat(args.instances or { '*' }, ','),
+            category = 'config',
+            user     = root and root.user,
+            message  = 'config:reload() invoked on '
+                .. tostring(#(args.instances or {})) .. ' instance(s)',
+        })
+    end)
     return { results = results }
 end
 

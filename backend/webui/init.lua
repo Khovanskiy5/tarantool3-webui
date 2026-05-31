@@ -116,6 +116,11 @@ function M.validate(cfg)
         or cfg.shutdown_timeout < 0) then
         return nil, 'roles_cfg.webui.shutdown_timeout must be a non-negative number'
     end
+    local notif_ok, notif = pcall(require, 'webui.notifications')
+    if notif_ok then
+        local _, n_err = notif.validate(cfg)
+        if n_err ~= nil then return nil, n_err end
+    end
     if cfg.rbac ~= nil then
         if type(cfg.rbac) ~= 'table' then
             return nil, 'roles_cfg.webui.rbac must be a table'
@@ -353,6 +358,19 @@ function M.start(opts)
         STATE.audit_retention = retention
     end
 
+    -- Outbound notifications dispatcher (Task 53a). The fiber runs
+    -- only on the leader; configure() refreshes the in-memory
+    -- webhook list on every role apply (configuration change).
+    local notif_ok, notif = pcall(require, 'webui.notifications')
+    if notif_ok then
+        local _, n_err = pcall(notif.configure, { webhooks = opts.webhooks or {} })
+        if n_err ~= nil then
+            logger.warn('notifications configure raised', { err = tostring(n_err) })
+        end
+        pcall(notif.start)
+        STATE.notifications = notif
+    end
+
     local http_ok, http_err = http_srv.start({
         listen = opts.listen,
         allowed_origins = opts.allowed_origins,
@@ -441,6 +459,12 @@ function M.stop()
     if STATE.audit_retention ~= nil then
         pcall(function() STATE.audit_retention.stop() end)
         STATE.audit_retention = nil
+    end
+
+    -- Stop the notifications dispatcher fiber.
+    if STATE.notifications ~= nil then
+        pcall(function() STATE.notifications.stop() end)
+        STATE.notifications = nil
     end
 
     -- Stop the suggestions scanner first — it reads state.snapshot()

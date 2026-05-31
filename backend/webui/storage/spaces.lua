@@ -40,9 +40,11 @@ local logger   = log_util.with_tag('storage')
 local M = {}
 
 M.NAMES = {
-    META     = '_webui_meta',
-    SESSIONS = '_webui_sessions',
-    AUDIT    = '_webui_audit',
+    META             = '_webui_meta',
+    SESSIONS         = '_webui_sessions',
+    AUDIT            = '_webui_audit',
+    WEBHOOK_QUEUE    = '_webui_webhook_queue',
+    WEBHOOK_DEAD_LETTER = '_webui_webhook_dead_letter',
 }
 
 -- Bumped by migrations. Every schema change adds an entry to
@@ -53,7 +55,9 @@ M.NAMES = {
 -- Version log:
 --   1 — baseline. Three spaces created at boot.
 --   2 — by_user secondary on _webui_audit for faster filter-by-user.
-M.CURRENT_SCHEMA_VERSION = 2
+--   3 — _webui_webhook_queue + _webui_webhook_dead_letter spaces
+--       for the outbound notifications dispatcher.
+M.CURRENT_SCHEMA_VERSION = 3
 
 local SCHEMA_VERSION_KEY = 'schema_version'
 
@@ -164,6 +168,62 @@ local function ensure_audit()
     return true
 end
 
+-- Outbound notifications queue (Task 53a). Replicated so a
+-- leader change does not drop pending deliveries; the dispatcher
+-- fiber runs only on the leader and consumes rows by the
+-- `next_attempt_at` secondary so it can pick the oldest due
+-- entry in O(log n).
+local function ensure_webhook_queue()
+    if box.space[M.NAMES.WEBHOOK_QUEUE] ~= nil then return false end
+    box.schema.space.create(M.NAMES.WEBHOOK_QUEUE, {
+        if_not_exists = true,
+        format = {
+            { name = 'id',              type = 'unsigned' },
+            { name = 'enqueued_at',     type = 'unsigned' },
+            { name = 'next_attempt_at', type = 'unsigned' },
+            { name = 'attempt',         type = 'unsigned' },
+            { name = 'webhook',         type = 'string' },
+            { name = 'event',           type = 'any' },
+            { name = 'last_error',      type = 'string', is_nullable = true },
+        },
+    })
+    box.space[M.NAMES.WEBHOOK_QUEUE]:create_index('primary', {
+        parts          = { 'id' },
+        sequence       = true,
+        if_not_exists  = true,
+    })
+    box.space[M.NAMES.WEBHOOK_QUEUE]:create_index('by_next_attempt', {
+        parts          = { 'next_attempt_at', 'id' },
+        unique         = false,
+        if_not_exists  = true,
+    })
+    return true
+end
+
+-- Dead-letter for events that exhausted their retry budget. Kept
+-- replicated for operator review; the dispatcher never reads
+-- back from this space.
+local function ensure_webhook_dead_letter()
+    if box.space[M.NAMES.WEBHOOK_DEAD_LETTER] ~= nil then return false end
+    box.schema.space.create(M.NAMES.WEBHOOK_DEAD_LETTER, {
+        if_not_exists = true,
+        format = {
+            { name = 'id',           type = 'unsigned' },
+            { name = 'failed_at',    type = 'unsigned' },
+            { name = 'webhook',      type = 'string' },
+            { name = 'event',        type = 'any' },
+            { name = 'attempts',     type = 'unsigned' },
+            { name = 'last_error',   type = 'string', is_nullable = true },
+        },
+    })
+    box.space[M.NAMES.WEBHOOK_DEAD_LETTER]:create_index('primary', {
+        parts          = { 'id' },
+        sequence       = true,
+        if_not_exists  = true,
+    })
+    return true
+end
+
 -- ─────────────────────────────────────────────────────────────────────
 -- Schema version
 -- ─────────────────────────────────────────────────────────────────────
@@ -192,6 +252,8 @@ local function bootstrap_as_leader()
     local created_meta     = ensure_meta()
     local created_sessions = ensure_sessions()
     local created_audit    = ensure_audit()
+    local created_webhook_queue       = ensure_webhook_queue()
+    local created_webhook_dead_letter = ensure_webhook_dead_letter()
 
     local current = M.get_schema_version()
     local migrations_applied = 0
@@ -224,6 +286,8 @@ local function bootstrap_as_leader()
         created_meta        = created_meta,
         created_sessions    = created_sessions,
         created_audit       = created_audit,
+        created_webhook_queue       = created_webhook_queue,
+        created_webhook_dead_letter = created_webhook_dead_letter,
         migrations_applied  = migrations_applied,
     })
 
@@ -232,6 +296,8 @@ local function bootstrap_as_leader()
         created_meta      = created_meta,
         created_sessions  = created_sessions,
         created_audit     = created_audit,
+        created_webhook_queue       = created_webhook_queue,
+        created_webhook_dead_letter = created_webhook_dead_letter,
         deferred          = false,
     }
 end
@@ -296,9 +362,11 @@ end
 -- Convenience getters
 -- ─────────────────────────────────────────────────────────────────────
 
-function M.meta()     return box.space[M.NAMES.META]     end
-function M.sessions() return box.space[M.NAMES.SESSIONS] end
-function M.audit()    return box.space[M.NAMES.AUDIT]    end
+function M.meta()         return box.space[M.NAMES.META]         end
+function M.sessions()     return box.space[M.NAMES.SESSIONS]     end
+function M.audit()        return box.space[M.NAMES.AUDIT]        end
+function M.webhook_queue()       return box.space[M.NAMES.WEBHOOK_QUEUE]       end
+function M.webhook_dead_letter() return box.space[M.NAMES.WEBHOOK_DEAD_LETTER] end
 
 -- Generic key/value helpers around _webui_meta.
 function M.meta_get(key)

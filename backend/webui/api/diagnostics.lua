@@ -71,6 +71,16 @@ function M.handler(req)
             end
         end
     end
+    pcall(function()
+        require('webui.notifications').emit({
+            type     = 'bundle.downloaded',
+            severity = 'info',
+            user     = req.user,
+            scope    = include_config and 'with-config' or 'metadata-only',
+            category = 'audit',
+            message  = 'diagnostic bundle downloaded',
+        })
+    end)
     return {
         status = 200,
         headers = {

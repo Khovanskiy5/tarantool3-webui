@@ -118,6 +118,17 @@ function M.commit(prepared_id, opts)
     logger.info('commit ok', {
         id = prepared_id, revision = result.revision, user = entry.user,
     })
+    pcall(function()
+        require('webui.notifications').emit({
+            type     = 'config.committed',
+            severity = 'info',
+            user     = entry.user,
+            scope    = 'cluster',
+            category = 'config',
+            message  = 'Cluster config committed (revision '
+                .. tostring(result.revision) .. ')',
+        })
+    end)
     return result
 end
 

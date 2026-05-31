@@ -64,6 +64,51 @@ M.migrations = {
             if_not_exists = true,
         })
     end,
+
+    -- Outbound notifications queue + dead-letter spaces (Task 53a).
+    -- Both spaces are replicated; only the leader's dispatcher
+    -- writes to them. Idempotent: a follower that already saw the
+    -- replicated DDL hits the early-return branch when it later
+    -- becomes leader.
+    [3] = function(box)
+        if box.space._webui_webhook_queue == nil then
+            box.schema.space.create('_webui_webhook_queue', {
+                if_not_exists = true,
+                format = {
+                    { name = 'id',              type = 'unsigned' },
+                    { name = 'enqueued_at',     type = 'unsigned' },
+                    { name = 'next_attempt_at', type = 'unsigned' },
+                    { name = 'attempt',         type = 'unsigned' },
+                    { name = 'webhook',         type = 'string' },
+                    { name = 'event',           type = 'any' },
+                    { name = 'last_error',      type = 'string', is_nullable = true },
+                },
+            })
+            box.space._webui_webhook_queue:create_index('primary', {
+                parts = { 'id' }, sequence = true, if_not_exists = true,
+            })
+            box.space._webui_webhook_queue:create_index('by_next_attempt', {
+                parts = { 'next_attempt_at', 'id' },
+                unique = false, if_not_exists = true,
+            })
+        end
+        if box.space._webui_webhook_dead_letter == nil then
+            box.schema.space.create('_webui_webhook_dead_letter', {
+                if_not_exists = true,
+                format = {
+                    { name = 'id',         type = 'unsigned' },
+                    { name = 'failed_at',  type = 'unsigned' },
+                    { name = 'webhook',    type = 'string' },
+                    { name = 'event',      type = 'any' },
+                    { name = 'attempts',   type = 'unsigned' },
+                    { name = 'last_error', type = 'string', is_nullable = true },
+                },
+            })
+            box.space._webui_webhook_dead_letter:create_index('primary', {
+                parts = { 'id' }, sequence = true, if_not_exists = true,
+            })
+        end
+    end,
 }
 
 -- ─────────────────────────────────────────────────────────────────────

@@ -381,6 +381,15 @@ local function run_one_scan()
                     id = issue.id, message = issue.message,
                 })
             end
+            pcall(function()
+                require('webui.notifications').emit({
+                    type     = 'issue.appeared',
+                    severity = issue.severity,
+                    scope    = issue.scope or issue.id,
+                    category = issue.category,
+                    message  = issue.message,
+                })
+            end)
         end
     end
     for id, issue in pairs(prev_by_id) do
@@ -389,6 +398,15 @@ local function run_one_scan()
             logger.info('issue cleared', {
                 id = id, message = issue.message,
             })
+            pcall(function()
+                require('webui.notifications').emit({
+                    type     = 'issue.resolved',
+                    severity = 'info',
+                    scope    = issue.scope or id,
+                    category = issue.category,
+                    message  = 'cleared: ' .. tostring(issue.message),
+                })
+            end)
         end
     end
     SCANNER_STATE.last_snapshot = issues

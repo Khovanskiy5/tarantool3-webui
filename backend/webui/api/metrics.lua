@@ -57,21 +57,70 @@ local function audit_row_count()
     return space:count() or 0
 end
 
+local function webhook_queue_depth()
+    local space = storage.webhook_queue()
+    if space == nil then return 0 end
+    return space:count() or 0
+end
+
+local function webhook_dead_letter_depth()
+    local space = storage.webhook_dead_letter()
+    if space == nil then return 0 end
+    return space:count() or 0
+end
+
+-- Notification dispatcher counters (Task 53a). Per-webhook
+-- delivered / failed / retried / dead-lettered. Labels keep the
+-- webhook name on the metric so a single Prometheus query can
+-- alert on per-receiver failure ratios.
+local function format_webhook_counters()
+    local notif_ok, notif = pcall(require, 'webui.notifications')
+    if not notif_ok then return {} end
+    local s = notif.stats()
+    local lines = {}
+    local function emit_family(family, help, map)
+        table.insert(lines, '# HELP ' .. family .. ' ' .. help)
+        table.insert(lines, '# TYPE ' .. family .. ' counter')
+        for name, count in pairs(map or {}) do
+            table.insert(lines,
+                string.format('%s{name="%s"} %s',
+                    family, name, tostring(count)))
+        end
+    end
+    emit_family('webui_webhook_deliveries_total',
+        'successful webhook deliveries', s.delivered)
+    emit_family('webui_webhook_failures_total',
+        'failed webhook delivery attempts', s.failed)
+    emit_family('webui_webhook_retry_count_total',
+        'webhook deliveries that needed at least one retry', s.retried)
+    emit_family('webui_webhook_dead_letter_total',
+        'events that exhausted their retry budget', s.dead_lettered)
+    return lines
+end
+
 function M.handler_self(_req)
     local snap = state.snapshot() or {}
     local servers = snap.servers or {}
     local server_count = 0
     for _ in pairs(servers) do server_count = server_count + 1 end
-    local body = table.concat({
+    local parts = {
         M.format_prom('webui_ws_connections',       {}, registry.count(),
             'open WebSocket connections'),
         M.format_prom('webui_audit_rows',           {}, audit_row_count(),
             'rows currently in _webui_audit'),
         M.format_prom('webui_servers_seen',         {}, server_count,
             'peers known to cluster.state'),
+        M.format_prom('webui_webhook_queue_depth',  {}, webhook_queue_depth(),
+            'pending webhook deliveries'),
+        M.format_prom('webui_webhook_dead_letter_depth', {}, webhook_dead_letter_depth(),
+            'events parked in the dead-letter space'),
         M.format_prom('webui_self_time',            {}, math.floor(fiber.time()),
             'wall-clock seconds since epoch on the responding instance'),
-    }, '\n') .. '\n'
+    }
+    for _, line in ipairs(format_webhook_counters()) do
+        table.insert(parts, line)
+    end
+    local body = table.concat(parts, '\n') .. '\n'
     return {
         status = 200,
         headers = { ['content-type'] = 'text/plain; version=0.0.4' },

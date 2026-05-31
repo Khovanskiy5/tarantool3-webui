@@ -115,6 +115,15 @@ function M.handler_login(req)
     local allowed, _count, _retry = rate_limit.check(ip, 'login')
     if not allowed then
         logger.error('login rate limited', { ip = ip })
+        pcall(function()
+            require('webui.notifications').emit({
+                type     = 'audit.security',
+                severity = 'critical',
+                scope    = ip,
+                category = 'auth.bruteforce',
+                message  = 'login rate-limit triggered for ' .. tostring(ip),
+            })
+        end)
         return json_response(429, {
             error = { code = 'RATE_LIMITED', message = 'too many attempts' },
         })

@@ -99,3 +99,12 @@ roles_cfg:
     console_enabled: true
     # GraphiQL explorer is convenient in dev.
     graphiql_enabled: true
+    # Outbound webhooks fixture. The target is intentionally
+    # unreachable (port 1) so the local smoke can observe the
+    # retry → dead-letter flow without an external receiver.
+    webhooks:
+      - name: 'dev-loopback'
+        type: 'generic'
+        url: 'http://127.0.0.1:1/sink'
+        events: ['audit.security', 'issue.appeared', 'config.committed', 'webhook.test']
+        enabled: true

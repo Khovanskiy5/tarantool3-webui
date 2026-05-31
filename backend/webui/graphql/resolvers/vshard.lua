@@ -185,6 +185,15 @@ function M.mutation_bootstrap(root, args)
     end
 
     logger.info('vshard bootstrap ok', { group = target, router = router_alias })
+    pcall(function()
+        require('webui.notifications').emit({
+            type     = 'vshard.bootstrap',
+            severity = 'info',
+            scope    = target,
+            category = 'vshard',
+            message  = 'vshard.router.bootstrap() ok on ' .. router_alias,
+        })
+    end)
     return {
         ok         = true,
         group      = target,

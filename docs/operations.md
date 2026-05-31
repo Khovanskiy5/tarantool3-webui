@@ -41,6 +41,47 @@ CSRF: cookie `webui_csrf` (не HttpOnly) дублируется в заголо
 | Query     | `bootstrapTemplates`        | admin   | Список шаблонов: single-instance / replicaset-3 / vshard-3x3. |
 | Query     | `bootstrapRender(template, cluster_name)` | admin | Preview YAML без записи. |
 | Mutation  | `bootstrapInitialize(template, cluster_name)` | admin | Render → validate → 2PC commit. Возвращает `{ok, error_code, message, revision, dry_run, etcd_used}`. |
+| Query     | `webhooks`                  | admin   | Сконфигурированные webhooks + per-receiver stats (delivered/failed/retried/dead_lettered, last_error, last_ok_at). |
+| Query     | `webhookQueueDepth`         | admin   | Pending + dead-letter row counts. |
+| Query     | `webhookDeadLetter(limit)`  | admin   | Последние записи dead-letter (по умолчанию 50). |
+| Mutation  | `testWebhook(name)`         | admin   | Synthetic event через указанный webhook. Возвращает `{ok, latency_ms, error}`. |
+| Mutation  | `clearDeadLetter`           | admin   | TRUNCATE `_webui_webhook_dead_letter`. |
+
+## Outbound webhooks (Task 53a)
+
+Подписка на in-process события (issue.appeared / config.committed / vshard.bootstrap / audit.security / bundle.downloaded / ...) с доставкой по HTTPS/SMTP. Конфигурация — в cluster YAML под `roles_cfg.webui.webhooks`:
+
+```yaml
+roles_cfg:
+  webui:
+    webhooks:
+      - name: ops-slack
+        type: slack          # slack | discord | generic | email
+        url: https://hooks.slack.com/services/...
+        events: [issue.appeared, config.committed, audit.security]
+        filters:
+          severity: [critical]
+        secret: '...'        # HMAC-SHA256 over body; header X-Webui-Signature
+        enabled: true
+      - name: oncall-mail
+        type: email
+        smtp_host: smtp.example.com
+        smtp_port: 587
+        smtp_starttls: true
+        smtp_username: webui
+        smtp_password: '...'
+        from: webui@example.com
+        to: [oncall@example.com]
+        events: [audit.security]
+```
+
+**Pipeline.** `notifications.emit(event)` → fanout: матчит event против списка webhooks, insert в replicated `_webui_webhook_queue`. Фоновый dispatcher (`webui_notifications_dispatcher` fiber) работает только на лидере, забирает rows по `by_next_attempt` индексу, выполняет HTTP POST / SMTP send. На fail — exponential backoff (1s / 5s / 30s / 300s), max 5 попыток → перемещение в `_webui_webhook_dead_letter`.
+
+**Метрики** (`/api/metrics/webui`): `webui_webhook_queue_depth`, `webui_webhook_dead_letter_depth` (gauges), `webui_webhook_deliveries_total{name}`, `webui_webhook_failures_total{name}`, `webui_webhook_retry_count_total{name}`, `webui_webhook_dead_letter_total{name}` (counters).
+
+**Идемпотентность handover.** Очередь реплицируется; при failover лидера новый лидер видит pending rows и продолжает доставку. Состояние in-flight не сохраняется — в худшем случае одна повторная попытка после смены лидера.
+
+**Test mutation.** `testWebhook(name)` обходит очередь, делает синхронную доставку synthetic-события для проверки конфигурации.
 | Query     | `config`            | viewer     | Текущий YAML + source (`file`/`memory`/`etcd`).|
 | Query     | `audit`             | admin      | Paginated audit-log с фильтрами.              |
 | Mutation  | `validateConfig`    | operator   | Schema + cross-validate YAML.                 |
@@ -232,6 +273,7 @@ URL'ы:
 Текущий лог версий:
 - **1** — baseline. Три спейса (`_webui_meta`, `_webui_sessions`, `_webui_audit`) созданы на старте.
 - **2** — secondary index `by_user` на `_webui_audit` для фильтрации audit-страницы по пользователю.
+- **3** — `_webui_webhook_queue` + `_webui_webhook_dead_letter` для outbound webhooks dispatcher (Task 53a).
 
 ### Graceful shutdown (Task 3a)
 

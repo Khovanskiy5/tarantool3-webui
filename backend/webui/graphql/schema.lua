@@ -41,6 +41,7 @@ local failover_resolver    = require('webui.graphql.resolvers.failover')
 local vshard_resolver      = require('webui.graphql.resolvers.vshard')
 local admin_data_resolver  = require('webui.graphql.resolvers.admin_data')
 local bootstrap_resolver   = require('webui.graphql.resolvers.bootstrap')
+local webhooks_resolver    = require('webui.graphql.resolvers.webhooks')
 
 local M = {}
 
@@ -383,6 +384,64 @@ local Query = types.object {
             description = 'Preview the YAML the wizard would commit, without writing it.',
             resolve = bootstrap_resolver.query_render,
         },
+        webhooks = {
+            kind = types.object({
+                name = 'WebhookList',
+                fields = {
+                    webhooks = types.list(types.object({
+                        name = 'Webhook',
+                        fields = {
+                            name           = types.string.nonNull,
+                            type           = types.string.nonNull,
+                            url            = types.string,
+                            events         = types.list(types.string.nonNull),
+                            enabled        = types.boolean.nonNull,
+                            has_secret     = types.boolean.nonNull,
+                            delivered      = types.long.nonNull,
+                            failed         = types.long.nonNull,
+                            retried        = types.long.nonNull,
+                            dead_lettered  = types.long.nonNull,
+                            last_error     = types.string,
+                            last_ok_at     = types.long,
+                        },
+                    })),
+                },
+            }).nonNull,
+            description = 'Configured webhooks plus per-webhook delivery stats.',
+            resolve = webhooks_resolver.query_list,
+        },
+        webhookQueueDepth = {
+            kind = types.object({
+                name = 'WebhookQueueDepth',
+                fields = {
+                    queue       = types.long.nonNull,
+                    dead_letter = types.long.nonNull,
+                },
+            }).nonNull,
+            description = 'Pending and dead-lettered webhook deliveries.',
+            resolve = webhooks_resolver.query_queue_depth,
+        },
+        webhookDeadLetter = {
+            kind = types.object({
+                name = 'WebhookDeadLetter',
+                fields = {
+                    entries = types.list(types.object({
+                        name = 'WebhookDeadLetterEntry',
+                        fields = {
+                            id         = types.long.nonNull,
+                            failed_at  = types.long.nonNull,
+                            webhook    = types.string.nonNull,
+                            event_type = types.string,
+                            attempts   = types.long.nonNull,
+                            last_error = types.string,
+                        },
+                    })),
+                },
+            }).nonNull,
+            arguments = { limit = types.int },
+            description = 'Recent entries in the dead-letter space, most recent first.',
+            resolve = webhooks_resolver.query_dead_letter,
+        },
     },
 }
 
@@ -458,6 +517,27 @@ local Mutation = types.object {
                 instanceUuids = types.list(types.string.nonNull).nonNull,
             },
             resolve = suggestions_resolver.apply_bootstrap_vshard,
+        },
+        testWebhook = {
+            kind = types.object({
+                name = 'WebhookTestResult',
+                fields = {
+                    ok         = types.boolean.nonNull,
+                    latency_ms = types.float,
+                    error      = types.string,
+                },
+            }).nonNull,
+            arguments = { name = types.string.nonNull },
+            description = 'Send a synthetic event through the named webhook.',
+            resolve = webhooks_resolver.mutation_test,
+        },
+        clearDeadLetter = {
+            kind = types.object({
+                name = 'WebhookClearDeadLetterResult',
+                fields = { cleared = types.long.nonNull },
+            }).nonNull,
+            description = 'Truncate the webhook dead-letter space. Admin only.',
+            resolve = webhooks_resolver.mutation_clear_dead_letter,
         },
         bootstrapInitialize = {
             kind = types.object({

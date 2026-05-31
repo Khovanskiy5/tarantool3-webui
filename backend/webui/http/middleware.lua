@@ -249,6 +249,17 @@ local function enforce_auth(req, opts, request_id, handler_logger, name)
                     payload = { handler = name },
                 })
             end
+            pcall(function()
+                require('webui.notifications').emit({
+                    type     = 'audit.security',
+                    severity = 'warning',
+                    user     = tuple.user,
+                    scope    = required,
+                    category = 'rbac',
+                    message  = 'RBAC denied for ' .. tostring(name)
+                        .. ' (need ' .. tostring(required) .. ')',
+                })
+            end)
             return envelope_response(403, 'FORBIDDEN',
                 'insufficient role', request_id)
         end
