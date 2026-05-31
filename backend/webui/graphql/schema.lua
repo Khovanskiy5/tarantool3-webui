@@ -313,6 +313,55 @@ local Query = types.object {
                 'Source = "etcd" when wired, "file" before.',
             resolve = config_resolver.query_current,
         },
+        configHistory = {
+            kind = types.object({
+                name = 'ConfigHistoryPage',
+                fields = {
+                    revisions = types.list(types.object({
+                        name = 'ConfigRevisionInfo',
+                        fields = {
+                            revision = types.long.nonNull,
+                            ts       = types.float,
+                            user     = types.string,
+                            hash     = types.string,
+                            size     = types.long,
+                            action   = types.string,
+                        },
+                    })),
+                    oldest_available_revision = types.long,
+                    more = types.boolean.nonNull,
+                },
+            }).nonNull,
+            arguments = {
+                limit = types.int,
+                after = types.long,
+            },
+            description = 'Timeline of committed config revisions ' ..
+                '(newest first). Backed by webui own-storage under ' ..
+                '<prefix>/history/, capped at MAX_HISTORY=200. ' ..
+                '`oldest_available_revision` is the floor that this ' ..
+                'cluster can still rollback to.',
+            resolve = config_resolver.query_history,
+        },
+        configRevision = {
+            kind = types.object({
+                name = 'ConfigRevisionFull',
+                fields = {
+                    revision = types.long.nonNull,
+                    yaml     = types.string.nonNull,
+                    ts       = types.float,
+                    user     = types.string,
+                    action   = types.string,
+                },
+            }).nonNull,
+            arguments = {
+                revision = types.long.nonNull,
+            },
+            description = 'Full YAML payload of a single committed ' ..
+                'revision. Raises REVISION_NOT_FOUND when the snapshot ' ..
+                'has aged out of MAX_HISTORY or never existed.',
+            resolve = config_resolver.query_revision,
+        },
         spaces = {
             kind = types.object({
                 name = 'SpacesPayload',
@@ -639,6 +688,17 @@ local Mutation = types.object {
             kind = config_types.ConfigCommitResult.nonNull,
             arguments = { prepared_id = types.string.nonNull },
             resolve = config_resolver.mutation_abort,
+        },
+        rollbackConfig = {
+            kind = config_types.ConfigCommitResult.nonNull,
+            arguments = { revision = types.long.nonNull },
+            description = 'Roll cluster YAML back to a previous revision ' ..
+                'from the /history/ timeline. Pre-checks schema-compat: ' ..
+                'raises ROLLBACK_INCOMPATIBLE if the target references ' ..
+                'roles/users/keys removed since. Records a single audit ' ..
+                'entry with from/to revisions + diff_summary, then fans ' ..
+                'out config:reload to every peer.',
+            resolve = config_resolver.mutation_rollback,
         },
         probeUri = {
             kind = types.object({

@@ -75,6 +75,45 @@ function M.unified_lines(from_text, to_text)
     return out
 end
 
+-- diff_revisions(yaml_old, yaml_new): canonical SPA-friendly diff
+-- between two YAML payloads. Returns
+--   { ops = [{ path, op, before?, after? }, ...], categories = {...} }
+-- where `op` is one of `add` / `remove` / `change` (terms the UI
+-- timeline expects), not the structural `added/removed/changed`
+-- used internally. We intentionally parse via `yaml.decode` (not
+-- schema.validate) so the helper renders a useful diff even when
+-- either side is non-canonical: history-panel needs to show the
+-- delta regardless of EE-only fields rejected by the validator.
+function M.diff_revisions(yaml_old, yaml_new)
+    local yaml = require('yaml')
+    local function parse(text)
+        if text == nil or text == '' then return {} end
+        local ok, decoded = pcall(yaml.decode, text)
+        if not ok or type(decoded) ~= 'table' then return {} end
+        return decoded
+    end
+    local from = parse(yaml_old)
+    local to   = parse(yaml_new)
+
+    local raw = M.structural(from, to)
+    local ops = {}
+    for _, e in ipairs(raw) do
+        local mapped
+        if e.op == 'added' then
+            mapped = { path = e.path, op = 'add',    after = e.to }
+        elseif e.op == 'removed' then
+            mapped = { path = e.path, op = 'remove', before = e.from }
+        elseif e.op == 'changed' then
+            mapped = { path = e.path, op = 'change', before = e.from, after = e.to }
+        end
+        if mapped ~= nil then table.insert(ops, mapped) end
+    end
+    return {
+        ops        = ops,
+        categories = M.categorise(raw),
+    }
+end
+
 function M.categorise(ops)
     local cats = {
         replicaset = {}, instance = {}, roles = {}, credentials = {},

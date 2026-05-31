@@ -11,8 +11,11 @@ local fio = require('fio')
 
 local twophase     = require('webui.config_store.twophase')
 local schema       = require('webui.config_store.schema')
+local diff_module  = require('webui.config_store.diff')
+local history      = require('webui.config_store.history')
 local etcd_client  = require('webui.config_store.client')
 local rbac         = require('webui.auth.rbac')
+local audit        = require('webui.audit.log')
 local log_util     = require('webui.log_util')
 local logger       = log_util.with_tag('graphql.config')
 
@@ -53,6 +56,71 @@ function M.query_current(root)
     require_role(root, 'config')
     local yaml, source = read_local_yaml()
     return { yaml = yaml, revision = 0, source = source }
+end
+
+-- configHistory(limit, after): revisions[] + oldest_available_revision.
+-- Backed by our own history.lua storage (etcd /history/ keys, NOT
+-- etcd mod_revision history) so the timeline is deterministic and
+-- survives etcd auto-compaction.
+function M.query_history(root, args)
+    require_role(root, 'configHistory')
+    local client, client_err = etcd_client.get_client()
+    if client == nil then
+        logger.info('configHistory: etcd unavailable', { err = client_err })
+        return {
+            revisions = {},
+            oldest_available_revision = nil,
+            more = false,
+        }
+    end
+    local list, err = history.list(client, {
+        limit = args and args.limit or nil,
+        after = args and args.after or nil,
+    })
+    if err then
+        logger.warn('configHistory: list failed', { err = err })
+        error('HISTORY_LIST_FAILED: ' .. tostring(err))
+    end
+    logger.info('configHistory ok', {
+        user  = root and root.user,
+        count = #(list.revisions or {}),
+        more  = list.more,
+    })
+    return list
+end
+
+-- configRevision(revision): full YAML body for a single revision.
+-- Returns REVISION_NOT_FOUND when the key has aged out beyond
+-- MAX_HISTORY or never existed.
+function M.query_revision(root, args)
+    require_role(root, 'configRevision')
+    if args == nil or args.revision == nil then
+        error('VALIDATION_ERROR: revision is required')
+    end
+    local client, client_err = etcd_client.get_client()
+    if client == nil then
+        error('REVISION_NOT_FOUND: etcd unavailable (' ..
+            tostring(client_err) .. ')')
+    end
+    local kv, err = history.get(client, args.revision)
+    if err then
+        logger.warn('configRevision: get failed', { rev = args.revision, err = err })
+        error('REVISION_LOOKUP_FAILED: ' .. tostring(err))
+    end
+    if kv == nil then
+        error('REVISION_NOT_FOUND: ' .. tostring(args.revision))
+    end
+    local meta = select(1, history.get_metadata(client, args.revision))
+    logger.info('configRevision ok', {
+        user = root and root.user, revision = args.revision,
+    })
+    return {
+        revision = args.revision,
+        yaml     = kv.value,
+        ts       = meta and meta.ts or nil,
+        user     = meta and meta.user or nil,
+        action   = meta and meta.action or nil,
+    }
 end
 
 function M.mutation_validate(root, args)
@@ -174,6 +242,153 @@ function M.mutation_commit(root, args)
         applied  = true,
         message  = 'committed to etcd (revision ' .. tostring(revision)
             .. ').' .. reload_outcome,
+    }
+end
+
+-- rollbackConfig(revision): roll the cluster YAML back to a previous
+-- revision from the /history/ timeline. Atomic shape: validate-target
+-- → propose → commit (which fan-outs reload) → audit.
+--
+-- Pre-check: validateConfig on the target YAML. If the target
+-- references roles/users/keys that were since removed from the live
+-- environment, raise ROLLBACK_INCOMPATIBLE so the operator edits
+-- current config first instead of producing a commit that would
+-- pass schema-validation-at-commit-time-N but fail now.
+function M.mutation_rollback(root, args)
+    require_role(root, 'rollbackConfig')
+    if args == nil or args.revision == nil then
+        error('VALIDATION_ERROR: revision is required')
+    end
+
+    local client, client_err = etcd_client.get_client()
+    if client == nil then
+        error('ROLLBACK_INCOMPATIBLE: etcd unavailable (' ..
+            tostring(client_err) .. ')')
+    end
+
+    local kv, get_err = history.get(client, args.revision)
+    if get_err then
+        error('ROLLBACK_LOOKUP_FAILED: ' .. tostring(get_err))
+    end
+    if kv == nil then
+        error('REVISION_NOT_FOUND: ' .. tostring(args.revision))
+    end
+    local target_yaml = kv.value
+
+    -- Schema compat pre-check: if the snapshot references things now
+    -- gone, surface unresolved refs in the error details so the SPA
+    -- can render a useful banner ("references removed roles: ...").
+    local _, validation_errs = schema.validate(target_yaml)
+    if validation_errs ~= nil and #validation_errs > 0 then
+        local first = validation_errs[1] or {}
+        error('ROLLBACK_INCOMPATIBLE: target revision references '
+            .. 'config that is no longer valid: '
+            .. tostring(first.message or 'unknown'))
+    end
+
+    -- For audit's diff_summary we need before/after; pull current
+    -- YAML via the same channel propose uses.
+    local current_kv = select(1, client:get('config'))
+    local current_yaml = current_kv and current_kv.value or ''
+    local diff_result = diff_module.diff_revisions(current_yaml, target_yaml)
+    local diff_summary = {}
+    for _, op in ipairs(diff_result.ops or {}) do
+        table.insert(diff_summary, op.op .. ' ' .. op.path)
+    end
+    -- Cap to keep the audit payload bounded (large rollbacks can
+    -- generate hundreds of ops; the full diff is recoverable from
+    -- the timeline keys, audit only needs a quick eyeball summary).
+    if #diff_summary > 50 then
+        local truncated = {}
+        for i = 1, 50 do truncated[i] = diff_summary[i] end
+        table.insert(truncated, string.format('… (+%d more)',
+            #diff_summary - 50))
+        diff_summary = truncated
+    end
+
+    local prepared, prepare_errs = twophase.prepare({
+        yaml         = target_yaml,
+        user         = root and root.user,
+        current_yaml = current_yaml,
+    })
+    if prepared == nil then
+        local msg = (prepare_errs and prepare_errs[1]
+            and prepare_errs[1].message) or '?'
+        error('ROLLBACK_PROPOSE_FAILED: ' .. msg)
+    end
+
+    local commit_result, commit_err = twophase.commit(prepared.prepared_id, {
+        etcd   = client,
+        action = 'rollback',
+    })
+    if commit_err then
+        error('ROLLBACK_COMMIT_FAILED: ' .. tostring(commit_err))
+    end
+
+    local new_revision = (commit_result and commit_result.revision) or 0
+
+    -- Fire-and-forget audit + fan-out reload (mirrors mutation_commit).
+    pcall(function()
+        audit.record({
+            user       = root and root.user,
+            action     = 'config.rollback',
+            scope      = 'cluster',
+            payload    = {
+                from_revision = current_kv and current_kv.revision,
+                to_revision   = args.revision,
+                new_revision  = new_revision,
+                diff_summary  = diff_summary,
+            },
+            request_id = root and root.request_id,
+        })
+    end)
+
+    local reload_outcome = ''
+    do
+        local rpc_ok, rpc = pcall(require, 'webui.cluster.rpc')
+        local peers_ok, peers = pcall(require, 'webui.cluster.peers')
+        if rpc_ok and peers_ok then
+            local all = {}
+            for name in pairs(peers.list() or {}) do
+                table.insert(all, name)
+            end
+            if #all > 0 then
+                local ok_call, res_each = pcall(rpc.map_eval,
+                    'require("config"):reload(); return true',
+                    {}, { timeout = 15, peers = all })
+                if ok_call then
+                    local failed = {}
+                    for name, r in pairs(res_each) do
+                        if not (r and r.ok) then
+                            table.insert(failed, name)
+                        end
+                    end
+                    if #failed == 0 then
+                        reload_outcome = ' Reloaded on '
+                            .. tostring(#all) .. ' peer(s).'
+                    else
+                        reload_outcome = ' Reload partial: failed on '
+                            .. table.concat(failed, ', ') .. '.'
+                    end
+                end
+            end
+        end
+    end
+
+    logger.info('config rollback ok', {
+        user          = root and root.user,
+        from_revision = current_kv and current_kv.revision,
+        to_revision   = args.revision,
+        new_revision  = new_revision,
+        ops           = #diff_summary,
+    })
+
+    return {
+        revision = new_revision,
+        applied  = true,
+        message  = 'rolled back to revision ' .. tostring(args.revision)
+            .. ' (new etcd revision ' .. tostring(new_revision) .. ').'
+            .. reload_outcome,
     }
 end
 

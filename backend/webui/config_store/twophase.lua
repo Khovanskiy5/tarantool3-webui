@@ -16,10 +16,12 @@
 -- in `_webui_prepared`.
 --
 
-local fiber = require('fiber')
+local fiber  = require('fiber')
+local digest = require('digest')
 
 local schema   = require('webui.config_store.schema')
 local diff     = require('webui.config_store.diff')
+local history  = require('webui.config_store.history')
 local storage  = require('webui.storage.spaces')
 local log_util = require('webui.log_util')
 local logger   = log_util.with_tag('twophase')
@@ -209,6 +211,37 @@ function M.commit(prepared_id, opts)
     logger.info('commit ok', {
         id = prepared_id, revision = result.revision, user = entry.user,
     })
+
+    -- Record the snapshot in our own /history/ timeline. We deliberately
+    -- key the history entry by etcd's commit revision so the timeline
+    -- maps 1:1 to what `:get('config')` would return at that point. Soft
+    -- failure: a history write blowing up must NOT roll back the commit
+    -- itself — operators expect "committed" to mean "the cluster will
+    -- pick it up", not "the timeline panel will render it".
+    if result.revision ~= nil then
+        pcall(function()
+            local _, h_err = history.record(opts.etcd, result.revision, payload)
+            if h_err then
+                logger.warn('history snapshot record failed', {
+                    revision = result.revision, err = h_err,
+                })
+            end
+            local meta_ok, meta_err = history.record_metadata(opts.etcd,
+                result.revision, {
+                    ts     = fiber.time(),
+                    user   = entry.user,
+                    size   = #payload,
+                    hash   = digest.sha1_hex(payload):sub(1, 16),
+                    action = opts.action or 'commit',
+                })
+            if meta_ok == nil and meta_err ~= nil then
+                logger.warn('history metadata record failed', {
+                    revision = result.revision, err = meta_err,
+                })
+            end
+        end)
+    end
+
     pcall(function()
         require('webui.notifications').emit({
             type     = 'config.committed',

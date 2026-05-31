@@ -99,9 +99,11 @@ M.REST_AUTH = {
 -- helpers in Task 30+).
 M.GRAPHQL_FIELD = {
     -- Queries
-    cluster      = 'viewer',
-    config       = 'viewer',
-    schema       = 'viewer',
+    cluster        = 'viewer',
+    config         = 'viewer',
+    configHistory  = 'viewer',
+    configRevision = 'operator',
+    schema         = 'viewer',
     users        = 'admin',
     audit        = 'admin',
     issues       = 'viewer',
@@ -113,6 +115,7 @@ M.GRAPHQL_FIELD = {
     validateConfig = 'operator',
     commitConfig  = 'admin',
     abortConfig   = 'operator',
+    rollbackConfig = 'admin',
     forceTakeLock = 'admin',
     setFailover   = 'admin',
     promote       = 'admin',

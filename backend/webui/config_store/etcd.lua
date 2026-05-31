@@ -160,6 +160,51 @@ function M.proto:get(key)
     }
 end
 
+-- Compute the next byte-sequence after `s` for an etcd v3 prefix
+-- range_end: increment the last byte. The trailing byte of every
+-- prefix we use is `/` (0x2F), so the 0xFF overflow case never
+-- fires for our keys; keep the defensive branch anyway.
+local function next_byte_sequence(s)
+    if s == nil or #s == 0 then return s end
+    local last = string.byte(s, -1)
+    if last == 255 then return s .. '\0' end
+    return s:sub(1, -2) .. string.char(last + 1)
+end
+
+-- range_prefix(prefix, limit?) — list every kv whose key starts with
+-- the (already prefix-resolved) `prefix`. Returns
+-- `{ items = [{key, value, revision, version}, ...], count, more }`.
+-- `prefix` is relative to the client's configured `state.prefix`,
+-- the same way `:get(key)` resolves the full key path.
+-- Used by config_store.history.list and by future prefix-scoped
+-- range readers (failover/disabled, _webui_failover_commands export).
+function M.proto:range_prefix(prefix, limit)
+    local fk = full_key(self, prefix)
+    local body = {
+        key       = b64(fk),
+        range_end = b64(next_byte_sequence(fk)),
+    }
+    if type(limit) == 'number' and limit > 0 then
+        body.limit = tostring(limit)
+    end
+    local resp, e = post(self, '/v3/kv/range', body)
+    if resp == nil then return nil, e end
+    local items = {}
+    for _, kv in ipairs(resp.kvs or {}) do
+        table.insert(items, {
+            key      = from_b64(kv.key),
+            value    = from_b64(kv.value),
+            revision = tonumber(kv.mod_revision),
+            version  = tonumber(kv.version),
+        })
+    end
+    return {
+        items = items,
+        count = tonumber(resp.count) or #items,
+        more  = resp.more == true,
+    }
+end
+
 -- Optional `lease_id`: when supplied, the key is bound to the lease
 -- and disappears when the lease expires (no keepalive ⇒ TTL eviction).
 -- Used by the failover agent for the coordinator-election key.
