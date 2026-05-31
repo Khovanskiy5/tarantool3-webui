@@ -151,12 +151,46 @@ function M.detect_restart_replication(snapshot)
     return out
 end
 
--- The remaining detectors return an empty list — the underlying
--- subsystems are not implemented yet. Keeping them named here
--- (rather than absent) makes the GraphQL surface stable and the
--- plug-in points obvious.
+-- Disable-server suggestion (Task 5.15). A peer that has been
+-- unreachable for more than DISABLE_SERVER_DOWNTIME_SEC is a hot
+-- candidate for setInstanceState(enabled: false): the supervised
+-- agent stops considering it for promotion, so the cluster does
+-- not spend cycles probing a corpse. The operator can re-enable
+-- once the peer is back.
+M.DISABLE_SERVER_DOWNTIME_SEC = 300  -- 5 minutes; matches Cartridge
+
+function M.detect_disable_server(snapshot)
+    snapshot = snapshot or { servers = {} }
+    local now = require('fiber').time()
+    local out = {}
+    for alias, server in pairs(snapshot.servers or {}) do
+        if server.reachable == false
+            and type(server.last_seen) == 'number'
+            and server.last_seen > 0
+            and (now - server.last_seen) >= M.DISABLE_SERVER_DOWNTIME_SEC then
+            local downtime = now - server.last_seen
+            table.insert(out, {
+                id     = 'disable_server:' .. tostring(server.uuid or alias),
+                alias  = alias,
+                uuid   = server.uuid,
+                reason = string.format(
+                    'unreachable for %ds — exclude from agent score map ' ..
+                    'until it recovers',
+                    math.floor(downtime)),
+            })
+        end
+    end
+    table.sort(out, function(a, b) return a.alias < b.alias end)
+    return out
+end
+
+-- The remaining detectors return an empty list — they require
+-- probe-layer fields that we do not yet surface (advertise_uri for
+-- refine_uri; synchro.queue.len for restart_failover; vshard
+-- topology data for refresh / bootstrap). Wired as no-ops to keep
+-- the GraphQL surface stable; will fill in once the probe schema
+-- expands in Phase F/G.
 function M.detect_refresh_vshard(_)    return {} end
-function M.detect_disable_server(_)    return {} end
 function M.detect_refine_uri(_)        return {} end
 function M.detect_restart_failover(_)  return {} end
 function M.detect_bootstrap_vshard(_)  return {} end
@@ -340,6 +374,54 @@ function M.apply(type_, payload, opts)
             ok      = #still_stopped == 0 and #peer_fail == 0,
             message = table.concat(parts, '; '),
             results = results,
+            unknown = resolved.unknown,
+        }
+    end
+    if type_ == M.TYPES.DISABLE_SERVER then
+        -- Disable-server suggestion (Task 5.15): for each affected
+        -- alias, write to the etcd `<prefix>/failover/disabled/<alias>`
+        -- set via the same `failover.disabled` module the agent
+        -- reads on every coordinator tick. We deliberately do NOT
+        -- go through the GraphQL `setInstanceState` resolver here:
+        -- the caller has already passed the RBAC gate on
+        -- `applyDisableServer` (admin) and we need the action to
+        -- run from the suggestions engine context, which has no
+        -- `root.user` available the way the SPA resolver does.
+        local ok_etcd, etcd_client = pcall(require, 'webui.config_store.client')
+        local ok_disabled, disabled = pcall(require, 'webui.failover.disabled')
+        if not (ok_etcd and ok_disabled) then
+            return nil, 'failover.disabled module unavailable'
+        end
+        local client, client_err = etcd_client.get_client()
+        if client == nil then
+            return nil, 'etcd unavailable: ' .. tostring(client_err)
+        end
+        local marked, failed = {}, {}
+        for _, alias in ipairs(resolved.aliases) do
+            local _, derr = disabled.set(client, alias,
+                (opts and opts.user) or 'suggestion-engine')
+            if derr == nil then
+                table.insert(marked, alias)
+            else
+                table.insert(failed, alias .. '=' .. tostring(derr))
+            end
+        end
+        local msg
+        if #failed == 0 then
+            msg = string.format('disabled %d instance(s): %s',
+                #marked, table.concat(marked, ', '))
+        else
+            msg = string.format(
+                'disabled %d instance(s): %s; failed: %s',
+                #marked, table.concat(marked, ', '),
+                table.concat(failed, '; '))
+        end
+        logger.warn('applied disable_server suggestion', {
+            marked = marked, failed = failed, unknown = resolved.unknown,
+        })
+        return {
+            ok      = #failed == 0,
+            message = msg,
             unknown = resolved.unknown,
         }
     end

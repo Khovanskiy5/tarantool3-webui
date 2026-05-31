@@ -52,6 +52,8 @@ M.CATEGORIES = {
     MEMORY      = 'memory',
     CLOCK       = 'clock',
     CONFIG      = 'config',
+    SYNCHRO     = 'synchro',
+    FAILOVER    = 'failover',
 }
 
 M.SEVERITY = {
@@ -79,6 +81,8 @@ M.DEFAULT_THRESHOLDS = {
     quota_warn                 = 0.85,
     quota_critical             = 0.95,
     clock_delta_sec            = 5,
+    -- Phase 5.14 thresholds:
+    failover_coord_stuck_sec   = 30,    -- agent.last_error not null > N sec
 }
 
 local SCANNER_STATE = {
@@ -381,6 +385,104 @@ function M.check_config(snapshot, _, now)
     return out
 end
 
+-- Synchronous-replication safety. `synchro_quorum` strictly less
+-- than N/2+1 explicitly allows split-brain: two minority partitions
+-- can both reach quorum independently and accept conflicting writes.
+-- We surface this as CRITICAL the moment the cluster YAML drifts
+-- below the floor — it's a one-line edit to fix and the symptom
+-- (data loss on failover) is unrecoverable.
+--
+-- Source of truth: `config:get('replication')` on the responding
+-- peer. We deliberately consult Tarantool's effective config (post
+-- etcd merge) rather than the file, so a runtime edit shows up
+-- immediately.
+function M.check_synchro_quorum(snapshot, thresholds, now)
+    now = now or fiber.clock()
+    local out = {}
+    -- Count instances cluster-wide. We use the snapshot's server
+    -- list because that is the authoritative cluster size after
+    -- joins / expels; the local config might still mention an
+    -- expelled instance for one reload window.
+    local total = 0
+    for _ in pairs((snapshot and snapshot.servers) or {}) do
+        total = total + 1
+    end
+    if total < 2 then return out end
+    local floor = math.floor(total / 2) + 1
+
+    local cfg_ok, cfg = pcall(require, 'config')
+    if not cfg_ok then return out end
+    local repl_ok, repl = pcall(function() return cfg:get('replication') end)
+    if not repl_ok or type(repl) ~= 'table' then return out end
+
+    -- The schema accepts either a numeric literal or the formula
+    -- string. We only flag explicit numeric values below floor —
+    -- 'N/2 + 1' is by construction safe.
+    local q = repl.synchro_quorum
+    if type(q) ~= 'number' then return out end
+    if q < floor then
+        table.insert(out, make_issue {
+            id = M.make_id('synchro', 'cluster', 'cluster', 'quorum-unsafe'),
+            category = M.CATEGORIES.SYNCHRO,
+            severity = M.SEVERITY.CRITICAL,
+            scope    = M.SCOPE.CLUSTER,
+            message  = string.format(
+                'replication.synchro_quorum=%d is below N/2+1=%d (N=%d). ' ..
+                'Two minority partitions can both reach quorum and accept ' ..
+                'conflicting writes; raise the quorum or accept the risk.',
+                q, floor, total),
+            now = now,
+        })
+    end
+    -- Tarantool defaults `synchro_quorum` to N/2+1 already; this
+    -- second branch is a future hook for "explicit number that is
+    -- ABOVE the floor but the operator likely meant N/2+1". Left
+    -- empty intentionally — Cartridge does not warn here either.
+    _ = thresholds
+    return out
+end
+
+-- Supervised-failover coordinator stuck. The agent exports
+-- `last_error` via M.status() — when it stays non-null for more
+-- than failover_coord_stuck_sec the coordinator has been failing
+-- to write appointments (etcd unreachable / lease lost / CAS
+-- conflict loop), so no replicaset can re-elect on the next
+-- primary failure.
+--
+-- We rely on the agent module being loaded on the local peer; the
+-- check is a no-op on peers that don't run the supervised agent.
+function M.check_failover_coordinator(_, thresholds, now)
+    thresholds = thresholds or M.DEFAULT_THRESHOLDS
+    now = now or fiber.clock()
+    local out = {}
+    local ok_agent, agent = pcall(require, 'webui.failover.agent')
+    if not ok_agent then return out end
+    local ok_status, status = pcall(agent.status)
+    if not ok_status or type(status) ~= 'table' then return out end
+    if status.enabled ~= true then return out end
+    if status.last_error == nil or status.last_error == '' then return out end
+    -- We don't have a `last_error_since_ts` on the agent yet — surface
+    -- as CRITICAL whenever last_error is non-null. The agent clears
+    -- the error on every successful cycle, so a persistent message
+    -- already means the operator should act. A future patch can
+    -- track first-seen-ts to back off the alert below the threshold.
+    _ = thresholds.failover_coord_stuck_sec
+    table.insert(out, make_issue {
+        id = M.make_id('failover', 'cluster', 'cluster', 'coordinator-stuck'),
+        category = M.CATEGORIES.FAILOVER,
+        severity = M.SEVERITY.CRITICAL,
+        scope    = M.SCOPE.CLUSTER,
+        message  = string.format(
+            'supervised-failover agent reports last_error: %s. ' ..
+            'No new appointments will land until this clears — check etcd ' ..
+            'reachability from the coordinator (%s).',
+            tostring(status.last_error),
+            tostring(status.coordinator or '?')),
+        now = now,
+    })
+    return out
+end
+
 -- Combine all rules. Output is sorted by (severity desc, id asc)
 -- so the UI can show critical issues first; ties broken by ID for
 -- deterministic ordering.
@@ -393,6 +495,7 @@ function M.scan(snapshot, opts)
     for _, fn in ipairs({
         M.check_replication, M.check_memory,
         M.check_clock, M.check_config,
+        M.check_synchro_quorum, M.check_failover_coordinator,
     }) do
         local rule_issues = fn(snapshot, thresholds, now)
         for _, issue in ipairs(rule_issues) do

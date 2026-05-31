@@ -36,6 +36,8 @@ M.IssueCategory = types.enum {
         MEMORY      = { value = 'memory' },
         CLOCK       = { value = 'clock' },
         CONFIG      = { value = 'config' },
+        SYNCHRO     = { value = 'synchro' },
+        FAILOVER    = { value = 'failover' },
     },
     description = 'Category of issue. New rules add values here.',
 }
