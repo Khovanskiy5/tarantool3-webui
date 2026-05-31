@@ -113,10 +113,16 @@ const preview = async () => {
     M_PROPOSE, { yaml: yaml.value },
   ).toPromise();
   if (res.error) {
-    // Backend rejects a no-op submission with the NO_CHANGES error
-    // class — render it as a neutral info banner, not a red error.
-    // Apply stays disabled because preparedId is still null.
-    if (res.error.message.includes('NO_CHANGES')) {
+    // Backend rejects a no-op submission with the typed NO_CHANGES
+    // error class — render it as a neutral info banner, not a red
+    // error. Apply stays disabled because preparedId is still null.
+    // We read `extensions.code` rather than substring-matching the
+    // public message: the message is human-readable / i18n'able and
+    // can drift, but the code is the stable contract.
+    const codes = res.error.graphQLErrors?.map(
+      (e) => (e as { extensions?: { code?: string } }).extensions?.code ?? '',
+    ) ?? [];
+    if (codes.includes('NO_CHANGES')) {
       info.value = 'No changes vs current revision — nothing to commit.';
     } else {
       error.value = res.error.message;

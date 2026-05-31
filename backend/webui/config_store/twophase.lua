@@ -152,30 +152,30 @@ function M.prepare(opts)
     local parsed, errs = schema.validate(opts.yaml)
     if parsed == nil then return nil, errs end
 
-    -- No-op guard: if a current YAML is supplied AND the structural
-    -- diff comes out empty, reject the prepare. Without this, the UI
-    -- happily prepared and committed identical YAML over and over,
-    -- bumping etcd revision and adding meaningless rows to the
-    -- /history/ timeline. NO_CHANGES is a distinct error class — the
-    -- resolver translates it into a friendly UI message instead of a
-    -- red error banner.
+    -- No-op guard: reject the prepare only when the submitted YAML is
+    -- byte-for-byte identical to the current one — comment-only and
+    -- whitespace-only edits are legitimate (audit trail, formatting
+    -- pass) and must not be silently swallowed. The structural diff
+    -- is then computed for the SPA preview, but its emptiness alone
+    -- is not a rejection reason — a YAML parser drops comments, and
+    -- "structurally same" ≠ "textually same".
     --
-    -- Diff is computed BEFORE writing the prepared row so a no-op
-    -- request leaves no garbage behind in `_webui_prepared`.
+    -- Diff is computed BEFORE writing the prepared row so a real
+    -- no-op leaves no garbage behind in `_webui_prepared`.
     local diff_ops
     if opts.current_yaml then
+        if opts.yaml == opts.current_yaml then
+            logger.info('prepare no-op rejected (byte-identical)', {
+                user = opts.user, size = #opts.yaml,
+            })
+            return nil, { {
+                code    = 'NO_CHANGES',
+                message = 'submitted YAML is identical to current',
+            } }
+        end
         local current_parsed = select(1, schema.validate(opts.current_yaml))
         if current_parsed ~= nil then
             diff_ops = diff.structural(current_parsed, parsed)
-            if #diff_ops == 0 then
-                logger.info('prepare no-op rejected', {
-                    user = opts.user, size = #opts.yaml,
-                })
-                return nil, { {
-                    code    = 'NO_CHANGES',
-                    message = 'submitted YAML is identical to current',
-                } }
-            end
         end
     end
 
