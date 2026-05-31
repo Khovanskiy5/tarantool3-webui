@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { onMounted, onScopeDispose, ref } from 'vue';
+import { computed, onMounted, onScopeDispose, ref } from 'vue';
 import DataTable from 'primevue/datatable';
 import Column from 'primevue/column';
 import Tag from 'primevue/tag';
 
 import { getClient } from '@/shared/api/graphql';
 import { wsClient } from '@/shared/api/ws';
+import { useSessionStore } from '@/entities/session';
+import { FailoverSettingsDialog } from '@/features/cluster-ops';
 
 interface Election {
   instance: string;
@@ -69,6 +71,11 @@ const agent = ref<AgentStatus | null>(null);
 const commands = ref<FailoverCommand[]>([]);
 const error = ref<string | null>(null);
 const loading = ref(false);
+const settingsOpen = ref(false);
+const instanceCount = ref<number>(0);
+
+const session = useSessionStore();
+const canEditFailover = computed(() => session.hasRole('admin'));
 
 const FAILOVER_Q = /* GraphQL */ `
   query Failover {
@@ -91,6 +98,9 @@ const FAILOVER_Q = /* GraphQL */ `
         taken_at completed_at error_reason
       }
     }
+    cluster {
+      servers(limit: 50) { totalCount }
+    }
   }
 `;
 
@@ -102,6 +112,7 @@ const load = async () => {
     failoverStateProviderStatus: SPStatus;
     failoverAgentStatus: AgentStatus;
     failoverCommands: { entries: FailoverCommand[] };
+    cluster: { servers: { totalCount: number } };
   }>(FAILOVER_Q, {}, { requestPolicy: 'network-only' }).toPromise();
   if (res.error) { error.value = res.error.message; loading.value = false; return; }
   mode.value = res.data?.failover?.mode ?? 'unknown';
@@ -109,6 +120,7 @@ const load = async () => {
   sp.value = res.data?.failoverStateProviderStatus ?? null;
   agent.value = res.data?.failoverAgentStatus ?? null;
   commands.value = res.data?.failoverCommands?.entries ?? [];
+  instanceCount.value = res.data?.cluster?.servers?.totalCount ?? 0;
   loading.value = false;
 };
 
@@ -158,6 +170,14 @@ onMounted(load);
     <header class="webui-failover__head">
       <h1>Failover</h1>
       <Tag :value="`mode: ${mode}`" severity="info" />
+      <button
+        v-if="canEditFailover"
+        type="button"
+        class="webui-failover__btn"
+        @click="settingsOpen = true"
+      >
+        Settings…
+      </button>
     </header>
     <p v-if="error" class="webui-failover__error">{{ error }}</p>
 
@@ -305,6 +325,14 @@ onMounted(load);
       </DataTable>
     </section>
 
+    <FailoverSettingsDialog
+      :open="settingsOpen"
+      :initial-mode="mode"
+      :instance-count="instanceCount"
+      @close="settingsOpen = false"
+      @applied="load"
+    />
+
     <section v-if="sp && sp.kind !== 'none'" class="webui-failover__sp">
       <header class="webui-failover__sp-head">
         <h2>State provider</h2>
@@ -348,6 +376,19 @@ onMounted(load);
 .webui-failover__err { font-family: var(--webui-font-mono); font-size: 0.75rem; color: var(--p-message-error-color, #d83535); }
 .webui-failover__hint { color: var(--webui-text-muted); font-size: 0.85rem; margin: 0; }
 .webui-failover__hint code { font-family: var(--webui-font-mono); }
+.webui-failover__btn {
+  padding: 0.4rem 0.85rem;
+  font-size: 0.88rem;
+  border-radius: 5px;
+  border: 1px solid var(--webui-border);
+  background: var(--webui-bg);
+  color: var(--webui-text);
+  cursor: pointer;
+}
+.webui-failover__btn:not(:disabled):hover {
+  border-color: var(--webui-accent);
+  color: var(--webui-accent);
+}
 .webui-failover__params {
   display: inline-block;
   max-width: 320px;

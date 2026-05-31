@@ -243,9 +243,9 @@ async function doResume() {
 }
 
 .webui-cluster-toolbar__btn--solid:not(:disabled):hover {
-  background: var(--webui-accent);
+  background: #6cb8e3;
+  border-color: #6cb8e3;
   color: #0e1117;
-  filter: brightness(1.12);
 }
 
 .webui-cluster-toolbar__msg {

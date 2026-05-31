@@ -60,6 +60,12 @@ mutation CreateReplicaset($input: String!) {
   }
 }
 
+mutation SetFailoverMode($mode: String!, $params: String, $apply: Boolean) {
+  setFailoverMode(mode: $mode, params: $params, apply: $apply) {
+    ...TopologyEditResultFields
+  }
+}
+
 fragment TopologyEditResultFields on TopologyEditResult {
   applied
   revision

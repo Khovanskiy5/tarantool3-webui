@@ -244,6 +244,8 @@ function onCancel() {
 }
 
 .webui-destructive-dialog__btn--danger:not(:disabled):hover {
-  filter: brightness(1.12);
+  background: #fa6c66;
+  border-color: #fa6c66;
+  color: #0e1117;
 }
 </style>

@@ -509,6 +509,8 @@ function onCancel() {
 }
 
 .webui-new-rs__btn--solid:not(:disabled):hover {
-  filter: brightness(1.12);
+  background: #6cb8e3;
+  border-color: #6cb8e3;
+  color: #0e1117;
 }
 </style>

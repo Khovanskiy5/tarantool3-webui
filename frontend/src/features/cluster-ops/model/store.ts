@@ -21,6 +21,7 @@ import {
   PauseFailoverDocument,
   PromoteInstanceDocument,
   ResumeFailoverDocument,
+  SetFailoverModeDocument,
   SetInstanceStateDocument,
 } from '@/shared/api/generated';
 import { getClient } from '@/shared/api/graphql';
@@ -191,6 +192,39 @@ export const useClusterOpsStore = defineStore('cluster-ops', () => {
     }
   }
 
+  // setFailoverMode mirrors the backend's JSON-input contract:
+  // `mode` is the discriminator (off / manual / election /
+  // supervised), `params` is an optional JSON envelope with the
+  // per-mode knobs (synchro_quorum, synchro_timeout, election_*,
+  // election_fencing_mode, agent, agent_params). `apply=false`
+  // returns a preview with `prepared_id` for review.
+  async function setFailoverMode(
+    mode: string,
+    params: Record<string, unknown> | null,
+    apply: boolean,
+  ): Promise<ActionOutcome & { diffSummary?: string[] }> {
+    pending.value = true;
+    try {
+      const paramsJson = params === null ? undefined : JSON.stringify(params);
+      const res = await client
+        .mutation(SetFailoverModeDocument, { mode, params: paramsJson, apply })
+        .toPromise();
+      if (res.error) return shapeError(res.error, 'setFailoverMode failed');
+      const r = res.data?.setFailoverMode;
+      log.info('setFailoverMode ok', {
+        mode,
+        applied: r?.applied,
+      });
+      return {
+        ok: true,
+        message: r?.message ?? `mode set to ${mode}`,
+        diffSummary: r?.diff_summary ?? [],
+      };
+    } finally {
+      pending.value = false;
+    }
+  }
+
   return {
     pending,
     pauseFailover,
@@ -200,5 +234,6 @@ export const useClusterOpsStore = defineStore('cluster-ops', () => {
     setInstanceState,
     expelInstance,
     createReplicaset,
+    setFailoverMode,
   };
 });
