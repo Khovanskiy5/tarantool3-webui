@@ -122,6 +122,13 @@ M.GRAPHQL_FIELD = {
     expel         = 'admin',
     joinInstance  = 'admin',
     rebootstrapInstance = 'admin',
+    -- Phase 5 cluster operator controls (Cartridge-style).
+    -- `editTopology` is the atomic primary mutation; the alias
+    -- mutations compose `TopologyEdit` inputs and route through it.
+    editTopology          = 'admin',
+    setReplicasetRoles    = 'admin',
+    createReplicaset      = 'admin',
+    editReplicaset        = 'admin',
     setUserRoles  = 'admin',
     setLabels     = 'operator',
     setVshardWeight = 'admin',

@@ -42,6 +42,7 @@ local vshard_resolver      = require('webui.graphql.resolvers.vshard')
 local admin_data_resolver  = require('webui.graphql.resolvers.admin_data')
 local bootstrap_resolver   = require('webui.graphql.resolvers.bootstrap')
 local webhooks_resolver    = require('webui.graphql.resolvers.webhooks')
+local cluster_ops_resolver = require('webui.graphql.resolvers.cluster_ops')
 
 local M = {}
 
@@ -527,6 +528,24 @@ local Query = types.object {
     },
 }
 
+-- Shared result type for the Phase 5 atomic operator mutations.
+-- `diff_summary` is a flat, bounded ('+50 more' tail) human-readable
+-- list of `op path` strings. The full structured ops are kept in
+-- the audit row and the internal API; we deliberately do not expose
+-- them on the wire because the schema would force us to declare
+-- the shape of arbitrary YAML values.
+local TopologyEditResult = types.object {
+    name = 'TopologyEditResult',
+    fields = {
+        prepared_id  = types.string,
+        expires_at   = types.float,
+        diff_summary = types.list(types.string.nonNull).nonNull,
+        applied      = types.boolean.nonNull,
+        revision     = types.long.nonNull,
+        message      = types.string,
+    },
+}
+
 -- Mutations.
 --
 -- M1 lands the seven applySuggestion fields — every suggestion
@@ -768,6 +787,53 @@ local Mutation = types.object {
                 'the synchro queue (would lose uncommitted txns); ' ..
                 'promote another peer first.',
             resolve = lifecycle_resolver.mutation_rebootstrap_instance,
+        },
+        -- Phase 5 atomic cluster operator controls (Cartridge-pattern).
+        -- editTopology is the primary mutation; the three alias
+        -- mutations below compose `TopologyEdit` envelopes and route
+        -- through the same pipeline so audit, validation, and reload
+        -- behave identically.
+        editTopology = {
+            kind = TopologyEditResult.nonNull,
+            arguments = { input = types.string.nonNull },
+            description = 'Atomic cluster topology edit. Accepts a ' ..
+                'JSON-encoded `{servers: [], replicasets: [], apply: ' ..
+                'bool}` envelope. When `apply=true` the new YAML is ' ..
+                'committed straight away; otherwise a prepared_id + ' ..
+                'diff is returned for operator review (commit via ' ..
+                'commitConfig). All-or-nothing: any per-edit failure ' ..
+                'rolls the whole batch back. Admin only.',
+            resolve = cluster_ops_resolver.mutation_edit_topology,
+        },
+        setReplicasetRoles = {
+            kind = TopologyEditResult.nonNull,
+            arguments = {
+                replicaset = types.string.nonNull,
+                roles      = types.list(types.string.nonNull).nonNull,
+                apply      = types.boolean,
+            },
+            description = 'Alias over editTopology that swaps the role ' ..
+                'list on a replicaset. Defaults to apply=true.',
+            resolve = cluster_ops_resolver.mutation_set_replicaset_roles,
+        },
+        createReplicaset = {
+            kind = TopologyEditResult.nonNull,
+            arguments = { input = types.string.nonNull },
+            description = 'Alias over editTopology that creates a fresh ' ..
+                'replicaset with the supplied instances joined under it. ' ..
+                'JSON input: `{name, group, instances?: {alias: spec}, ' ..
+                'roles?, leader?, failover_priority?, weight?, ' ..
+                'vshard_group?, apply?: bool}`.',
+            resolve = cluster_ops_resolver.mutation_create_replicaset,
+        },
+        editReplicaset = {
+            kind = TopologyEditResult.nonNull,
+            arguments = { input = types.string.nonNull },
+            description = 'Alias over editTopology for partial updates ' ..
+                'on an existing replicaset (roles, leader, ' ..
+                'failover_priority, weight, vshard_group, join_instances, ' ..
+                'expel_instances). JSON input mirrors ReplicasetEdit.',
+            resolve = cluster_ops_resolver.mutation_edit_replicaset,
         },
     },
 }

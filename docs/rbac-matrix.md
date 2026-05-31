@@ -70,6 +70,11 @@
 | `proposeConfig`               | operator       |
 | `abortConfig`                 | operator       |
 | `commitConfig`                | admin          |
+| `rollbackConfig`              | admin          |
+| `editTopology`                | admin          |
+| `setReplicasetRoles`          | admin          |
+| `createReplicaset`            | admin          |
+| `editReplicaset`              | admin          |
 | `forceTakeLock`               | admin          |
 | `setFailover`                 | admin          |
 | `promote`                     | admin          |

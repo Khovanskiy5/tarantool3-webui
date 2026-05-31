@@ -110,6 +110,58 @@ query { configJsonSchema }
 
 Placeholder. Возвращает `true`. Сохранён для введения unit-теста на GraphQL-execute path; рабочие мутации перечислены в `operations.md` и `rbac-matrix.md`.
 
+### Cluster operator controls (Cartridge-style)
+
+Четыре мутации меняют топологию кластера атомарно — через тот же 2PC pipeline, что и обычный `commitConfig`. Audit, fan-out reload, etcd-mirror на disk работают одинаково для всех.
+
+Принцип: **`editTopology` — primary**, остальные три композируют через него же. `apply: true` коммитит сразу; `apply: false` (default для preview-форм) возвращает `prepared_id` для подтверждения через `commitConfig`. RBAC: все четыре требуют `admin`.
+
+#### `editTopology(input: String!): TopologyEditResult!`
+
+JSON-входной параметр — `{ servers: [...], replicasets: [...], apply: bool }`. Атомарно: любой ошибочный edit откатывает всю партию. `input` принимается строкой, потому что nested-spec инстансов = вся Tarantool 3.x instance schema; описывать её GraphQL InputObject'ом — гарантированный drift при каждом релизе Tarantool.
+
+`ServerEdit`: `{ alias, mode?: "rw"|"ro", uri?, listen?, zone?, labels?, target_group?, target_replicaset? }`.
+`ReplicasetEdit`: `{ name, group?, roles?, leader?, failover_priority?, weight?, vshard_group?, all_rw?, join_instances?: {alias: spec}, expel_instances?: [alias] }`.
+
+Возможные коды ошибок: `VALIDATION_ERROR` (плохой JSON), `TOPOLOGY_EDIT_FAILED` (per-edit нарушение типа/шейпа), `VALIDATION_FAILED` (final YAML не проходит cross-validators), `NO_CHANGES`, `UNAVAILABLE` (etcd недоступен), `COMMIT_FAILED`.
+
+```graphql
+mutation Edit($i: String!) {
+  editTopology(input: $i) {
+    prepared_id
+    applied
+    revision
+    diff_summary
+    message
+  }
+}
+```
+
+#### `setReplicasetRoles(replicaset: String!, roles: [String!]!, apply: Boolean): TopologyEditResult!`
+
+Типизированная обёртка над editTopology с одним ReplicasetEdit — меняет список ролей на указанном replicaset. Defaults to `apply: true`.
+
+#### `createReplicaset(input: String!): TopologyEditResult!`
+
+JSON-вход `{ name, group, instances?: {alias: instance-spec}, roles?, leader?, failover_priority?, weight?, vshard_group?, apply? }`. Валидирует, что `leader` входит в `instances`, что `failover_priority` — subset инстансов, что `weight ≥ 0`. Создаёт новый replicaset одной атомарной мутацией.
+
+#### `editReplicaset(input: String!): TopologyEditResult!`
+
+JSON-вход — частичный апдейт replicaset: roles/leader/failover_priority/weight/vshard_group/all_rw + `join_instances` (добавить) или `expel_instances` (удалить). На expel response получает прибавку про необходимость ручного rebalance vshard buckets.
+
+### `TopologyEditResult`
+
+```graphql
+type TopologyEditResult {
+  prepared_id: String       # null when apply=true succeeded
+  expires_at: Float
+  diff_summary: [String!]!  # bounded "op /path" list (+50 truncation)
+  applied: Boolean!
+  revision: Long!           # 0 when apply=false
+  message: String
+}
+```
+
 ## Types
 
 ### `RoleStatus`
