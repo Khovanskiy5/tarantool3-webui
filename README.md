@@ -1,16 +1,12 @@
 # Tarantool 3.7 WebUI
 
-Веб-интерфейс администрирования кластера Tarantool 3.7, функциональный эквивалент Cartridge UI, адаптированный под декларативную модель конфигурации Tarantool 3.x.
+> Веб-интерфейс администрирования кластера Tarantool 3.7 — функциональный эквивалент Cartridge UI, адаптированный под декларативную модель Tarantool 3.x.
 
-Backend встраивается в каждый инстанс Tarantool как Lua-роль `webui`. Frontend — Vue 3 + TypeScript SPA, упакованная в Lua-модуль и отдаваемая тем же инстансом. Источник истины кластерной конфигурации — etcd. Любой инстанс — точка входа в UI. В production кластеру предшествует HAProxy с TLS termination, healthcheck и sticky session для WebSocket.
+Backend встроен в каждый инстанс кластера как Lua-роль `webui`. Frontend — Vue 3 SPA, упакованная в Lua-модуль и отдаваемая тем же инстансом. Источник истины кластерного конфига — etcd. Любой инстанс является точкой входа; в production кластеру предшествует HAProxy с TLS termination, healthcheck и sticky-session для WebSocket.
 
 ## Быстрый старт
 
-Требования:
-
-- Tarantool 3.7.0 или новее
-- Docker и Docker Compose
-- Bun (для разработки фронта): https://bun.sh
+Требования: **Tarantool 3.7+**, **Docker + Docker Compose**, **Bun ≥ 1.1** (для frontend).
 
 ```bash
 git clone <repo>
@@ -18,35 +14,46 @@ cd tarantool-webui
 make dev
 ```
 
-`make dev` поднимает локальный кластер из 3 инстансов с etcd и HAProxy. После healthy-сигнала откроется `http://localhost:8080` с консолью администратора.
+`make dev` собирает образ инстанса, поднимает локальный кластер из 3 нод с etcd и HAProxy. После healthy-сигнала откройте `http://localhost:8080` и войдите как `admin_dev / admin-dev-password`.
+
+## Возможности
+
+- **Кластер one-glance** — топология, статус всех инстансов, репликасеты, vshard-группы.
+- **Issues + suggestions** — live-диагностика (replication, memory, clock skew, config alerts) с предлагаемыми действиями.
+- **Config editor** — Monaco + JSON Schema из работающего бинарника + two-phase commit через etcd с CAS-guard.
+- **Supervised failover на open-source** — кастомный coordinator-агент на etcd lease, единый writer через synchro-queue ownership, leader-change за 3–5 секунд.
+- **Schema / Snapshots / Console** — обзор спейсов и индексов, ручные снапшоты, Lua/SQL eval для `superuser` (выключено по умолчанию).
+- **RBAC** — четыре роли (`viewer / operator / admin / superuser`), RBAC enforced на уровне резолверов.
+- **Audit trail** — каждое мутирующее действие пишется в реплицированный `_webui_audit` с retention.
+- **Outbound webhooks** — Slack / Discord / SMTP / generic с retry и dead-letter.
+
+## Пример
+
+```bash
+# Текущая топология одним GraphQL-запросом
+curl -s -X POST http://localhost:8080/admin/api \
+  -H 'content-type: application/json' \
+  -b cookies.txt \
+  -d '{"query":"{ cluster { self { alias } replicasets { name status servers { alias boxInfo { ro } } } } }"}'
+```
+
+Ответ перечислит все инстансы, их RO/RW-состояние и health, и пометит текущего лидера каждого репликасета.
+
+---
 
 ## Документация
 
-| Документ | Назначение |
+| Раздел | Назначение |
 |---|---|
-| `docs/architecture.md` | Архитектура, потоки данных, two-phase commit, FSD |
-| `docs/operations.md` | Развёртывание, Helm chart, мониторинг, rolling upgrade |
-| `docs/security.md` | TLS, peer-cookie, threat model |
-| `docs/rbac-matrix.md` | Матрица ролей × эндпоинтов |
-| `docs/troubleshooting.md` | Runbooks и типовые ошибки |
-| `docs/development.md` | Setup для контрибьюторов, FSD-конвенции |
-| `docs/api/` | GraphQL schema, REST endpoints, error codes |
-
-## Команды Make
-
-| Цель | Действие |
-|---|---|
-| `make dev` | Поднять локальный кластер с UI |
-| `make dev-down` | Остановить локальный кластер |
-| `make lint` | Запустить линтер (luacheck + eslint) |
-| `make lint-fix` | Авто-исправление lint |
-| `make test` | Unit-тесты (backend + frontend) |
-| `make test-integration` | Интеграционные тесты через docker-compose |
-| `make build-frontend` | Сборка SPA через Bun + Vite |
-| `make gen-types` | Генерация TS-типов из GraphQL schema |
-| `make embed-assets` | Упаковка `frontend/dist/` в `backend/webui/assets/bundle.lua` |
-| `make docker-build` | Сборка Docker-образа инстанса |
-| `make clean` | Удалить артефакты сборки |
+| [Architecture](docs/architecture.md) | Layout, потоки данных, failover-агент, 2PC, synchro-spaces |
+| [Operations](docs/operations.md) | Deploy, HAProxy, мониторинг, snapshots, rolling upgrade, capacity |
+| [Security](docs/security.md) | TLS / mTLS, RBAC, audit, peer-auth, threat model |
+| [RBAC matrix](docs/rbac-matrix.md) | Полная матрица ролей × операций |
+| [Troubleshooting](docs/troubleshooting.md) | Runbooks для типовых инцидентов |
+| [Development](docs/development.md) | Setup, Makefile, FSD-конвенции, тесты, CI |
+| [GraphQL API](docs/api/graphql-schema.md) | SDL, query/mutation справочник |
+| [REST API](docs/api/rest.md) | Auth, eval, metrics, health, config IO, bundle |
+| [Error codes](docs/api/error-codes.md) | Стабильные коды ошибок и UI-поведение |
 
 ## Лицензия
 

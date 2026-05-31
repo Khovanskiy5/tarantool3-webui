@@ -1,28 +1,29 @@
+[← Troubleshooting](troubleshooting.md) · [Back to README](../README.md) · [GraphQL API →](api/graphql-schema.md)
+
 # Development guide
 
-Этот документ — стартовая точка для контрибьюторов. Он описывает требования к рабочей среде, базовые команды и конвенции, которые проверяются в CI.
+Setup, Makefile, тесты, конвенции, CI. Для большой картины — `architecture.md`.
 
 ## Требования к окружению
 
 | Компонент | Версия | Назначение |
 |---|---|---|
-| Tarantool | ≥ 3.7.0, < 4.0 | Runtime backend'а и инструменты `tools/dump-schema.lua`, `tools/embed-assets.lua` |
-| Bun | ≥ 1.0 | Runtime и пакетный менеджер для frontend (https://bun.sh) |
+| Tarantool | ≥ 3.7.0, < 4.0 | Runtime backend'а + `tools/dump-schema.lua`, `tools/embed-assets.lua` |
+| Bun | ≥ 1.1 | Runtime и пакетный менеджер frontend'а |
 | Docker + Docker Compose | актуальные | Локальный кластер, integration tests, e2e |
 | LuaRocks | актуальный | Установка backend-зависимостей |
 | luatest | актуальный | Backend tests |
 | luacheck | актуальный | Backend linter |
 
-Установка инструментария зависит от платформы. На macOS:
+Установка на macOS:
 
 ```bash
-brew install tarantool
+brew install tarantool luarocks
 brew tap oven-sh/bun && brew install bun
-brew install luarocks
 luarocks install --local luatest luacheck luacov
 ```
 
-На Linux: использовать официальный репозиторий Tarantool, бинарный установщик Bun и системные пакеты LuaRocks/luacheck.
+На Linux: официальный репозиторий Tarantool, бинарный установщик Bun, системные пакеты LuaRocks/luacheck.
 
 ## Быстрый старт
 
@@ -32,64 +33,46 @@ cd tarantool-webui
 make dev
 ```
 
-После healthy-сигнала открыть `http://localhost:8080`. Кредиты администратора печатаются в stdout compose'а.
+После healthy-сигнала открыть `http://localhost:8080`. Dev-фикстуры credentials (см. `docker/configs/cluster.yaml`):
+
+| User | Password | Role |
+|---|---|---|
+| `admin_dev` | `admin-dev-password` | admin |
+| `operator_dev` | `operator-dev-password` | operator |
+| `viewer_dev` | `viewer-dev-password` | viewer |
+| `superuser_dev` | `superuser-dev-password` | superuser |
 
 ## Команды Makefile
 
+```bash
+make help                 # печатает список целей с описаниями
+```
+
 | Цель | Назначение |
 |---|---|
-| `make dev` | Поднять локальный кластер: HAProxy + 3 инстанса + etcd + dev frontend (HMR) |
-| `make dev-down` | Остановить кластер и удалить тома |
+| `make dev` | Поднять локальный кластер: HAProxy + 3 инстанса + etcd |
+| `make dev-down` | Остановить кластер и удалить volumes |
 | `make dev-logs` | Tail логов всех сервисов |
 | `make lint` | `lint-backend` (luacheck) + `lint-frontend` (eslint) |
-| `make lint-fix` | Автоисправления frontend |
+| `make lint-fix` | Автоисправления frontend (ESLint --fix) |
 | `make test` | `test-backend` + `test-frontend` (unit only) |
-| `make test-integration` | Backend integration tests через docker-compose |
+| `make test-backend` | luatest unit tests |
+| `make test-frontend` | vitest unit tests |
+| `make test-integration` | Backend integration tests (luatest + docker-compose) |
 | `make test-e2e` | Playwright e2e против поднятого dev compose |
 | `make install` | `bun install --frozen-lockfile` для frontend |
 | `make build-frontend` | Production build SPA (Vite via Bun) |
-| `make dump-schema` | Экспорт GraphQL SDL из backend (offline, без поднятого кластера) |
-| `make gen-types` | Генерация TS-типов из SDL через `bunx graphql-codegen` |
+| `make dump-schema` | Export GraphQL SDL (offline, без поднятого кластера) |
+| `make gen-types` | Сгенерировать TS-типы из SDL |
 | `make gen-types-watch` | Watch SDL и регенерация TS-типов |
 | `make embed-assets` | Упаковка `frontend/dist/` в `backend/webui/assets/bundle.lua` |
 | `make docker-build` | Сборка Docker-образа инстанса |
-| `make check-all` | Полный набор pre-PR проверок: lint + test |
+| `make check-all` | Полный pre-PR прогон: lint + tooling-check + test |
 | `make clean` | Удалить артефакты сборки |
 
-## Документация — обязательное обновление per task
+## Тесты
 
-После реализации **каждой** задачи соответствующая документация обновляется в **том же коммите**, что и код. Это hard rule проекта.
-
-Что проверять при подготовке коммита:
-
-- Изменился публичный API (GraphQL/REST) → `docs/api/*` + `docs/api/error-codes.md`.
-- Изменилось поведение для оператора → `docs/operations.md` и/или `docs/troubleshooting.md`.
-- Появились новые модули backend/frontend → `docs/architecture.md`.
-- Появились новые зависимости/интеграции → `README.md`.
-
-Пропуск обновления — баг, не warning.
-
-## Конвенции коммитов
-
-[Conventional Commits](https://www.conventionalcommits.org) с типами `feat`, `fix`, `refactor`, `chore`, `docs`, `test`, `ci`, `perf`, `build`, `revert`.
-
-Scope — фаза или подсистема: `feat(m0): scaffold repo`, `fix(backend): null check in poller`, `docs(operations): add helm chart instructions`.
-
-Сообщение — в императиве, без trailing summary, без подписей AI-инструментов.
-
-## Pre-commit и pre-push
-
-Хуки настраиваются через lefthook (см. `lefthook.yml` после Task 12). Локально вручную:
-
-```bash
-make check-all
-```
-
-Этот таргет должен быть зелёным **перед каждым PR**.
-
-## Локальный линт и тесты
-
-Используются те же команды, что и в CI (см. `.github/workflows/ci.yml`), так что зелёный локальный прогон практически гарантирует зелёный CI.
+### Unit-тесты — `make test`
 
 | Команда | Что проверяет | Время |
 |---|---|---|
@@ -100,45 +83,23 @@ make check-all
 | `cd frontend && bun run type-check` | `vue-tsc --noEmit` | ~5с |
 | `cd frontend && bun run test:unit` | Vitest + happy-dom | секунды |
 | `cd frontend && bun run build` | Production Vite build | ~2с |
-| `hadolint docker/Dockerfile.instance` | Dockerfile стиль/best practices | ~1с |
-| `shellcheck docker/entrypoint.sh tools/gen-types.sh` | Shell-скрипты | <1с |
-| `haproxy -c -f docker/haproxy/haproxy.dev.cfg` | HAProxy конфиг (с сертификатами) | <1с |
-| `make dev` + `curl http://localhost:8080/api/health` | Integration smoke (полный стек) | ~30с |
 
-Полный pre-PR прогон одной командой: `make check-all` (зависит от установленных rocks `luacheck` и `luatest`).
+### Integration-тесты — `make test-integration`
 
-## Запуск отдельных тестов
+`backend/test/helpers/` скрывает рутину поднятия Tarantool и etcd:
 
-```bash
-# Один файл backend unit
-luatest backend/test/unit/cluster_state_test.lua
+- `paths.lua` — `repo_root`, `package.path`/`package.cpath` для in-tree `backend/` и `.rocks/`.
+- `server.lua` — наследник `luatest.server`. `wait_webui_ready(timeout)` поллит `GET /api/health`.
+- `cluster.lua` — обёртка над `luatest.cluster`. `config_file` + `webui_ports = {alias = port}`.
+- `etcd.lua` — `attach({endpoint=...})` для CI re-using compose, `spawn(...)` для эфемерного.
+- `http_client.lua` — REST + GraphQL клиент с cookie-jar, in-memory CSRF, auto `x-request-id`.
 
-# Один тест по имени
-luatest backend/test/unit/cluster_state_test.lua -p 'test_partial_failure'
-
-# Один компонент frontend
-cd frontend && bunx vitest run src/entities/cluster
-
-# Один e2e сценарий
-cd frontend && bunx playwright test smoke.spec.ts
-```
-
-## Backend test helpers
-
-В `backend/test/helpers/` лежат тонкие обёртки, которые скрывают рутину поднятия Tarantool и etcd в интеграционных тестах:
-
-- `paths.lua` — общий: вычисляет `repo_root`, идемпотентно расширяет `package.path`/`package.cpath` для in-tree `backend/` и `.rocks/`. Любой другой helper грузит его первым.
-- `server.lua` — наследник `luatest.server`. Прокидывает `LUA_PATH`/`LUA_CPATH` в spawned-процесс, добавляет `wait_webui_ready(timeout)` (поллит `GET /api/health` до `status ∈ {ok, degraded}`), `webui_health()`, `webui_base_url()`.
-- `cluster.lua` — обёртка над `luatest.cluster`. Принимает `config_file` (YAML) и map `webui_ports = {alias = port}`. Делегирует `start/stop/drop/size/each`, добавляет `wait_all_webui_ready` — обходит каждый инстанс и переиспользует `Server:wait_webui_ready`.
-- `etcd.lua` — режим `attach({endpoint=...})` для существующего etcd (CI re-использует compose-овский) и `spawn({image?,port?})` для эфемерного `quay.io/coreos/etcd:v3.5.18` через `docker run -d --rm`. API поверх etcd v3 HTTP gateway: `put/get/delete/delete_prefix/health/endpoint/stop`.
-- `http_client.lua` — клиент поверх `http.client`. Cookie-jar, in-memory CSRF, авто-`x-request-id`. REST: `rest_get/post/put/delete`. GraphQL: `graphql_query/graphql_mutation` распаковывают `res.json.data`/`res.json.errors`. Ассерты `assert_status` и `assert_graphql_ok` падают с информативным сообщением. `login()` — стаб до Task 25.
-
-Пример integration-теста:
+Пример:
 
 ```lua
-local paths = require('test.helpers.paths')
+local paths   = require('test.helpers.paths')
 local Cluster = require('test.helpers.cluster')
-local Client = require('test.helpers.http_client')
+local Client  = require('test.helpers.http_client')
 
 local cl = Cluster:new({
     config_file = paths.cluster_dev_yaml,
@@ -154,145 +115,88 @@ c:assert_graphql_ok(res)
 cl:drop()
 ```
 
-Публичная поверхность helper'ов покрыта офлайн-тестом `backend/test/unit/helpers_test.lua` (11 кейсов) — если кто-то сломает API или удалит метод, CI упадёт сразу, без Docker.
+### E2E-тесты — `make test-e2e`
 
-## Storybook (frontend компоненты)
-
-В `frontend/.storybook/` лежит конфиг Storybook 8 поверх `@storybook/vue3-vite`. Stories пишутся в TypeScript рядом с компонентами и формируют живой каталог UI-кита.
-
-Что включено:
-
-- **Framework:** `@storybook/vue3-vite` — переиспользует тот же Vite pipeline и FSD-алиасы (`@/shared`, `@/widgets`, ...), что и приложение.
-- **Аддоны:** `addon-essentials` (controls, actions, viewport, docs), `addon-a11y` (axe-core отчёт на каждой story), `addon-themes` (light/dark переключатель через `.webui-dark` class), `addon-interactions` (play-функции для сценариев), `addon-viewport` (mobile/tablet/laptop/wide).
-- **Глобальные декораторы** (`preview.ts`): PrimeVue с Aura, Pinia, vue-i18n, vue-router на `createMemoryHistory()` со stub-маршрутами под все пункты сайдбара. CSS-переменные подгружаются через `src/app/styles/index.css`.
-- **Branding** (`manager.ts`): тёмная тема Storybook, цвета совпадают с UI-кит.
-- **Auto-docs**: каждая story-файл с тегом `autodocs` получает страницу Docs c props table (через vue-docgen-api).
-
-Команды:
+Playwright, против `make dev`. Цель — поймать сломанный build до того, как доменные suites начнут искать настоящие баги.
 
 ```bash
-cd frontend
-bun run storybook         # запускает dev-сервер на http://localhost:6006
-bun run build-storybook   # собирает статический сайт в frontend/storybook-static/
-```
-
-`storybook-static/` в .gitignore и публикуется как часть проектного сайта (Task 11 — деплой).
-
-## Smoke e2e (Playwright)
-
-`frontend/playwright.config.ts` + `frontend/tests/e2e/smoke.spec.ts` — минимальный набор end-to-end проверок, которые гоняются против поднятого `docker-compose.dev.yml`. Цель — поймать сломанный билд до того, как доменные suite'ы начнут искать настоящие баги.
-
-Что покрыто (3 теста):
-1. **`/` отдаёт SPA shell**: 200, `<title>` `Tarantool WebUI`, в DOM виден бренд TopBar (если JS взлетел).
-2. **`/api/health` отвечает 200 с identity**: `status: ok`, `role_state: ready`, `instance: tt-1`, версии Tarantool/WebUI присутствуют.
-3. **SPA из браузера достучится до `/api/health`**: тот же fetch с `credentials: 'same-origin'`, ловит CSP/CORS/HAProxy regressions, которых не видно из чистого `request.get`.
-
-Запуск локально:
-
-```bash
-make dev               # поднять compose, дождаться healthy
+make dev
 cd frontend
 bunx playwright install chromium    # один раз
 bun run test:e2e
 ```
 
-Переопределение target'а:
+Артефакты (`playwright-report/`, `test-results/`) в `.gitignore`. На фейле — screenshot + trace + video.
+
+Override target:
 
 ```bash
-# Прогнать против HAProxy (port 8080) или произвольного URL
-WEBUI_BASE_URL=http://localhost:8080 bun run test:e2e
-
-# Сменить ожидаемое имя инстанса
-WEBUI_EXPECTED_INSTANCE=tt-2 WEBUI_BASE_URL=http://localhost:8082 bun run test:e2e
+WEBUI_BASE_URL=http://localhost:8082 WEBUI_EXPECTED_INSTANCE=tt-2 bun run test:e2e
 ```
 
-Playwright артефакты (`playwright-report/`, `test-results/`) в `.gitignore`. На фейле сохраняется screenshot + trace + video для диагностики; открыть trace — `bunx playwright show-trace test-results/<path>/trace.zip`.
+### Один тест локально
 
-В CI ожидается, что workflow поднимает `docker-compose.dev.yml --wait`, потом гоняет `bun run test:e2e` с `WEBUI_BASE_URL` указывающим на CI-сервис. Настройка `forbidOnly: !!CI` ломает сборку при случайно оставленном `.only`.
+```bash
+# Backend unit, один файл
+luatest backend/test/unit/cluster_state_test.lua
 
-**Известный M0 trade-off:** `Content-Security-Policy` в `backend/webui/http/middleware.lua` временно разрешает `'unsafe-eval'` — без него vue-i18n рантайм-компилятор кидает `EXPECTED_TOKEN` через `new Function`. AOT-precompile через `@intlify/unplugin-vue-i18n` ломает runtime-only build vue-i18n (IR-формат vs ожидаемые функции), так что AOT-подход отложен. Smoke этот регрессионный сценарий ловит — если SPA снова перестанет рендериться, тест #1 (`serves the SPA shell at /`) упадёт первым. Следующая итерация CSP — отдельная задача после миграции с vue-i18n runtime compiler.
+# Backend unit, один тест по имени
+luatest backend/test/unit/cluster_state_test.lua -p 'test_partial_failure'
 
-## Добавление нового shared UI компонента
+# Frontend, один файл vitest
+cd frontend && bunx vitest run src/entities/cluster
 
-Каждый UI-примитив в `frontend/src/shared/ui/` обязан идти вместе со story-файлом и проходить axe-checks через `addon-a11y`.
+# Один e2e сценарий
+cd frontend && bunx playwright test smoke.spec.ts
+```
 
-1. **Создать компонент:**
+## Документация — обязательное обновление per task
 
-   ```
-   frontend/src/shared/ui/button/
-   ├── index.ts            ← re-export Button.vue
-   ├── ui/
-   │   ├── Button.vue
-   │   └── Button.stories.ts
-   └── model/              ← опц., props types если переиспользуются
-   ```
+После реализации **каждой** задачи соответствующая документация обновляется в **том же коммите**, что и код. Это hard rule проекта.
 
-   `index.ts` должен экспортировать только публичное API (компонент + типы props). Внутренние файлы (`ui/`, `model/`) недоступны извне — это гарантирует `eslint-plugin-boundaries`.
+Что проверять при подготовке коммита:
 
-2. **Подключить компонент к kit:**
+- Изменился публичный API (GraphQL/REST) → `docs/api/*` + `docs/api/error-codes.md`.
+- Изменилось поведение для оператора → `docs/operations.md` и/или `docs/troubleshooting.md`.
+- Появились новые модули backend/frontend → `docs/architecture.md`.
+- Появились новые зависимости/интеграции → `README.md`.
+- Изменилась матрица доступов → `docs/rbac-matrix.md`.
 
-   В `frontend/src/shared/ui/index.ts` добавить re-export:
+Пропуск обновления — баг, не warning.
 
-   ```ts
-   export { default as Button, type ButtonProps } from './button';
-   ```
+## Конвенции коммитов
 
-3. **Написать story:** скелет `Button.stories.ts`:
+[Conventional Commits](https://www.conventionalcommits.org) с типами `feat`, `fix`, `refactor`, `chore`, `docs`, `test`, `ci`, `perf`, `build`, `revert`.
 
-   ```ts
-   import type { Meta, StoryObj } from '@storybook/vue3';
-   import { Button } from '@/shared/ui';
+Scope — подсистема: `feat(failover): ...`, `fix(backend): null check in poller`, `docs(operations): add helm chart instructions`.
 
-   const meta: Meta<typeof Button> = {
-     title: 'Shared/Button',
-     component: Button,
-     tags: ['autodocs'],
-     argTypes: {
-       variant: { control: 'select', options: ['primary', 'secondary', 'ghost'] },
-       size: { control: 'select', options: ['sm', 'md', 'lg'] },
-       disabled: { control: 'boolean' },
-     },
-   };
+Сообщение — в императиве, без trailing summary.
 
-   export default meta;
-   type Story = StoryObj<typeof Button>;
+## Pre-commit и pre-PR
 
-   export const Default: Story = { args: { label: 'Save' } };
-   export const Disabled: Story = { args: { label: 'Save', disabled: true } };
-   export const Loading: Story = { args: { label: 'Save', loading: true } };
-   export const Danger: Story = { args: { label: 'Delete', variant: 'danger' } };
-   ```
+```bash
+make check-all
+```
 
-   Минимальное покрытие — **все интересные состояния**: `Default`, `Disabled`, `Loading`, `Error`, `Focused` (где применимо). Это — материал для axe-аудита и для дизайн-ревью.
+Этот таргет должен быть зелёным **перед каждым PR**. Включает: lint backend + lint frontend + verify no internal-tooling mentions + unit-тесты.
 
-4. **Проверить локально:**
+## Frontend: Feature-Sliced Design
 
-   ```bash
-   cd frontend
-   bun run storybook            # визуальная проверка
-   bun run lint                 # ESLint + boundaries
-   bun run type-check           # vue-tsc
-   bun run build-storybook      # сборка должна проходить
-   ```
+```
+frontend/src/
+├── app/         инициализация, провайдеры, router, глобальные стили
+├── pages/       роутовые слайсы
+├── widgets/     композитные UI-блоки
+├── features/    пользовательские сценарии
+├── entities/    бизнес-сущности
+└── shared/      инфраструктура без знания домена
+```
 
-5. **Добавить unit-тест** (если у компонента есть нетривиальная логика): `Button.test.ts` через `@vue/test-utils` + `vitest`.
+Направление импортов: `app → pages → widgets → features → entities → shared`. Импорт между слайсами — только через публичный `index.ts`. Контроль — `eslint-plugin-boundaries`.
 
-Widget-уровень (`frontend/src/widgets/<name>/ui/<Widget>.stories.ts`) — то же самое, только под `title: 'Widgets/<Name>'` и с моками из `frontend/tests/fixtures/` (когда появятся).
+`tsconfig.paths` и `vite.config.resolve.alias` зеркалируют слои через алиасы `@/app`, `@/pages`, …, `@/shared`. Алиасы обязаны быть побайтово идентичны в обоих файлах.
 
-## Структура и архитектура
-
-Полная картина — в `docs/architecture.md`. Кратко:
-
-- `backend/` — Lua-роль `webui`, встраивается в каждый инстанс Tarantool.
-- `frontend/` — Vue 3 + TypeScript SPA, организован по Feature-Sliced Design.
-- `docker/` — Dockerfile и docker-compose для dev и prod-шаблона.
-- `deploy/helm/` — Helm chart для Kubernetes.
-- `tools/` — `embed-assets.lua`, `dump-schema.lua`, `scaffold.ts`, `check-fsd.ts`.
-- `docs/` — пользовательская и операционная документация.
-
-## Добавление нового frontend-слайса
-
-FSD структура. Каждый слой имеет публичный API через `index.ts`. Создание через scaffold:
+### Создание нового слайса
 
 ```bash
 cd frontend && bun run scaffold entity book
@@ -301,185 +205,116 @@ cd frontend && bun run scaffold widget library-shelf
 cd frontend && bun run scaffold page library
 ```
 
-Шаблоны в `tools/scaffold/templates/`.
+Шаблоны — в `tools/scaffold/templates/`.
 
-## Peer cookie (`webui_peer`)
+### Bun-runtime
 
-Каждый инстанс при старте поднимает системного пользователя `webui_peer` — единый идентификатор, под которым `cluster.peers` (Task 16+) ходит к соседям по net.box.
+- Менеджер пакетов и runtime — **Bun ≥ 1.1**, не Node/npm.
+- Lockfile — `bun.lockb` (бинарный, коммитится).
+- Vite, vue-tsc, ESLint, vitest, Playwright работают под Bun без модификаций.
+- `bunfig.toml` фиксирует registry, отключает встроенный `bun test` (используем vitest для лучшей Vue-интеграции).
 
-Источник пароля (первый непустой выигрывает):
+### Vite-сборка
 
-1. **`opts.config_password`** — то, что init.lua вытащил из cluster-config `credentials.users.webui_peer`. Это production-канон; rolling-смена пароля идёт через config two-phase commit.
-2. **`TT_WEBUI_PEER_PASSWORD`** env — используется dev compose чтобы поделить один пароль между tt-1/tt-2/tt-3.
-3. **Спейс `_webui_meta`** (key=`webui_peer_password`, `is_local=true`, на инстансе) — переживает рестарты, если первые два источника не настроены.
-4. **Auto-generated** — 32 char url-safe base64 (24 random bytes через `digest.urandom`), сохраняется в `_webui_meta` и сопровождается WARN'ом в логе, чтобы оператор увидел ad-hoc credential.
+- `base: './'` — относительные пути ассетов работают за HAProxy и sub-path-деплоями.
+- `vite-plugin-compression2` — pre-compressed brotli+gzip за один проход.
+- Manual chunks: `vendor-vue`, `vendor-urql`, `vendor-primevue`, `vendor-misc`, `monaco-editor`.
+- Target `es2022`, `cssCodeSplit: true`, `sourcemap: 'hidden'`.
+- Monaco workers — через native Vite `?worker`-импорт.
 
-DDL (создание пользователя, спейса, grant universe read,execute) требует write-доступа к схеме. На read-only инстансах (Raft-фолловерах или `read_only=true`) bootstrap откладывает DDL и форкает daemon-fiber `webui_peer_provisioner` который ждёт `box.ctl.wait_rw()` — при выборе этого инстанса лидером он догоняет DDL. Лидер делает работу один раз; `_user` и DDL `_webui_meta` реплицируются на фолловеры автоматически (само значение в `_webui_meta` — local-only, у каждого инстанса своё).
+### i18n
 
-Грант — `read,execute` на `universe` (`pcall` обёртка чтобы повторный запуск не падал на already-granted). Это минимум для net.box authentication; точечные грантовать функции — следующий шаг после Task 16.
+`vue-i18n@^9` с `legacy: false`. Локали:
 
-Логирование:
+- `ru` (default), `en` — оба полностью покрыты ключами `common/app/widgets/pages/errors`.
+- Стратегия определения: localStorage `webui:locale` → `navigator.language` → default `ru`.
+- Missing-key: warning в dev, silent fallback на `en` в prod.
 
-- `INFO peer cookie loaded` — source=config/env (внешний источник).
-- `DEBUG peer cookie loaded from meta space` — source=meta (перезагрузка с уже сохранённым паролем).
-- `WARN peer cookie auto-generated` — fallback на сгенерированный пароль.
-- `INFO peer cookie DDL deferred; instance is read-only` — фолловер, DDL отложено.
-- `INFO instance became read-write; provisioning peer cookie` — фолловер стал лидером и догоняет DDL.
+## Backend: Lua style
 
-## Peer pool (`cluster/peers.lua` + `cluster/rpc.lua`)
+`backend/webui/` — Lua-код роли. Конвенции:
 
-`peers.lua` — единственный владелец исходящих net.box-коннектов от роли к соседям. Источник списка пиров — `config:instances()`, URI с TLS-параметрами — `config:instance_uri('peer', {instance=name})`. Credential к net.box приходит из `peer_cookie.bootstrap` через `peers.set_credential(user, password)`.
+- **Простота и надёжность** — простой control flow, локали везде, явный `pcall`, таймауты на каждом `wait`, cleanup в failure paths.
+- **Логирование только через `webui.log_util`** — прямое `log.*` запрещено в коде роли. Тегированные логгеры (`logger = log_util.with_tag('http')`).
+- **Никаких side-effects из `validate`-функций ролей** — это контракт Tarantool.
+- **Spaces создаются через `storage/spaces.lua`** — миграции через `storage/migrations.lua` с monotonic `schema_version`. Каждый migration step должен быть rolling-safe с предыдущей версией.
+- **RPC только через `cluster/rpc.lua`** — никаких прямых `conn:call` из HTTP-обработчиков. Background fibers держат `last_seen`/`last_error` в `cluster/state.lua`.
+- **Forward-to-leader через `webui_peer` pool** — для записи в реплицированные sync-spaces follower проксирует операцию лидеру через named net.box shim (`webui_audit_record_remote`, `webui_session_put_remote`, `webui_prepared_put_remote`, …).
 
-API:
+### luacheck
 
-- `peers.refresh()` — синхронизирует пул с текущим cluster config. Открывает новые коннекты, закрывает выпавшие, реконнектится при смене URI. Параметры `reconnect_after=1s`, `wait_connected=false` — пул не блокирует rolestart.
-- `peers.list()` — snapshot для GraphQL/REST: `{[name] = {uri, state, replicaset_name, group_name}}`. Без net.box-объектов в выдаче.
-- `peers.connections()` — внутренний: `{[name] = conn}` для `rpc.map_call`.
-- `peers.get(name)` / `peers.close_all()` / `peers.self_alias()`.
-- Чистые helper'ы для тестов: `filter_self(instances, self_alias)`, `diff_peers(current, expected)` (sorted, deterministic), `normalise_uri(raw)`.
+`.luacheckrc` фиксирует LuaJIT stdlib, `max_line_length: 120`, исключения для `bundle.lua` и CLI-скриптов в `tools/`.
 
-`rpc.lua` — fan-out поверх пула. `rpc.map_call(fn_name, args?, opts?)`:
-
-- `opts.timeout` — default 1.0s (меньше тика поллера 1.5s, контракт зафиксирован в тесте).
-- `opts.peers` — опциональный whitelist.
-- Возвращает гомогенный shape: `{[name] = {ok=true, value=...} | {ok=false, err=...}}`. Никогда не raises — каждая per-peer ошибка ловится.
-- Single-return результат `conn:call` автоматически распаковывается (`value[1]` если `value[2]==nil`); multi-return сохраняет массив.
-- Состояния net.box `active`/`fetch_schema` считаются "connected"; всё остальное → `not connected` без блокирующего ожидания.
-
-Источник пароля для пула (init.lua step 6):
-
-1. `opts.peer_password` (явная инициализация роли).
-2. `config:get('credentials.users.webui_peer.password')` — production-канон, читается прямо из cluster config.
-3. `TT_WEBUI_PEER_PASSWORD` env — escape hatch для out-of-band секретов.
-
-Один и тот же resolver передаётся в `peer_cookie.bootstrap` (для DDL на лидере) и в `peers.set_credential` (для net.box). На лидерах `peer_cookie` синхронизирует `_user.webui_peer.password` с тем же значением, на фолловерах — DDL пропущен (Раф-лидер реплицирует).
-
-Логи: INFO `peer connection opened`/`closed`/`peer URI changed; reconnecting`, WARN `no peer URI advertised`/`initial peer pool refresh failed`/`map_call peer failed`, DEBUG `map_call peer ok`.
-
-## Cluster state cache + poller
-
-`cluster/state.lua` — единственный источник правды для GraphQL-резолверов и WS-broadcaster. Поллер `cluster/poller.lua` — единственный writer.
-
-**state.lua** держит per-instance запись:
+## Frontend codegen pipeline
 
 ```
-{
-  alias, uri, uuid, status, message, lag, uptime, vclock, version,
-  replicaset_name, group_name, labels, zone,
-  config_status, alerts, electable, is_ro, ro_reason,
-  reachable, last_seen, last_error, next_retry_at,
-}
+backend/webui/graphql/schema.lua
+   │  tarantool tools/dump-schema.lua
+   ▼
+frontend/src/shared/api/schema.graphql        (gitignored)
+   │  bunx graphql-codegen --config codegen.yml
+   ▼
+frontend/src/shared/api/generated.ts          (gitignored)
 ```
 
-Запись — атомарный swap всего state'а на каждом тике (`apply_tick`). Чтения через `snapshot()` возвращают deep-copy (`table.deepcopy`), так что читатели держат данные через `fiber.sleep` без гонки. Pure helpers `blank_server`, `merge_probe`, `group_by_replicaset`, `build_next_state` — unit-тестируемые.
-
-**poller.lua** — daemon-fibre, тикает каждые `POLL_INTERVAL_SEC=1.5s`:
-
-1. `peers.refresh()` (синхронизация с cluster config).
-2. `rpc.map_eval(PROBE_SRC, {}, {timeout=1.0s, peers=active})` — inline Lua expression в `conn:eval()` забирает `box.info`/`box.slab.info()`/`box.info.election`/`config:info()` с каждого active-peer.
-3. `update_backoff(...)` — только для actually-probed peer'ов. Backoff экспоненциальный: `1.5s, 3s, 6s, 12s, 24s, 30s, 30s, …` (cap = 30s). Skipped peer'ы (в backoff-окне) НЕ инкрементят attempt.
-4. `state.apply_tick(...)` — merge локального probe + per-peer результатов + topology из `config:instances()` + backoff в новый snapshot.
-
-`box.watch('config.info', cb)` зарегистрирован для immediate-poll при изменении конфига. Тик в-flight защищён через `tick_in_progress` re-entrancy guard.
-
-Логи:
-
-- INFO `poller started`/`poller stopped`/`config.info changed; scheduling immediate poll`
-- WARN `peer probe failed` — ТОЛЬКО на свежий fail (раз в `attempt=1` для каждого peer), не на каждый skip. `peers.refresh raised`/`poller tick raised`/`failed to register config.info watcher`
-- DEBUG `state tick applied` + `poller tick` со счётчиками active/skipped/generation
-
-`poller.status()` для debug: `{running, last_tick_at, generation, backoff_count}`. `_reset()` — test hook.
-
-## Issues scanner (`cluster/issues.lua`)
-
-Daemon-fiber `webui_issues_scanner` тикает каждые `SCAN_INTERVAL_SEC=5s` поверх `state.snapshot()`. Категории M1:
-
-- **replication** — `upstream.status ≠ follow` (critical), `lag > replication_sync_lag` (warning), `idle > replication_idle_factor × default_replication_timeout` (warning). Локальная self-запись (`upstream.status == nil`) пропускается. Unreachable peers не сканируются — это шум.
-- **memory** — `arena_used_ratio`/`items_used_ratio`/`quota_used_ratio` против `<kind>_warn`/`<kind>_critical` порогов (default 0.85/0.95). Слаб-ratio'ы нормализованы в state (0..1 fraction) через `parse_ratio` (поддерживает строки "12.3%" и числа).
-- **clock** — wall-clock skew (`clock.realtime()`) пира против локального > `clock_delta_sec` (default 5s).
-- **config** — пробрасываем `config:info().alerts` каждого peer'а как issues (severity: `critical`/`error` → critical, остальное → warning).
-
-Defer: failover (Task 46), vshard (Task 47).
-
-Stable ID format: `category:scope:target:key` (например `replication:instance:tt-1:upstream-status-<peer-uuid>`). Это значит UI видит ту же проблему между тиками без flicker.
-
-Severity: `warning` или `critical`. Scope: `cluster`/`replicaset`/`instance`.
-
-Логирование:
-- INFO `issue appeared` / `issue cleared` — детектится через сравнение `prev_by_id` ↔ `new_by_id` на каждом тике. WARN `critical issue` дополнительно к INFO для critical-severity.
-- DEBUG `issues tick` со счётчиками total/appeared/disappeared.
-
-GraphQL:
-- `issues(severity?, scope?, category?, instance?, replicaset?, after?, limit?)` — фильтрация по любой комбинации, cursor-пагинация по issue.id (default 50, cap 500).
-- `issuesSummary { warning, critical, total }` — для TopBar badge.
-
-`issues.current()` возвращает deep-copy кеша (resolver безопасно сортирует/фильтрует без гонок). `issues.summarise(list)` — pure counter. `issues.status()` — `{running, last_scan_at, issue_count}` для debug.
-
-## Suggestions engine (`cluster/suggestions.lua`)
-
-Daemon-fiber `webui_suggestions_scanner` тикает каждые 5s поверх `state.snapshot()` и формирует automated-recovery suggestions для UI. Engine paired с issues: issues говорит «сломано», suggestions говорит «нажми сюда, чтобы починить».
-
-7 типов (GraphQL surface стабилен между фазами):
-
-- **force_apply** — peer'ы с `config:info().status ≠ ready`. Action: `require('config'):reload()` map_eval.
-- **restart_replication** — peer'ы с upstream != `follow`. Action: `box.cfg{replication=box.cfg.replication}` map_eval (drop+rebuild upstream'ов).
-- **refresh_vshard**, **disable_server**, **refine_uri**, **restart_failover**, **bootstrap_vshard** — типы определены, детекторы возвращают `[]` до Task 30 (etcd/config edit), Task 46 (failover), Task 47 (vshard).
-
-Stable IDs `<type>:<uuid|alias>`. UI коррелирует между тиками без flicker.
-
-Action contract — `M.apply(type, payload, opts?)`:
-- payload: `{ instance_uuids = [...] }` (accept UUIDs, aliases, или mixed)
-- `resolve_targets(snapshot, uuids)` → `{aliases=[...], unknown=[...]}` — pure helper, lookup по uuid → alias map; unknown UUIDs пробрасываются как aliases для graceful degradation; truly bogus названия возвращаются в `unknown`.
-- map_eval с `timeout=5s`.
-- Возврат: `{ok=true, results={[peer]={ok, value|err}}, unknown}` для реализованных. `nil, "type X is not implemented yet"` для остальных.
-
-GraphQL:
-- `Query.suggestions` → `Suggestions {forceApply[], restartReplication[], refreshVshard[], disableServer[], refineUri[], restartFailover[], bootstrapVshard[]}`. Все списки пустые когда нет suggestion'ов.
-- `Mutation.applyForceApply(instanceUuids)`, `applyRestartReplication(...)`, и 5 остальных — все возвращают `SuggestionApplyResult{ok, message, unknown, results}`. Нереализованные типы returns `{ok:false, message:"...not implemented yet"}` — UI рендерит disabled action с tooltip без парсинга GraphQL `errors[]`.
-
-Логирование: INFO `applied <type> suggestion` с targets/unknown/count. DEBUG `suggestions tick` с total. WARN `suggestions tick raised` на pcall failure.
-
-`suggestions.current()` — deep-copy кеша (resolver безопасно). `status()` — `{running, last_scan_at}`. Audit (Task 26) подхватит INFO применённого действия как security-relevant event.
-
-## WebSocket-инфраструктура (`/ws`)
-
-Дельты от поллера / issues / suggestions / config-watcher уезжают клиенту через одиночный `/ws` endpoint. В M1 — dev-anonymous: соединение принимается без проверки сессии при `WEBUI_DEV_ANONYMOUS_WS=1` (dev compose). В prod compose флаг отсутствует — endpoint отвечает `503 "auth not wired yet"` до Task 26a.
-
-Архитектура:
-
-- **`backend/webui/http/ws_frame.lua`** — pure RFC 6455 codec. Опкоды: text/binary/close/ping/pong. Длина 7/16/64-bit. Mask validation (client→server обязан mask'ировать). `MAX_FRAME_BYTES=16MiB`. `compute_accept(key)` через `digest.sha1` + base64 magic.
-- **`backend/webui/http/ws_registry.lua`** — реестр live-коннектов. Per-entry: id (sequential), session_id (placeholder для M2), ip, ua, created_at, last_pong, backlog_size, queue, close_fn. `register(meta)` отказывает с `'limit_reached'` при `max_connections=100`. `enqueue(id, msg)` отказывает `'backlog_overflow'` при `backlog_limit=1000` → `broadcast` дропает + close_fn(1008). `close_all(code,reason)` для shutdown.
-- **`backend/webui/http/ws.lua`** — endpoint + lifecycle.
-  - **Handshake**: GET /ws + Upgrade headers → 101 Switching Protocols. Невалидные headers → 400, без env flag → 503.
-  - **Lifecycle**: handler регистрирует connection, выставляет close_fn, спавнит reader fiber (parse client frames: pong→update_pong, ping→encode_pong, close→close, text→log+ignore), запускает writer LOOP внутри handler'а (важно: tcp_server закрывает socket когда handler возвращается; держим socket alive держа writer в handler-fiber'е). После выхода writer'а — `sock:close()` + unregister, возврат DETACHED.
-  - **Initial frame**: сразу после handshake'а кладём `{type:'initial', connection_id, cluster, issues, suggestions, ts}` в queue.
-  - **Broadcast**: `M.broadcast()` собирает `project_snapshot()` (state.snapshot + issues.current + suggestions.current + generation/ts) → JSON encode → `registry.broadcast()` → `notify_cond:broadcast()`. Хуки в `poller.tick`, `issues.run_one_scan` (на appeared/disappeared), `suggestions.run_one_scan` (на изменение total).
-- **Heartbeat fiber** `webui_ws_heartbeat` (1 на процесс) — каждые `HEARTBEAT_TICK_SEC=5s` сканирует реестр. `now - last_pong > PONG_DEADLINE_SEC=60s` → close_fn(1008, "pong_timeout"). Иначе если прошло `PING_INTERVAL_SEC=30s` — enqueue `'__ping__'` (writer обработает как PING frame).
-- **Graceful shutdown** (`webui.stop()`): `ws.shutdown()` → `registry.close_all(1001, 'shutdown')`.
-
-Лимиты:
-
-- `max_connections=100` (`registry.DEFAULT_MAX_CONNECTIONS`).
-- `backlog_limit=1000` (`registry.DEFAULT_BACKLOG_LIMIT`) — slow consumer закрывается с code 1008.
-
-Логи: INFO на connect/disconnect (с reason), WARN на slow-consumer/no pong/decode error/limit reached, DEBUG на каждое сообщение (bytes count, не содержимое).
-
-Ручная проверка: `python3 -c "import socket, base64, hashlib; s=socket.create_connection(...)"` + decode WS frame (см. `/tmp/ws_probe.py` пример в репо history).
-
-## Добавление нового backend-резолвера
+Команды:
 
 ```bash
-bun run scaffold lua-resolver library_search
+make dump-schema          # SDL
+make gen-types            # SDL + TS-типы + Vue composables
+make gen-types-watch      # Watch
 ```
 
-Создаёт `backend/webui/graphql/types/library.lua`, `backend/webui/graphql/resolvers/library.lua`, skeleton unit-теста.
+После каждого backend-изменения в GraphQL схемы PR обязан включать regenerated `generated.ts`. CI gate ловит drift.
 
-## IDE setup
+## Storybook
 
-VSCode рекомендуемые расширения — в `.vscode/extensions.json`. Lua autocomplete через sumneko-lua + EmmyLua аннотации в каждом модуле.
+`frontend/.storybook/` — Storybook 8 поверх `@storybook/vue3-vite`. Stories — TypeScript рядом с компонентами:
 
-## Где задавать вопросы
+```bash
+cd frontend
+bun run storybook         # dev-сервер на http://localhost:6006
+bun run build-storybook   # статика в frontend/storybook-static/
+```
 
-- Issues: GitHub issues репозитория.
-- Дискуссии: GitHub Discussions.
-- Security: `docs/security.md` → contact section.
+Аддоны: `addon-essentials`, `addon-a11y` (axe-core), `addon-themes` (light/dark), `addon-interactions`, `addon-viewport`. Глобальные декораторы: PrimeVue Aura, Pinia, vue-i18n, vue-router memory history.
+
+Каждый UI-примитив в `frontend/src/shared/ui/` обязан идти вместе со story-файлом и проходить axe-checks.
+
+## Локальный line check
+
+```bash
+make dev                                  # поднять compose
+curl http://localhost:8080/api/health     # smoke
+```
+
+Время полного локального dev-старта — ~30–45 секунд.
+
+## CI
+
+`.github/workflows/ci.yml`:
+
+| Job | Что делает |
+|---|---|
+| `lint-frontend` | bun lint + format + type-check |
+| `unit-frontend` | vitest |
+| `build-frontend` | Vite build, artifact |
+| `lint-backend` | luacheck |
+| `unit-backend` | luatest matrix |
+| `lint-docker` | hadolint |
+| `lint-shell` | shellcheck |
+| `build-docker` | BuildKit cache |
+| `integration` | compose smoke (test-integration) |
+| `ci-done` | gate, требует все предыдущие зелёными |
+
+## Project hygiene
+
+- В коммитимых артефактах не должно быть упоминаний внутренних tooling-state директорий. CI-проверка: `make check-no-tooling-mentions`.
+- Vendored референсные деревья (`cartridge-*`, `tarantool-*`) в `.gitignore`.
+- Build артефакты (`frontend/dist/`, `frontend/node_modules/`, `bundle.lua`, `.rocks/`, `*.snap`, `*.xlog`) в `.gitignore`.
+
+## See Also
+
+- [Architecture](architecture.md) — общая картина, layout, потоки данных
+- [GraphQL API](api/graphql-schema.md) — полный SDL
+- [Operations](operations.md) — Docker, HAProxy, мониторинг

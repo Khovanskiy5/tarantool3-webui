@@ -1,6 +1,8 @@
+[← GraphQL schema](graphql-schema.md) · [Back to README](../../README.md) · [Error codes →](error-codes.md)
+
 # REST API
 
-Основная админ-поверхность — GraphQL по `POST /admin/api` (см. `docs/api/graphql-schema.md`). REST зарезервирован для случаев, где GraphQL только мешает: аутентификация, eval, метрики, health, upload/download конфигов, diagnostic bundle.
+Основная админ-поверхность — GraphQL по `POST /admin/api` (см. `graphql-schema.md`). REST зарезервирован для случаев, где GraphQL только мешает: аутентификация, eval, метрики, health, upload/download конфигов, diagnostic bundle.
 
 Все ответы — `application/json; charset=utf-8`. Все запросы и ответы несут заголовок `X-Request-Id` (UUID v4) — клиент может передать свой, иначе сервер сгенерирует. Этот же ID попадает в structured-логи на всех инстансах кластера для cross-instance correlation.
 
@@ -42,7 +44,7 @@
 
 **503 Service Unavailable — `status: "unhealthy"`** — серьёзная неисправность. HAProxy выводит из ротации. В заголовке отдаётся `Retry-After: 5`.
 
-### Critical/degraded критерии (реализованные на M0)
+### Critical / degraded критерии
 
 | Условие | Verdict |
 |---|---|
@@ -51,7 +53,7 @@
 | Роль не инициализирована | `unhealthy` (HTTP 503) |
 | Идёт graceful shutdown | `degraded` |
 
-Дополнительные проверки регистрируются модулями `etcd`, `cluster.poller`, `config_store.twophase` через `health.register_check(name, fn)` — они появятся по мере реализации Tasks 17, 27, 30.
+Дополнительные проверки регистрируются модулями `etcd`, `cluster.poller`, `config_store.twophase` через `health.register_check(name, fn)`.
 
 ### Тело `checks`
 
@@ -59,10 +61,10 @@
 {
   "checks": {
     "tx_thread": "ok | blocked",
-    "etcd": "ok | down | slow",          // Task 30
-    "peers": "ok | lost_majority",       // Task 17
-    "config": "ok | stale",              // Task 27
-    "shutdown": "ok | true"              // Task 3a
+    "etcd":      "ok | down | slow",
+    "peers":     "ok | lost_majority",
+    "config":    "ok | stale",
+    "shutdown":  "ok | true"
   }
 }
 ```
@@ -106,18 +108,11 @@ Self-contained минимальный GraphQL explorer. Открывает HTML-
 
 - Гейтинг: `roles_cfg.webui.graphiql_enabled` (default `false`). При `false` → 404.
 - CSP relaxed для этого route: `script-src 'self' 'unsafe-inline'`.
-- Никаких внешних ассетов. Не GraphiQL (~3 КБ inline вместо ~1 МБ полного React-приложения).
-- В Task 26 добавится RBAC-фильтрация (доступ только `admin`/`superuser`).
+- Никаких внешних ассетов. Не полный GraphiQL (~3 КБ inline вместо ~1 МБ React-приложения).
+- RBAC: `admin`.
 
-## Дальнейшие endpoint'ы
+## See Also
 
-Появляются по мере реализации задач:
-
-- `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me` — Tasks 25–26.
-- `POST /api/eval` — Task 44 (Lua/SQL console).
-- `GET /api/metrics`, `GET /api/metrics/webui` — Tasks 42, 42a.
-- `GET /api/config/download`, `POST /api/config/upload` — Task 37.
-- `GET /api/diagnostics/bundle` — Task 54.
-- `GET /ws` (WebSocket upgrade) — Tasks 21, 26a.
-
-Каждая категория документируется отдельным разделом в этом файле или собственным документом.
+- [GraphQL schema](graphql-schema.md) — основной admin API
+- [Error codes](error-codes.md) — стабильные коды ошибок
+- [RBAC matrix](../rbac-matrix.md) — требуемая роль для каждого endpoint'а

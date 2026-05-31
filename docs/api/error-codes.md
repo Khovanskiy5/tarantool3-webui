@@ -1,3 +1,5 @@
+[← REST API](rest.md) · [Back to README](../../README.md)
+
 # Error codes
 
 Стабильная часть API контракта. Каждый код имеет HTTP-статус для REST, `extensions.code` для GraphQL, рекомендованное UI-поведение и i18n-ключ для локализации фронта.
@@ -98,7 +100,7 @@ end
 
 ## Frontend представление
 
-Будет реализовано в Task 8: `frontend/src/shared/api/error-codes.ts` с тем же набором констант и маппингом на UI-поведение в `error-handler.ts`. i18n-ключи: `errors.<CODE>`.
+`frontend/src/shared/api/error-codes.ts` — те же константы и маппинг на UI-поведение в `error-handler.ts`. i18n-ключи: `errors.<CODE>` (`frontend/src/shared/i18n/locales/{en,ru}.json`).
 
 ## Расширение
 
@@ -109,3 +111,10 @@ end
 3. Добавить строку в соответствующую таблицу этого документа.
 4. Добавить ключ в `frontend/src/shared/i18n/locales/{en,ru}.json` под `errors.<NEW_CODE>`.
 5. (Если затрагивает frontend) обновить `frontend/src/shared/api/error-handler.ts`.
+
+## See Also
+
+- [GraphQL schema](graphql-schema.md) — где появляется `extensions.code`
+- [REST API](rest.md) — error envelope формат
+- [Security](../security.md) — error envelope маскирование internal errors
+- [Troubleshooting](../troubleshooting.md) — что делать при популярных ошибках

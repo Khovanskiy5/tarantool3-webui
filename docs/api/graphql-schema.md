@@ -1,8 +1,10 @@
+[← Development](../development.md) · [Back to README](../../README.md) · [REST API →](rest.md)
+
 # GraphQL schema
 
-Основная админ-поверхность — GraphQL по `POST /admin/api`. Этот документ описывает текущий контракт схемы. По мере реализации задач (Tasks 14, 18, 19, 20, 26, 30…) сюда добавляются новые типы, queries и mutations.
+Основная админ-поверхность — GraphQL по `POST /admin/api`. Этот документ описывает контракт схемы.
 
-Документ ведётся вручную для удобства чтения. Сгенерированный SDL — артефакт релиза (`webui-schema-<ver>.graphql`), создаётся в Task 8 пайплайном `make dump-schema`.
+Документ ведётся вручную для удобства чтения. Сгенерированный SDL — артефакт сборки (`frontend/src/shared/api/schema.graphql`), создаётся пайплайном `make dump-schema`.
 
 ## Транспорт
 
@@ -94,7 +96,7 @@ query {
 
 ### `configJsonSchema: String`
 
-JSON-encoded **JSON Schema** cluster config, как её отдаёт нативный `config:jsonschema()` Tarantool. Это единый источник истины для валидации конфига на backend (Task 32) и для Monaco-autocomplete на frontend (Task 38). Возвращает `null`, если модуль `config` недоступен (нестандартные тестовые конфигурации).
+JSON-encoded **JSON Schema** cluster config, как её отдаёт нативный `config:jsonschema()` Tarantool. Это единый источник истины для валидации конфига на backend и для Monaco-autocomplete на frontend. Возвращает `null`, если модуль `config` недоступен (нестандартные тестовые конфигурации).
 
 ```graphql
 query { configJsonSchema }
@@ -106,7 +108,7 @@ query { configJsonSchema }
 
 ### `_noop: Boolean!`
 
-Placeholder. Возвращает `true`. Удаляется как только появятся настоящие mutation'ы в Tasks 26+.
+Placeholder. Возвращает `true`. Сохранён для введения unit-теста на GraphQL-execute path; рабочие мутации перечислены в `operations.md` и `rbac-matrix.md`.
 
 ## Types
 
@@ -135,7 +137,7 @@ type RoleStatus {
 
 `GET /admin/api/explore` — self-contained минимальный explorer. Не GraphiQL (полная GraphiQL весит ~1 МБ и требует React); embedded версия — текстовое поле для query, отправка через `POST /admin/api`, отображение ответа в JSON. Подходит для быстрых проверок и smoke-тестов.
 
-**Гейтинг:** включается через `roles_cfg.webui.graphiql_enabled = true`. По умолчанию выключен в prod. В Task 26 добавится RBAC (доступ только `admin` или `superuser`); сейчас фильтр — только по конфигу роли.
+**Гейтинг:** включается через `roles_cfg.webui.graphiql_enabled = true`. По умолчанию выключен в prod. RBAC: `admin`.
 
 **CSP**: на этот единственный route релаксируется до `script-src 'self' 'unsafe-inline'` (для inline-скрипта explorer'а). Никакие внешние ресурсы не загружаются.
 
@@ -153,22 +155,18 @@ query {
 }
 ```
 
-Используется в Task 8 для генерации TypeScript типов через `graphql-codegen` поверх SDL, дампимого из `tools/dump-schema.lua`.
+Используется для генерации TypeScript типов через `graphql-codegen` поверх SDL, дампимого из `tools/dump-schema.lua`.
 
-## Roadmap
+## Эволюция схемы
 
-Новые типы и операции добавляются по задачам:
+- **Удаление поля / типа** или **изменение nullability** — breaking change. Помечается `@deprecated(reason: "...")` в одной версии, удаляется минимум через одну minor.
+- **Добавление поля / типа / аргумента с дефолтом** — non-breaking.
+- **Сужение возвращаемого типа** (например, `T → T!`) — breaking. Расширение (`T! → T`) — breaking для клиентов, которые опираются на non-null guarantee.
 
-- **Task 14:** `Query.cluster` — топология (`Server`, `Replicaset`, `Label`).
-- **Task 18:** `Query.cluster.servers` пагинация (Relay connection).
-- **Task 19:** `Query.issues`, `IssueBase` интерфейс + конкретные `…Issue` типы.
-- **Task 20:** `Query.suggestions` (union), `Mutation.applySuggestion`.
-- **Task 26:** `Query.me`, `Mutation.login/logout` (REST), RBAC-фильтрация резолверов.
-- **Task 28a:** `Query.authParams`, `Mutation.updateAuthParams`.
-- **Task 34:** `Mutation.configPrepare/Commit/Abort`, `Query.configHistory`.
-- **Tasks 40, 41:** `Query.spaces`, `Query.users` (read-only части уже в схеме — резолверы в `graphql/resolvers/admin_data.lua`). Mutations (`createSpace`, `setUserRoles`) поедут через двухфазный коммит.
-- **Tasks 46, 47, 50, 51, 52:** failover, vshard, lifecycle mutations.
-- **Task 46a:** `Query.failoverStateProviderStatus { kind, mode, endpoints[], lease_active, coordinator }` — пингует endpoints state-provider'а (etcd по `/version` с таймаутом 1с), возвращает `kind: 'none'` для election/manual/off.
-- **Task 47a:** `Query.vshardKnownGroups`, `Query.canBootstrapVshard(group)`, `Mutation.bootstrapVshard(group)` — bootstrap surface, RPC через peer pool на router-инстанс группы.
+CI gate: после каждого backend-изменения PR обязан включать regenerated `frontend/src/shared/api/__generated/{gql,graphql}.ts`. Drift между SDL и сгенерированными TS — CI failure.
 
-Каждое расширение проходит проверку на breaking (см. `docs/api/deprecation.md` после Task 21).
+## See Also
+
+- [REST API](rest.md) — auth, eval, metrics, health, config IO
+- [Error codes](error-codes.md) — стабильные коды ошибок
+- [RBAC matrix](../rbac-matrix.md) — требуемая роль для каждой query/mutation
