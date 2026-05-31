@@ -153,8 +153,15 @@ end
 -- System spaces whose passwords / credentials we must mask in
 -- read responses. Direct mutations on these are blocked separately
 -- in Phase 2 Task 2.3 (`data_mutations.lua`).
+--
+-- `_vuser` is a sysview over `_user` — same tuples, same hashes,
+-- different space id. Reading from the view bypasses the mask
+-- unless we list it explicitly here, so the UI's "System on"
+-- toggle would otherwise leak credentials in plain sight.
+local SENSITIVE_AUTH = { ['chap-sha1'] = true, ['scram-sha-256'] = true }
 local SENSITIVE_READ_FIELDS = {
-    _user = { ['chap-sha1'] = true, ['scram-sha-256'] = true },
+    _user  = SENSITIVE_AUTH,
+    _vuser = SENSITIVE_AUTH,
 }
 
 local function mask_sensitive(space_name, fields, format)
@@ -213,8 +220,12 @@ function M.query_tuples(root, args)
     -- the lib does not run our `enum.values[name].value` map
     -- through coerceValue. We normalize once here so the filter
     -- compiler stays unaware of the wire format.
+    -- `args.filter` is `box.NULL` (cdata 'void') when the SPA omits
+    -- it, not a Lua nil — `or {}` would not short-circuit. Guard
+    -- explicitly via type().
+    local filter_in = (type(args.filter) == 'table') and args.filter or {}
     local raw_filter = {}
-    for _, c in ipairs(args.filter or {}) do
+    for _, c in ipairs(filter_in) do
         if type(c) ~= 'table' or type(c.field) ~= 'string'
             or type(c.op) ~= 'string' then
             error('VALIDATION_ERROR: invalid filter condition (need {field, op, value}, op in '

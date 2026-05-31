@@ -26,7 +26,10 @@ import { NOT_FOUND_ROUTE } from '@/pages/errors/not-found';
 import { LOGIN_ROUTE } from '@/pages/login';
 import { AUDIT_ROUTE } from '@/pages/audit';
 import { CONFIG_EDITOR_ROUTE } from '@/pages/config-editor';
-import { SCHEMA_ROUTE } from '@/pages/schema';
+// SCHEMA_ROUTE is intentionally NOT imported — Task 2.5 retires the
+// /schema page in favour of /data-explorer; the legacy path is kept
+// as a redirect below until the next breaking cleanup.
+import { DATA_EXPLORER_ROUTE } from '@/pages/data-explorer';
 import { USERS_ROUTE } from '@/pages/users';
 import { FAILOVER_ROUTE } from '@/pages/failover';
 import { VSHARD_ROUTE } from '@/pages/vshard';
@@ -54,7 +57,14 @@ const routes: RouteRecordRaw[] = [
   CLUSTER_ROUTE,
   ISSUES_ROUTE,
   CONFIG_EDITOR_ROUTE,
-  SCHEMA_ROUTE,
+  DATA_EXPLORER_ROUTE,
+  // Task 2.5: /schema is superseded by /data-explorer; keep the old
+  // path as a redirect so existing bookmarks and runbook links
+  // still land in the same place. The legacy Schema.vue stays in
+  // the bundle for one more milestone in case we need to point
+  // someone at the read-only view; remove together with the
+  // route on the next breaking cleanup.
+  { path: '/schema', redirect: '/data-explorer' },
   USERS_ROUTE,
   FAILOVER_ROUTE,
   VSHARD_ROUTE,
