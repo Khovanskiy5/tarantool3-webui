@@ -125,6 +125,183 @@ end
 
 -- ── space metadata helpers ─────────────────────────────────────────
 
+-- ── type-aware coercion (mutations input) ──────────────────────────
+--
+-- The SPA sends every tuple field as a JSON value. Tarantool's
+-- internal types (uuid / decimal / map / binary string) do not
+-- survive JSON's lossy decoding — they arrive as plain strings or
+-- nested tables, and box.space:insert() then rejects them with
+-- "Tuple field type mismatch". This layer turns the wire-format
+-- payload back into the cdata / table shape the storage engine
+-- expects, based on the field's declared type from the space format.
+--
+-- The conversions mirror tarantool-admin/Row/Update.php so an
+-- operator who used both tools sees the same behavior.
+
+local function require_safe(name)
+    local ok, mod = pcall(require, name)
+    if not ok then return nil end
+    return mod
+end
+
+local uuid_mod    = require_safe('uuid')
+local decimal_mod = require_safe('decimal')
+
+local function unwrap_binary(v)
+    if type(v) == 'table' and type(v._binary_base64) == 'string' then
+        return digest.base64_decode(v._binary_base64)
+    end
+    return v
+end
+
+-- coerce_field(value, declared_type) → (coerced_value, err?)
+--
+-- declared_type is the lowercase Tarantool field type from
+-- `_space.format[i].type`. Unknown types pass through unchanged so
+-- the caller can still attempt the mutation and let Tarantool's
+-- own validator decide.
+function M.coerce_field(value, declared_type)
+    -- Explicit null stays as null. The caller decides whether to
+    -- pad with box.NULL or to drop it as a trailing nil.
+    if value == nil then return nil end
+
+    declared_type = declared_type and tostring(declared_type):lower() or 'any'
+
+    -- Always unwrap our binary envelope first, regardless of type.
+    value = unwrap_binary(value)
+
+    if declared_type == 'uuid' then
+        if uuid_mod == nil then return nil, 'uuid module unavailable' end
+        if type(value) ~= 'string' then
+            return nil, 'uuid field requires RFC4122 string, got ' .. type(value)
+        end
+        local ok, parsed = pcall(uuid_mod.fromstr, value)
+        if not ok or parsed == nil then
+            return nil, 'invalid uuid string: ' .. tostring(value)
+        end
+        return parsed
+    end
+
+    if declared_type == 'decimal' then
+        if decimal_mod == nil then return nil, 'decimal module unavailable' end
+        local ok, parsed = pcall(decimal_mod.new, value)
+        if not ok or parsed == nil then
+            return nil, 'invalid decimal value: ' .. tostring(value)
+        end
+        return parsed
+    end
+
+    if declared_type == 'unsigned' or declared_type == 'integer'
+        or declared_type == 'number' or declared_type == 'double'
+        or declared_type == 'float' then
+        if type(value) == 'number' then return value end
+        if type(value) == 'string' then
+            local n = tonumber(value)
+            if n == nil then
+                return nil, declared_type .. ' field needs numeric input, got ' .. value
+            end
+            return n
+        end
+        return nil, declared_type .. ' field needs number, got ' .. type(value)
+    end
+
+    if declared_type == 'boolean' then
+        if type(value) == 'boolean' then return value end
+        if value == 'true'  or value == 1 then return true end
+        if value == 'false' or value == 0 then return false end
+        return nil, 'boolean field needs true|false, got ' .. tostring(value)
+    end
+
+    if declared_type == 'string' or declared_type == 'varbinary'
+        or declared_type == 'scalar' then
+        -- After unwrap_binary, value is either a plain Lua string
+        -- (UTF-8 or raw bytes) or, for `scalar`, any primitive.
+        return value
+    end
+
+    if declared_type == 'map' or declared_type == 'array' or declared_type == 'any' then
+        if type(value) == 'string' then
+            local ok, parsed = pcall(json.decode, value)
+            if ok and type(parsed) == 'table' then return parsed end
+            -- Not JSON — for `any` we pass the string through.
+            if declared_type == 'any' then return value end
+            return nil, declared_type .. ' field needs JSON object/array, got string'
+        end
+        return value
+    end
+
+    return value
+end
+
+-- coerce_tuple(fields, format) → (tuple, err?)
+--
+-- Applies coerce_field across every position, then pads with
+-- box.NULL to handle the trailing-nil hazard:
+--
+--   Lua arrays truncate trailing nils, so `{42, nil, "x"}` becomes
+--   `{42}` when forwarded across function boundaries. If the
+--   declared field at the truncated position is nullable, the
+--   caller meant to insert NULL, not "absent". We replace null with
+--   box.NULL up to the LAST non-nil position so the array length
+--   matches the operator's intent.
+function M.coerce_tuple(fields, format)
+    if type(fields) ~= 'table' then return nil, 'fields must be a list' end
+    -- `#fields` is undefined on arrays with holes (Lua spec), so we
+    -- use pairs() to find the highest numeric index. Callers can
+    -- pass either box.NULL or a plain Lua nil for null positions;
+    -- only `box.NULL` survives the table border across function
+    -- calls — plain nil collapses into a hole. Either way, this
+    -- loop catches the largest real position.
+    local last_real = 0
+    for k, v in pairs(fields) do
+        if type(k) == 'number' and v ~= nil and k > last_real then
+            last_real = k
+        end
+    end
+    local out = {}
+    for i = 1, last_real do
+        local v = fields[i]
+        local fmt = format and format[i]
+        local declared = fmt and fmt.type or 'any'
+        if v == nil then
+            out[i] = box.NULL
+        else
+            local coerced, err = M.coerce_field(v, declared)
+            if err ~= nil then
+                return nil, ('field %d (%s): %s'):format(
+                    i, fmt and fmt.name or '?', err)
+            end
+            out[i] = coerced
+        end
+    end
+    return out
+end
+
+-- coerce_key(key, pk_parts, format) → (key_list, err?)
+--
+-- Primary keys are short, never nullable; we just type-coerce each
+-- part by its declared format type. `pk_parts` is the array from
+-- `idx.parts` (each entry has {fieldno, type, ...}).
+function M.coerce_key(key, pk_parts, format)
+    if type(key) ~= 'table' then return nil, 'key must be a list' end
+    local out = {}
+    for i, raw in ipairs(key) do
+        local part = pk_parts and pk_parts[i]
+        local declared
+        if part ~= nil then
+            local fno = part.fieldno or part.field
+            local fmt = (fno and format) and format[fno] or nil
+            declared = (fmt and fmt.type) or part.type or 'any'
+        end
+        local coerced, err = M.coerce_field(raw, declared or 'any')
+        if err ~= nil then
+            return nil, ('key part %d: %s'):format(i, err)
+        end
+        out[i] = coerced
+    end
+    return out
+end
+
 -- Tarantool stores the format as an array of {name, type, ...} maps
 -- inside `_space[id][7]`. We project it into a simple list the SPA
 -- can render without knowing the internal layout.

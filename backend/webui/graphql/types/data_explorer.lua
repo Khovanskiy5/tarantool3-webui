@@ -106,6 +106,50 @@ M.TupleConnection = types.object({
     },
 })
 
+-- ── mutation surface ────────────────────────────────────────────────
+
+M.UpdateOpKind = types.enum({
+    name = 'UpdateOpKind',
+    description = 'Tarantool space:update() operators. SET/ADD/SUB ' ..
+        'mirror the `=`/`+`/`-` symbolic forms. INSERT inserts a new ' ..
+        'field at `field` position; DELETE drops `value` fields ' ..
+        'starting at `field` (value defaults to 1).',
+    values = {
+        SET    = { value = 'set' },
+        ADD    = { value = 'add' },
+        SUB    = { value = 'sub' },
+        BAND   = { value = 'band' },
+        BOR    = { value = 'bor' },
+        BXOR   = { value = 'bxor' },
+        SPLICE = { value = 'splice' },
+        INSERT = { value = 'insert' },
+        DELETE = { value = 'delete' },
+    },
+})
+
+M.UpdateOpInput = types.inputObject({
+    name = 'UpdateOpInput',
+    fields = {
+        op    = M.UpdateOpKind.nonNull,
+        -- `field` accepts either a string name (resolved through
+        -- the space format) or a 1-based numeric index. The Json
+        -- scalar handles both shapes.
+        field = M.Json.nonNull,
+        value = M.Json,
+    },
+})
+
+M.TupleMutationResult = types.object({
+    name = 'TupleMutationResult',
+    fields = {
+        ok        = types.boolean.nonNull,
+        before    = types.list(M.Json),
+        after     = types.list(M.Json),
+        forwarded = types.boolean,
+        leader    = types.string,
+    },
+})
+
 -- Re-export json encode for callers that need to stringify
 -- mismatched scalar payloads at the resolver boundary.
 M._json = json

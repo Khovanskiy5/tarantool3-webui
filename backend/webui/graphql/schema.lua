@@ -1011,6 +1011,67 @@ local Mutation = types.object {
                 'Rejects synchro_quorum < N/2+1 as critical.',
             resolve = cluster_ops_resolver.mutation_set_failover_mode,
         },
+        -- ── data-explorer tuple mutations (Phase 2 Task 2.3) ────────
+        tupleInsert = {
+            kind = data_explorer_types.TupleMutationResult.nonNull,
+            arguments = {
+                space  = types.string.nonNull,
+                fields = types.list(data_explorer_types.Json).nonNull,
+            },
+            description = 'Insert a new tuple into a user space. ' ..
+                'Fields are type-coerced through the space format ' ..
+                '(uuid/decimal/binary/map). Non-trailing nulls become ' ..
+                'box.NULL. System spaces are blocked.',
+            resolve = function(root, args)
+                return require('webui.graphql.resolvers.data_mutations')
+                    .tuple_insert(root, args)
+            end,
+        },
+        tupleReplace = {
+            kind = data_explorer_types.TupleMutationResult.nonNull,
+            arguments = {
+                space  = types.string.nonNull,
+                fields = types.list(data_explorer_types.Json).nonNull,
+            },
+            description = 'Insert-or-replace by primary key. Returns ' ..
+                'before/after so the SPA can diff. System spaces ' ..
+                'blocked.',
+            resolve = function(root, args)
+                return require('webui.graphql.resolvers.data_mutations')
+                    .tuple_replace(root, args)
+            end,
+        },
+        tupleUpdate = {
+            kind = data_explorer_types.TupleMutationResult.nonNull,
+            arguments = {
+                space = types.string.nonNull,
+                key   = types.list(data_explorer_types.Json).nonNull,
+                ops   = types.list(
+                    types.nonNull(data_explorer_types.UpdateOpInput)).nonNull,
+            },
+            description = 'Atomic per-field update via space:update(). ' ..
+                'Op kinds: SET, ADD, SUB, BAND, BOR, BXOR, SPLICE, ' ..
+                'INSERT, DELETE. `field` accepts a string (resolved ' ..
+                'through format) or 1-based numeric index. System ' ..
+                'spaces blocked.',
+            resolve = function(root, args)
+                return require('webui.graphql.resolvers.data_mutations')
+                    .tuple_update(root, args)
+            end,
+        },
+        tupleDelete = {
+            kind = data_explorer_types.TupleMutationResult.nonNull,
+            arguments = {
+                space = types.string.nonNull,
+                key   = types.list(data_explorer_types.Json).nonNull,
+            },
+            description = 'Delete one tuple by primary key. NOT_FOUND ' ..
+                'when the tuple is absent. System spaces blocked.',
+            resolve = function(root, args)
+                return require('webui.graphql.resolvers.data_mutations')
+                    .tuple_delete(root, args)
+            end,
+        },
     },
 }
 

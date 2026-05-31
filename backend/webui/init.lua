@@ -296,6 +296,20 @@ function M.start(opts)
         return { id = res.id, ts = res.ts, action = res.action }
     end)
 
+    -- Expose data-explorer tuple mutations over net.box so a
+    -- follower-served request can be forwarded to the leader. The
+    -- resolver on the follower validates RBAC + sensitive-space
+    -- deny-list BEFORE forwarding; the receiver re-checks the
+    -- deny-list and runs `box.space[X]:insert/replace/update/delete`
+    -- under the peer-cookie user (already granted CRUD on user
+    -- spaces by the role registration).
+    rawset(_G, 'webui_data_mutation_remote', function(op, space, payload, ctx)
+        local ok_mod, mut = pcall(require,
+            'webui.graphql.resolvers.data_mutations')
+        if not ok_mod then return { _error = 'data_mutations module unavailable' } end
+        return mut.remote_entry(op, space, payload, ctx)
+    end)
+
     -- Expose the dead-letter truncate over net.box. clearDeadLetter
     -- from the SPA lands on a random instance through round-robin;
     -- the leader is the only one that can actually truncate the

@@ -138,6 +138,11 @@ M.GRAPHQL_FIELD = {
     setFailoverMode       = 'admin',
     pauseFailover         = 'admin',
     resumeFailover        = 'admin',
+    -- Phase 2 Task 2.3 data-explorer tuple mutations.
+    tupleInsert           = 'admin',
+    tupleReplace          = 'admin',
+    tupleUpdate           = 'admin',
+    tupleDelete           = 'admin',
     setUserRoles  = 'admin',
     setLabels     = 'operator',
     setVshardWeight = 'admin',
