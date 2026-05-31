@@ -247,6 +247,35 @@ function M.start(opts)
         vsh_mod.install_remote()
     end
 
+    -- Expose the audit-log writer over net.box so a follower can
+    -- forward `_webui_audit` inserts to the leader (the space is
+    -- replicated; direct insert on a follower raises READONLY).
+    -- The local M.record falls back to this when box.info.ro is
+    -- true; here we wire the receiver side.
+    rawset(_G, 'webui_audit_record_remote', function(entry)
+        local ok_aud, aud_mod = pcall(require, 'webui.audit.log')
+        if not ok_aud then return nil, 'audit module unavailable' end
+        local ok, res = pcall(aud_mod.record_local, entry)
+        if not ok then return nil, tostring(res) end
+        if res == nil then return nil, 'insert returned nil' end
+        return { id = res.id, ts = res.ts, action = res.action }
+    end)
+
+    -- Expose the dead-letter truncate over net.box. clearDeadLetter
+    -- from the SPA lands on a random instance through round-robin;
+    -- the leader is the only one that can actually truncate the
+    -- replicated `_webui_webhook_dead_letter` space.
+    rawset(_G, 'webui_webhook_dead_letter_clear_remote', function()
+        local ok_sto, sto_mod = pcall(require, 'webui.storage.spaces')
+        if not ok_sto then return nil, 'storage module unavailable' end
+        local space = sto_mod.webhook_dead_letter()
+        if space == nil then return nil, 'dead-letter space missing' end
+        local count = space:count() or 0
+        local ok, err = pcall(function() space:truncate() end)
+        if not ok then return nil, tostring(err) end
+        return { cleared = count }
+    end)
+
     -- Step 5 in the role start sequence: peer cookie (system user
     -- `webui_peer` + per-instance secret persistence). Steps 3,
     -- 7, 8 land in subsequent tasks (metrics, cluster state,

@@ -54,7 +54,13 @@ export default defineConfig(({ mode }) => ({
     // can be uploaded to error-tracking services without leaking source
     // paths to public users.
     sourcemap: 'hidden',
-    chunkSizeWarningLimit: 600,
+    // Monaco editor is gated behind a dynamic import (Schema, Console,
+    // ConfigEditor) and lands in its own ~3.3 MB `monaco-editor` chunk
+    // — by design, since splitting Monaco further yields tiny chunks
+    // that re-trigger the same warning. The threshold below is set
+    // above Monaco's natural size; any new chunk approaching 4 MB is
+    // a real regression worth investigating.
+    chunkSizeWarningLimit: 4096,
     rollupOptions: {
       output: {
         // manualChunks groups dependencies into named lazy chunks. The
