@@ -180,9 +180,24 @@ local function spawn_reader(entry, sock)
                 logger.debug('ws read raised', { id = entry.id, err = tostring(err) })
                 break
             end
-            if chunk == nil or chunk == '' then
-                -- timeout with no bytes is OK; keep waiting unless
-                -- the heartbeat decided we are dead.
+            -- Distinguish three sock:read outcomes:
+            --   chunk == ''   → clean EOF, peer closed the connection.
+            --                   sock:read returns instantly in this state,
+            --                   so we MUST break out — otherwise the
+            --                   outer loop spins at 100% CPU until the
+            --                   heartbeat fiber eventually flips
+            --                   `entry.closed`. That bug burned a TX
+            --                   thread on tt-2 for hours before discovery.
+            --   chunk == nil  → 1s read timeout with no bytes. Normal.
+            --                   We loop and try again; the timeout itself
+            --                   yields the fiber so no CPU is wasted.
+            --   non-empty str → bytes; append to buf and try to decode.
+            if chunk == '' then
+                logger.debug('ws peer EOF', { id = entry.id })
+                entry.closed = true
+                break
+            end
+            if chunk == nil then
                 if entry.closed then break end
             else
                 buf = buf .. chunk
