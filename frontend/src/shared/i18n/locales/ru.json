@@ -35,6 +35,7 @@
       "config_editor": "Редактор конфигурации",
       "schema": "Схема",
       "data_explorer": "Данные",
+      "sql": "SQL",
       "users": "Пользователи",
       "failover": "Failover",
       "vshard": "Vshard",

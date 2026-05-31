@@ -7,14 +7,33 @@ import Textarea from 'primevue/textarea';
 
 import { restClient, RestApiError } from '@/shared/api/rest/client';
 
+// Per-language defaults mirror each other: both return the local
+// instance's name+uuid so an operator switching the SelectButton
+// gets an identity probe in either dialect. The SQL flavor uses
+// the built-in `_cluster` system table — it's the closest SQL has
+// to `box.info`. Tarantool 3.x does not expose `box.info` via SQL
+// scalar functions, so the system view is the only stable surface.
+const DEFAULT_LUA = 'return box.info.name, box.info.uuid';
+const DEFAULT_SQL = 'SELECT "name", "uuid" FROM "_cluster"';
+
 const lang = ref<'lua' | 'sql'>('lua');
-const code = ref('return box.info.name, box.info.uuid');
+const code = ref(DEFAULT_LUA);
 const running = ref(false);
 const result = ref<unknown>(null);
 const errorMsg = ref<string | null>(null);
 const latency = ref<number | null>(null);
 const instance = ref<string | null>(null);
 const sqlPlaceholder = 'SELECT * FROM "_space" LIMIT 5';
+
+import { watch } from 'vue';
+// Swap defaults on language toggle, but ONLY when the buffer is
+// unchanged from the previous language's default — typed user
+// content stays put across toggles.
+watch(lang, (next, prev) => {
+  const prevDefault = prev === 'lua' ? DEFAULT_LUA : DEFAULT_SQL;
+  const nextDefault = next === 'lua' ? DEFAULT_LUA : DEFAULT_SQL;
+  if (code.value.trim() === prevDefault.trim()) code.value = nextDefault;
+});
 
 interface EvalResp {
   ok: boolean;

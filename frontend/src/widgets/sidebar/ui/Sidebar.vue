@@ -21,6 +21,7 @@ const items: SidebarItem[] = [
   { key: 'issues',        to: '/issues',        iconClass: 'pi pi-exclamation-triangle', labelKey: 'widgets.sidebar.issues' },
   { key: 'config-editor', to: '/config-editor', iconClass: 'pi pi-code',        labelKey: 'widgets.sidebar.config_editor' },
   { key: 'data-explorer', to: '/data-explorer', iconClass: 'pi pi-table',       labelKey: 'widgets.sidebar.data_explorer' },
+  { key: 'sql',           to: '/sql',           iconClass: 'pi pi-bolt',        labelKey: 'widgets.sidebar.sql' },
   { key: 'users',         to: '/users',         iconClass: 'pi pi-users',       labelKey: 'widgets.sidebar.users' },
   { key: 'failover',      to: '/failover',      iconClass: 'pi pi-sync',        labelKey: 'widgets.sidebar.failover' },
   { key: 'vshard',        to: '/vshard',        iconClass: 'pi pi-th-large',    labelKey: 'widgets.sidebar.vshard' },

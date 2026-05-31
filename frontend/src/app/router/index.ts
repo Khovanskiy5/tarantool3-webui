@@ -30,6 +30,7 @@ import { CONFIG_EDITOR_ROUTE } from '@/pages/config-editor';
 // /schema page in favour of /data-explorer; the legacy path is kept
 // as a redirect below until the next breaking cleanup.
 import { DATA_EXPLORER_ROUTE } from '@/pages/data-explorer';
+import { SQL_ROUTE } from '@/pages/sql';
 import { USERS_ROUTE } from '@/pages/users';
 import { FAILOVER_ROUTE } from '@/pages/failover';
 import { VSHARD_ROUTE } from '@/pages/vshard';
@@ -58,6 +59,7 @@ const routes: RouteRecordRaw[] = [
   ISSUES_ROUTE,
   CONFIG_EDITOR_ROUTE,
   DATA_EXPLORER_ROUTE,
+  SQL_ROUTE,
   // Task 2.5: /schema is superseded by /data-explorer; keep the old
   // path as a redirect so existing bookmarks and runbook links
   // still land in the same place. The legacy Schema.vue stays in

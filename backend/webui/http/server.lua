@@ -155,6 +155,20 @@ local function register_builtin_routes(httpd, role_opts)
             middleware.wrap('eval', eval_api.handler, { auth = 'superuser' }))
     end
 
+    -- SQL workbench (Phase 3 Task 3.1 + 3.2). Operator role for
+    -- read-only statements; the handler upgrades to admin if it
+    -- sniffs a write keyword. EXPLAIN-only path is fixed at
+    -- operator since it never mutates state.
+    local sql_ok, sql_api = pcall(require, 'webui.api.sql')
+    if sql_ok then
+        httpd:route({ path = '/api/sql',         method = 'POST' },
+            middleware.wrap('sql',         sql_api.handler,
+                { auth = 'operator' }))
+        httpd:route({ path = '/api/sql/explain', method = 'POST' },
+            middleware.wrap('sql_explain', sql_api.handler_explain,
+                { auth = 'operator' }))
+    end
+
     -- Auth surface (Task 25). Lazy require so a misconfigured
     -- session storage does not block the rest of the role.
     local auth_ok, auth_api = pcall(require, 'webui.api.auth')

@@ -268,6 +268,21 @@ local function enforce_auth(req, opts, request_id, handler_logger, name)
     -- Surface session context to the handler.
     req.session = tuple
     req.user = tuple.user
+    -- Resolve user roles once and expose them so handlers that
+    -- need per-statement RBAC (e.g. /api/sql sniffs the first
+    -- keyword to decide between operator vs admin) do not have
+    -- to call rbac.user_roles() again. `rbac` is scoped to the
+    -- RBAC branch above; re-resolve via lazy_rbac() here so this
+    -- runs even for `auth: session` handlers.
+    do
+        local rbac_mod = lazy_rbac()
+        if rbac_mod and type(rbac_mod.user_roles) == 'function' then
+            local ok_roles, roles_or_err = pcall(rbac_mod.user_roles, tuple.user)
+            if ok_roles and type(roles_or_err) == 'table' then
+                req.roles = roles_or_err
+            end
+        end
+    end
     return nil
 end
 
