@@ -241,7 +241,8 @@ src/
 - `vite-plugin-compression2` — pre-compressed brotli+gzip за один проход (двойной вызов плагина гонится на одном rollup-output).
 - Manual chunks: `vendor-vue`, `vendor-urql`, `vendor-primevue`, `vendor-misc`, `monaco-editor`.
 - Target `es2022`, `cssCodeSplit: true`, `sourcemap: 'hidden'` (карты не ссылаются из HTML — пригодны для приватной загрузки в error-tracker).
-- Monaco workers будут подключаться через native Vite `?worker`-импорт по месту использования (Task 38), а не через legacy `vite-plugin-monaco-editor` (несовместим с Vite 5+).
+- Monaco workers подключаются через native Vite `?worker`-импорт в `widgets/yaml-editor/ui/YamlEditor.vue` (Task 38), а не через legacy `vite-plugin-monaco-editor` (несовместим с Vite 5+).
+- `tools/embed-assets.lua` пропускает `*.map` файлы при паковке бандла — Monaco source-maps занимают 12+ MiB и не нужны runtime'у (для error-tracker'а карты грузятся напрямую из `dist/` до деплоя).
 
 ### Initial bundle и бюджет
 

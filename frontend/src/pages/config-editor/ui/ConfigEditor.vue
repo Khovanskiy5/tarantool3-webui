@@ -2,9 +2,9 @@
 import { onMounted, ref, computed } from 'vue';
 import Button from 'primevue/button';
 import Message from 'primevue/message';
-import Textarea from 'primevue/textarea';
 
 import { getClient } from '@/shared/api/graphql';
+import { YamlEditor } from '@/widgets/yaml-editor';
 
 interface CurrentCfg { yaml: string; revision: number | null; source: string; }
 interface DiffOp { op: string; path: string; from?: string | null; to?: string | null; }
@@ -150,7 +150,7 @@ onMounted(load);
       M3 dry-run mode: prepare/commit are validated locally; multi-peer two-phase commit lands when etcd wiring is fully active.
     </Message>
 
-    <Textarea v-model="yaml" class="webui-cfg__editor" rows="22" placeholder="cluster YAML…" />
+    <YamlEditor v-model="yaml" height="60vh" />
 
     <div class="webui-cfg__actions">
       <Button icon="pi pi-check" size="small" label="Validate" :loading="validating" @click="validate" />

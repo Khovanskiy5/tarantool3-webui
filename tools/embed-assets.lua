@@ -135,8 +135,19 @@ end
 -- and stores absolute paths to each variant present on disk.
 local entries = {}
 
+-- Source maps are emitted by Vite as `sourcemap: 'hidden'` —
+-- present on disk but not referenced from the bundle. They are
+-- huge (Monaco alone ships 12+ MiB of maps) and have no purpose at
+-- runtime; error trackers consume the .map files directly from
+-- `dist/` before deploy. Skipping them keeps the embedded bundle
+-- under control without affecting served assets.
+local function is_sourcemap(rel)
+    return string.sub(rel, -4) == '.map'
+end
+
 for _, item in ipairs(walk(SOURCE_DIR)) do
     local rel = string.gsub(item.rel, '\\', '/')
+    if is_sourcemap(rel) then goto continue end
     local key, kind
     if string.sub(rel, -3) == '.br' then
         key = string.sub(rel, 1, -4)
@@ -150,6 +161,7 @@ for _, item in ipairs(walk(SOURCE_DIR)) do
     end
     entries[key] = entries[key] or {}
     entries[key][kind] = item.full
+    ::continue::
 end
 
 -- Stable iteration order so the generated bundle is reproducible.
