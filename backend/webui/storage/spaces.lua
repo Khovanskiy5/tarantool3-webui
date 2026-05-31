@@ -45,11 +45,15 @@ M.NAMES = {
     AUDIT    = '_webui_audit',
 }
 
--- Bumped by migrations. Baseline 1 means: spaces created at boot,
--- no further migrations registered yet. Every subsequent change
--- adds an entry to backend/webui/storage/migrations.lua and bumps
--- this constant in lockstep.
-M.CURRENT_SCHEMA_VERSION = 1
+-- Bumped by migrations. Every schema change adds an entry to
+-- backend/webui/storage/migrations.lua and bumps this constant in
+-- lockstep. Fresh installs go straight to CURRENT; existing
+-- deployments roll forward through the catalog.
+--
+-- Version log:
+--   1 — baseline. Three spaces created at boot.
+--   2 — by_user secondary on _webui_audit for faster filter-by-user.
+M.CURRENT_SCHEMA_VERSION = 2
 
 local SCHEMA_VERSION_KEY = 'schema_version'
 
@@ -146,6 +150,14 @@ local function ensure_audit()
     -- Time-range filters drive the admin UI's audit page (Task 26a).
     box.space[M.NAMES.AUDIT]:create_index('by_ts', {
         parts          = { 'ts' },
+        unique         = false,
+        if_not_exists  = true,
+    })
+    -- User-scoped filter (Task 24a migration 2). Fresh installs
+    -- get the index here; existing deployments pick it up via the
+    -- migration runner. Either path produces the same DDL.
+    box.space[M.NAMES.AUDIT]:create_index('by_user', {
+        parts          = { { field = 'user', is_nullable = true } },
         unique         = false,
         if_not_exists  = true,
     })

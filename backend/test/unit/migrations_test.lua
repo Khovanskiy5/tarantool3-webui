@@ -74,3 +74,30 @@ g.test_run_noop_when_versions_equal = function()
     t.assert_equals(result.to, 1)
     t.assert_equals(#result.applied, 0)
 end
+
+-- ── shipped catalog ─────────────────────────────────────────────────
+--
+-- The runner is generic but the project ships a fixed catalog.
+-- These assertions guard the catalog itself against accidental
+-- regressions: dropping a step would otherwise pass `M.run` for a
+-- subset of upgrades and leave others stuck on an old version.
+
+g.test_catalog_has_baseline_step = function()
+    t.assert_type(migrations.migrations[1], 'function',
+        'baseline step 1 must be a function in the shipped catalog')
+end
+
+g.test_catalog_has_by_user_index_step = function()
+    t.assert_type(migrations.migrations[2], 'function',
+        'migration 2 (by_user audit index) must be in the shipped catalog')
+end
+
+g.test_plan_against_shipped_catalog = function()
+    local steps = migrations.plan(0, 2, migrations.migrations)
+    t.assert_equals(steps, { 1, 2 })
+end
+
+g.test_plan_from_v1_to_v2 = function()
+    local steps = migrations.plan(1, 2, migrations.migrations)
+    t.assert_equals(steps, { 2 })
+end

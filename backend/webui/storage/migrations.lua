@@ -37,6 +37,33 @@ M.migrations = {
     -- itself creates the M2 spaces; this entry exists so the
     -- runner has something to advance.
     [1] = function(_box) end,
+
+    -- Secondary index `by_user` on `_webui_audit`.
+    --
+    -- The audit-page filter accepts `user`. Until this step landed
+    -- the resolver had to walk the by_ts index and discard rows
+    -- inline; on a clean install the new index is created by
+    -- `ensure_audit`, but pre-existing deployments need a
+    -- migration to pick it up. The index part is nullable because
+    -- `_webui_audit.user` is nullable (system actions like
+    -- retention sweeps leave it empty), and the index is
+    -- non-unique because the same operator emits many rows.
+    [2] = function(box)
+        local audit = box.space._webui_audit
+        if audit == nil then
+            -- Defensive: the space is created by storage.bootstrap
+            -- before migrations run. If it is missing we are in a
+            -- broken installation; the catch-all pcall in the
+            -- runner will surface the error.
+            error('migration 2: _webui_audit space is missing', 0)
+        end
+        if audit.index.by_user ~= nil then return end
+        audit:create_index('by_user', {
+            parts = { { field = 'user', is_nullable = true } },
+            unique = false,
+            if_not_exists = true,
+        })
+    end,
 }
 
 -- ─────────────────────────────────────────────────────────────────────

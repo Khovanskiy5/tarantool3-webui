@@ -216,6 +216,19 @@ URL'ы:
 - `roles_cfg.webui.shutdown_timeout` — сколько секунд `M.stop()` ждёт дренажа in-flight HTTP перед принудительным закрытием. Default `5`; держать ниже Tarantool's on_shutdown grace и `docker stop -t`. Подняв этот таймаут — поднять и оба окружающих окна.
 - `credentials.users.*_dev` — четыре dev-фикстуры под все роли RBAC: `viewer_dev`, `operator_dev`, `admin_dev`, `superuser_dev` (последний нужен для /console и `POST /api/eval`).
 
+### Storage migrations (Task 24a)
+
+`_webui_meta` ключ `schema_version` хранит integer — какие миграции этот инстанс уже применил. `backend/webui/storage/migrations.lua` ведёт каталог `migrations = { [N] = function(box) ... end }`; runner на старте роли читает локальный `schema_version`, считает `plan(from, to)` и применяет недостающие шаги в порядке возрастания, каждый в собственной транзакции с persist-ом нового `schema_version` в конце шага.
+
+- **Идемпотентность.** Каждый шаг обязан проверять «уже сделано?» в начале (например `if audit.index.by_user ~= nil then return end`) — DDL может прийти к follower'у через репликацию раньше, чем сам инстанс успеет стать leader'ом.
+- **`_webui_meta.is_local = true`.** schema_version — per-instance бухгалтерия, не cluster-wide invariant. Followers отстают на показателе; после failover становятся leader'ом, повторяют шаг (идемпотентно), и догоняют значение.
+- **Refuse downgrade.** Если на диске сохранена версия выше, чем у текущей сборки, роль отказывается стартовать с явным сообщением. Откат — операционное решение, требующее ручного отката `_webui_meta`.
+- **Rolling-safe контракт.** Шаг N должен оставаться читаемым кодом N-1 — стандартное N/N+1 окно совместимости на время раскатки.
+
+Текущий лог версий:
+- **1** — baseline. Три спейса (`_webui_meta`, `_webui_sessions`, `_webui_audit`) созданы на старте.
+- **2** — secondary index `by_user` на `_webui_audit` для фильтрации audit-страницы по пользователю.
+
 ### Graceful shutdown (Task 3a)
 
 Когда роль получает `M.stop()` (rolling deploy, `docker stop`, изменение `roles_cfg.webui`, требующее перезапуска):

@@ -27,10 +27,13 @@ g.test_space_names = function()
     t.assert_equals(storage.NAMES.AUDIT, '_webui_audit')
 end
 
-g.test_current_schema_version_baseline_is_one = function()
-    -- Migrations (Task 24a) bump this value; the baseline is the
-    -- contract: every fresh deploy lands on 1.
-    t.assert_equals(storage.CURRENT_SCHEMA_VERSION, 1)
+g.test_current_schema_version_is_positive = function()
+    -- The baseline is 1; every migration shipped in
+    -- backend/webui/storage/migrations.lua bumps this constant.
+    -- The test guards against accidentally setting it to 0 / nil.
+    t.assert_type(storage.CURRENT_SCHEMA_VERSION, 'number')
+    t.assert(storage.CURRENT_SCHEMA_VERSION >= 1,
+        'CURRENT_SCHEMA_VERSION must be >= 1')
 end
 
 -- ── can_run_ddl decision matrix ───────────────────────────────────
