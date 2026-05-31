@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { onMounted, onScopeDispose, ref } from 'vue';
 import DataTable from 'primevue/datatable';
 import Column from 'primevue/column';
 import Tag from 'primevue/tag';
 
 import { getClient } from '@/shared/api/graphql';
+import { wsClient } from '@/shared/api/ws';
 
 interface Election {
   instance: string;
@@ -48,10 +49,24 @@ interface AgentStatus {
   watcher_current_ro: boolean | null;
 }
 
+interface FailoverCommand {
+  id: number;
+  ts: number;
+  command_type: string;
+  params: string | null;
+  status: string;
+  user: string | null;
+  coordinator: string | null;
+  taken_at: number | null;
+  completed_at: number | null;
+  error_reason: string | null;
+}
+
 const mode = ref<string>('');
 const elections = ref<Election[]>([]);
 const sp = ref<SPStatus | null>(null);
 const agent = ref<AgentStatus | null>(null);
+const commands = ref<FailoverCommand[]>([]);
 const error = ref<string | null>(null);
 const loading = ref(false);
 
@@ -70,6 +85,12 @@ const FAILOVER_Q = /* GraphQL */ `
       watcher_replicaset watcher_last_leader watcher_current_ro
       appointments { replicaset leader previous ts }
     }
+    failoverCommands(limit: 50) {
+      entries {
+        id ts command_type params status user coordinator
+        taken_at completed_at error_reason
+      }
+    }
   }
 `;
 
@@ -80,12 +101,14 @@ const load = async () => {
     failover: { mode: string; elections: Election[] };
     failoverStateProviderStatus: SPStatus;
     failoverAgentStatus: AgentStatus;
-  }>(FAILOVER_Q, {}).toPromise();
+    failoverCommands: { entries: FailoverCommand[] };
+  }>(FAILOVER_Q, {}, { requestPolicy: 'network-only' }).toPromise();
   if (res.error) { error.value = res.error.message; loading.value = false; return; }
   mode.value = res.data?.failover?.mode ?? 'unknown';
   elections.value = res.data?.failover?.elections ?? [];
   sp.value = res.data?.failoverStateProviderStatus ?? null;
   agent.value = res.data?.failoverAgentStatus ?? null;
+  commands.value = res.data?.failoverCommands?.entries ?? [];
   loading.value = false;
 };
 
@@ -97,6 +120,35 @@ const fmtAge = (ts: number | null): string => {
 
 const sev = (state: string | null) => state === 'leader' ? 'success' : state === 'follower' ? 'info' : 'warn';
 const epSev = (status: string) => status === 'ok' ? 'success' : 'danger';
+const cmdSev = (status: string) => {
+  if (status === 'success') return 'success';
+  if (status === 'failed') return 'danger';
+  if (status === 'taken') return 'info';
+  return 'secondary';
+};
+
+// Pretty-print latency only when start + finish are known. Pending /
+// taken rows leave the cell empty so it does not show "NaN ms".
+const cmdLatency = (cmd: FailoverCommand): string => {
+  if (cmd.completed_at == null) return '—';
+  const start = cmd.taken_at ?? cmd.ts;
+  if (start == null) return '—';
+  const dt = (cmd.completed_at - start) * 1000;
+  if (dt < 1) return '<1 ms';
+  if (dt < 1000) return `${dt.toFixed(0)} ms`;
+  return `${(dt / 1000).toFixed(2)} s`;
+};
+
+// Refresh commands on every WS snapshot tick. Phase 5.13 plans a
+// dedicated `failover.command_updated` event for sub-second
+// freshness; until then the existing snapshot cadence (about 1-2 s)
+// is enough for the operator workflow.
+const unsubMsg = wsClient.onMessage((msg) => {
+  if (msg.type === 'snapshot' || msg.type === 'initial') {
+    void load();
+  }
+});
+onScopeDispose(() => unsubMsg());
 
 onMounted(load);
 </script>
@@ -195,6 +247,64 @@ onMounted(load);
       </p>
     </section>
 
+    <section class="webui-failover__sp">
+      <header class="webui-failover__sp-head">
+        <h2>Commands history</h2>
+        <Tag :value="`${commands.length} recent`" severity="secondary" />
+      </header>
+      <p class="webui-failover__hint">
+        Every operator-issued cluster mutation lands here via the
+        <code>_webui_failover_commands</code> replicated sync space. The
+        leader's retention fiber prunes rows older than 30 days.
+      </p>
+      <DataTable
+        :value="commands"
+        data-key="id"
+        size="small"
+        striped-rows
+        :paginator="commands.length > 15"
+        :rows="15"
+      >
+        <Column header="When">
+          <template #body="{ data }">{{ fmtAge(data.ts) }}</template>
+        </Column>
+        <Column field="command_type" header="Command">
+          <template #body="{ data }">
+            <code class="webui-failover__mono">{{ data.command_type }}</code>
+          </template>
+        </Column>
+        <Column header="User">
+          <template #body="{ data }">
+            <code class="webui-failover__mono">{{ data.user ?? '—' }}</code>
+          </template>
+        </Column>
+        <Column header="Status">
+          <template #body="{ data }">
+            <Tag :value="data.status" :severity="cmdSev(data.status)" />
+          </template>
+        </Column>
+        <Column header="Latency">
+          <template #body="{ data }">{{ cmdLatency(data) }}</template>
+        </Column>
+        <Column header="Params">
+          <template #body="{ data }">
+            <code
+              v-if="data.params"
+              class="webui-failover__mono webui-failover__params"
+              :title="data.params"
+            >{{ data.params }}</code>
+            <span v-else>—</span>
+          </template>
+        </Column>
+        <Column header="Error">
+          <template #body="{ data }">
+            <code v-if="data.error_reason" class="webui-failover__err">{{ data.error_reason }}</code>
+            <span v-else>—</span>
+          </template>
+        </Column>
+      </DataTable>
+    </section>
+
     <section v-if="sp && sp.kind !== 'none'" class="webui-failover__sp">
       <header class="webui-failover__sp-head">
         <h2>State provider</h2>
@@ -238,4 +348,14 @@ onMounted(load);
 .webui-failover__err { font-family: var(--webui-font-mono); font-size: 0.75rem; color: var(--p-message-error-color, #d83535); }
 .webui-failover__hint { color: var(--webui-text-muted); font-size: 0.85rem; margin: 0; }
 .webui-failover__hint code { font-family: var(--webui-font-mono); }
+.webui-failover__params {
+  display: inline-block;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  font-size: 0.78rem;
+  color: var(--webui-text-muted);
+}
 </style>
