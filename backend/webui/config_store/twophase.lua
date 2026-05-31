@@ -18,32 +18,120 @@
 
 local fiber = require('fiber')
 
-local schema  = require('webui.config_store.schema')
-local diff    = require('webui.config_store.diff')
+local schema   = require('webui.config_store.schema')
+local diff     = require('webui.config_store.diff')
+local storage  = require('webui.storage.spaces')
 local log_util = require('webui.log_util')
-local logger  = log_util.with_tag('twophase')
+local logger   = log_util.with_tag('twophase')
 
 local M = {}
 
 M.PREPARED_TTL_SEC = 300 -- 5 min, same as the plan
-local prepared = {} -- in-memory cache; sister space `_webui_prepared`
-                     -- gets created in M3 task once schema migration
-                     -- 2 ships.
 
 local function new_prepared_id()
     return string.format('prep-%d-%d', math.floor(fiber.time() * 1000),
         math.random(1, 1000000))
 end
 
--- Drop expired entries. Cheap to call before every read.
+-- Drop expired rows from `_webui_prepared`. Only the leader can
+-- delete from a replicated space, so on a follower this is a no-op
+-- (the leader's gc will clean up and replication will catch up).
+-- Cheap to call before every read.
 local function gc()
+    local space = storage.prepared()
+    if space == nil then return end
+    local idx = space.index.by_expires_at
+    if idx == nil then return end
     local now = fiber.time()
-    for id, entry in pairs(prepared) do
-        if entry.expires_at <= now then
-            prepared[id] = nil
-            logger.warn('prepared TTL expired', { id = id })
+    -- box.info.ro means we cannot mutate the replicated space; the
+    -- leader runs the cleanup on its next call.
+    if box.info and box.info.ro then return end
+    for _, tuple in idx:pairs({ now }, { iterator = 'LE' }) do
+        if tuple.expires_at <= now then
+            pcall(function() space:delete({ tuple.id }) end)
+            logger.warn('prepared TTL expired', { id = tuple.id })
+        else
+            break
         end
     end
+end
+
+local function tuple_to_entry(t)
+    if t == nil then return nil end
+    return {
+        id          = t.id,
+        yaml        = t.yaml,
+        user        = t.user,
+        ts          = t.ts,
+        expires_at  = t.expires_at,
+        parsed      = nil,  -- re-validated by commit if it needs the AST
+    }
+end
+
+-- Forward a put/delete to the cluster leader via the net.box peer
+-- pool. The `_webui_prepared` space is replicated, so direct
+-- mutation on a follower raises READONLY; we proxy through the
+-- existing `webui_peer` connection used for session and audit
+-- forwarding. Returns the call result or (nil, err).
+local function forward_to_leader(fn_name, args)
+    local ok_state, cluster_state = pcall(require, 'webui.cluster.state')
+    local ok_peers, peers         = pcall(require, 'webui.cluster.peers')
+    if not (ok_state and ok_peers) then
+        return nil, 'cluster modules not loaded'
+    end
+    local leader = cluster_state.find_leader()
+    if leader == nil then return nil, 'no leader' end
+    local peer = peers.get(leader)
+    if peer == nil or peer.conn == nil then
+        return nil, 'leader connection unavailable'
+    end
+    local ok, res = pcall(function()
+        return peer.conn:call(fn_name, args, { timeout = 3 })
+    end)
+    if not ok then return nil, tostring(res) end
+    if type(res) == 'table' and res.err ~= nil then
+        return nil, res.err
+    end
+    return res
+end
+
+local function is_read_only()
+    if rawget(_G, 'box') == nil or box.info == nil then return false end
+    return box.info.ro == true
+end
+
+local function put_prepared(entry)
+    local space = storage.prepared()
+    if space == nil then
+        return nil, 'prepared storage is not bootstrapped'
+    end
+    if is_read_only() then
+        local res, err = forward_to_leader('webui_prepared_put_remote',
+            { entry })
+        if res == nil then return nil, err end
+        return entry
+    end
+    local ok, err = pcall(function()
+        space:replace({
+            entry.id,
+            entry.yaml,
+            entry.user or '',
+            entry.ts,
+            entry.expires_at,
+        })
+    end)
+    if not ok then return nil, tostring(err) end
+    return entry
+end
+
+local function delete_prepared(id)
+    local space = storage.prepared()
+    if space == nil then return end
+    if is_read_only() then
+        forward_to_leader('webui_prepared_delete_remote', { id })
+        return
+    end
+    pcall(function() space:delete({ id }) end)
 end
 
 -- ─────────────────────────────────────────────────────────────────────
@@ -62,16 +150,16 @@ function M.prepare(opts)
     local parsed, errs = schema.validate(opts.yaml)
     if parsed == nil then return nil, errs end
 
-    local id = new_prepared_id()
+    local now = fiber.time()
     local entry = {
-        id          = id,
+        id          = new_prepared_id(),
         yaml        = opts.yaml,
-        parsed      = parsed,
         user        = opts.user,
-        ts          = fiber.time(),
-        expires_at  = fiber.time() + M.PREPARED_TTL_SEC,
+        ts          = now,
+        expires_at  = now + M.PREPARED_TTL_SEC,
     }
-    prepared[id] = entry
+    local stored, put_err = put_prepared(entry)
+    if stored == nil then return nil, { { message = put_err } } end
 
     local diff_ops
     if opts.current_yaml then
@@ -81,9 +169,9 @@ function M.prepare(opts)
         end
     end
 
-    logger.info('prepare ok', { id = id, user = opts.user, size = #opts.yaml })
+    logger.info('prepare ok', { id = entry.id, user = opts.user, size = #opts.yaml })
     return {
-        prepared_id = id,
+        prepared_id = entry.id,
         expires_at  = entry.expires_at,
         diff        = diff_ops or {},
         categories  = diff_ops and diff.categorise(diff_ops) or nil,
@@ -96,14 +184,17 @@ end
 function M.commit(prepared_id, opts)
     gc()
     opts = opts or {}
-    local entry = prepared[prepared_id]
+    local space = storage.prepared()
+    if space == nil then return nil, 'PREPARED_NOT_FOUND' end
+    local tuple = space:get({ prepared_id })
+    local entry = tuple_to_entry(tuple)
     if entry == nil then
         return nil, 'PREPARED_NOT_FOUND'
     end
     if opts.etcd == nil then
         -- No etcd configured: treat commit as a no-op apart from
         -- removing the prepared entry. Useful for dry-run smoke.
-        prepared[prepared_id] = nil
+        delete_prepared(prepared_id)
         return { revision = 0, dry_run = true }
     end
     local payload = entry.yaml
@@ -114,7 +205,7 @@ function M.commit(prepared_id, opts)
         result, err = opts.etcd:put('config', payload)
     end
     if result == nil then return nil, err end
-    prepared[prepared_id] = nil
+    delete_prepared(prepared_id)
     logger.info('commit ok', {
         id = prepared_id, revision = result.revision, user = entry.user,
     })
@@ -133,10 +224,11 @@ function M.commit(prepared_id, opts)
 end
 
 function M.abort(prepared_id)
-    if prepared[prepared_id] == nil then
+    local space = storage.prepared()
+    if space == nil or space:get({ prepared_id }) == nil then
         return nil, 'PREPARED_NOT_FOUND'
     end
-    prepared[prepared_id] = nil
+    delete_prepared(prepared_id)
     logger.info('abort ok', { id = prepared_id })
     return true
 end
@@ -145,18 +237,27 @@ end
 
 function M.get_prepared(id)
     gc()
-    return prepared[id]
+    local space = storage.prepared()
+    if space == nil then return nil end
+    return tuple_to_entry(space:get({ id }))
 end
 
 function M.list_prepared()
     gc()
     local out = {}
-    for _, entry in pairs(prepared) do table.insert(out, entry) end
+    local space = storage.prepared()
+    if space == nil then return out end
+    for _, tuple in space:pairs() do
+        table.insert(out, tuple_to_entry(tuple))
+    end
     return out
 end
 
 function M._reset()
-    prepared = {}
+    local space = storage.prepared()
+    if space == nil then return end
+    if box.info and box.info.ro then return end
+    pcall(function() space:truncate() end)
 end
 
 return M

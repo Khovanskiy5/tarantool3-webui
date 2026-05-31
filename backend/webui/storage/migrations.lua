@@ -109,6 +109,32 @@ M.migrations = {
             })
         end
     end,
+
+    -- _webui_prepared for the two-phase commit pipeline. The
+    -- previous in-memory cache in twophase.lua broke under round-
+    -- robin: prepare() on tt-1 made the prepared_id invisible to
+    -- a commit() that landed on tt-2. Promoting the cache to a
+    -- replicated space removes the affinity requirement.
+    [4] = function(box)
+        if box.space._webui_prepared == nil then
+            box.schema.space.create('_webui_prepared', {
+                if_not_exists = true,
+                format = {
+                    { name = 'id',          type = 'string' },
+                    { name = 'yaml',        type = 'string' },
+                    { name = 'user',        type = 'string',   is_nullable = true },
+                    { name = 'ts',          type = 'number' },
+                    { name = 'expires_at',  type = 'number' },
+                },
+            })
+            box.space._webui_prepared:create_index('primary', {
+                parts = { 'id' }, if_not_exists = true,
+            })
+            box.space._webui_prepared:create_index('by_expires_at', {
+                parts = { 'expires_at' }, unique = false, if_not_exists = true,
+            })
+        end
+    end,
 }
 
 -- ─────────────────────────────────────────────────────────────────────

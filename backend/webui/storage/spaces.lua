@@ -40,11 +40,12 @@ local logger   = log_util.with_tag('storage')
 local M = {}
 
 M.NAMES = {
-    META             = '_webui_meta',
-    SESSIONS         = '_webui_sessions',
-    AUDIT            = '_webui_audit',
-    WEBHOOK_QUEUE    = '_webui_webhook_queue',
+    META                = '_webui_meta',
+    SESSIONS            = '_webui_sessions',
+    AUDIT               = '_webui_audit',
+    WEBHOOK_QUEUE       = '_webui_webhook_queue',
     WEBHOOK_DEAD_LETTER = '_webui_webhook_dead_letter',
+    PREPARED            = '_webui_prepared',
 }
 
 -- Bumped by migrations. Every schema change adds an entry to
@@ -57,7 +58,11 @@ M.NAMES = {
 --   2 — by_user secondary on _webui_audit for faster filter-by-user.
 --   3 — _webui_webhook_queue + _webui_webhook_dead_letter spaces
 --       for the outbound notifications dispatcher.
-M.CURRENT_SCHEMA_VERSION = 3
+--   4 — _webui_prepared for the two-phase commit pipeline. The
+--       prepared entry must outlive a single instance so the user
+--       can prepare on one peer and commit on another (round-robin
+--       balanced cluster, no session-pinning required).
+M.CURRENT_SCHEMA_VERSION = 4
 
 local SCHEMA_VERSION_KEY = 'schema_version'
 
@@ -200,6 +205,37 @@ local function ensure_webhook_queue()
     return true
 end
 
+-- Two-phase commit prepared entries. Replicated so a prepare()
+-- on tt-1 can be commit()-ed on tt-2 — the round-robin balancer
+-- has no obligation to land both calls on the same instance.
+-- TTL is enforced by the gc() pass at the top of every twophase
+-- call; we keep the row instead of relying on an in-memory cache
+-- so a leader change between prepare and commit doesn't drop the
+-- bundle on the floor.
+local function ensure_prepared()
+    if box.space[M.NAMES.PREPARED] ~= nil then return false end
+    box.schema.space.create(M.NAMES.PREPARED, {
+        if_not_exists = true,
+        format = {
+            { name = 'id',          type = 'string' },
+            { name = 'yaml',        type = 'string' },
+            { name = 'user',        type = 'string',   is_nullable = true },
+            { name = 'ts',          type = 'number' },
+            { name = 'expires_at',  type = 'number' },
+        },
+    })
+    box.space[M.NAMES.PREPARED]:create_index('primary', {
+        parts          = { 'id' },
+        if_not_exists  = true,
+    })
+    box.space[M.NAMES.PREPARED]:create_index('by_expires_at', {
+        parts          = { 'expires_at' },
+        unique         = false,
+        if_not_exists  = true,
+    })
+    return true
+end
+
 -- Dead-letter for events that exhausted their retry budget. Kept
 -- replicated for operator review; the dispatcher never reads
 -- back from this space.
@@ -254,6 +290,7 @@ local function bootstrap_as_leader()
     local created_audit    = ensure_audit()
     local created_webhook_queue       = ensure_webhook_queue()
     local created_webhook_dead_letter = ensure_webhook_dead_letter()
+    local created_prepared            = ensure_prepared()
 
     local current = M.get_schema_version()
     local migrations_applied = 0
@@ -288,6 +325,7 @@ local function bootstrap_as_leader()
         created_audit       = created_audit,
         created_webhook_queue       = created_webhook_queue,
         created_webhook_dead_letter = created_webhook_dead_letter,
+        created_prepared    = created_prepared,
         migrations_applied  = migrations_applied,
     })
 
@@ -296,6 +334,7 @@ local function bootstrap_as_leader()
         created_meta      = created_meta,
         created_sessions  = created_sessions,
         created_audit     = created_audit,
+        created_prepared  = created_prepared,
         created_webhook_queue       = created_webhook_queue,
         created_webhook_dead_letter = created_webhook_dead_letter,
         deferred          = false,
@@ -365,6 +404,7 @@ end
 function M.meta()         return box.space[M.NAMES.META]         end
 function M.sessions()     return box.space[M.NAMES.SESSIONS]     end
 function M.audit()        return box.space[M.NAMES.AUDIT]        end
+function M.prepared()     return box.space[M.NAMES.PREPARED]     end
 function M.webhook_queue()       return box.space[M.NAMES.WEBHOOK_QUEUE]       end
 function M.webhook_dead_letter() return box.space[M.NAMES.WEBHOOK_DEAD_LETTER] end
 

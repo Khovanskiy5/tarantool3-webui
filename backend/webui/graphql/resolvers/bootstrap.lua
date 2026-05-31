@@ -56,27 +56,8 @@ end
 -- (nil, reason) otherwise. The mutation only treats a reachable
 -- etcd as authoritative; without one it commits in dry-run mode
 -- and lets the operator copy the rendered YAML by hand.
-local function lazy_etcd_client()
-    local cfg_ok, cfg = pcall(require, 'config')
-    if not cfg_ok then return nil, 'config module unavailable' end
-    local etcd_block = (cfg:get('config') or {}).etcd
-    if etcd_block == nil
-        or type(etcd_block.endpoints) ~= 'table'
-        or #etcd_block.endpoints == 0 then
-        return nil, 'config.etcd.endpoints not set'
-    end
-    local etcd_ok, etcd = pcall(require, 'webui.config_store.etcd')
-    if not etcd_ok then return nil, 'etcd module unavailable' end
-    local client, err = etcd.new({
-        endpoints = etcd_block.endpoints,
-        prefix    = etcd_block.prefix or '/tarantool/webui',
-        username  = etcd_block.username,
-        password  = etcd_block.password,
-        timeout   = 2,
-    })
-    if client == nil then return nil, tostring(err) end
-    return client
-end
+local etcd_client_mod = require('webui.config_store.client')
+local lazy_etcd_client = etcd_client_mod.get_client
 
 -- ── queries ─────────────────────────────────────────────────────────
 

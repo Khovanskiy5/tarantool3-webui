@@ -9,11 +9,12 @@
 
 local fio = require('fio')
 
-local twophase = require('webui.config_store.twophase')
-local schema   = require('webui.config_store.schema')
-local rbac     = require('webui.auth.rbac')
-local log_util = require('webui.log_util')
-local logger   = log_util.with_tag('graphql.config')
+local twophase     = require('webui.config_store.twophase')
+local schema       = require('webui.config_store.schema')
+local etcd_client  = require('webui.config_store.client')
+local rbac         = require('webui.auth.rbac')
+local log_util     = require('webui.log_util')
+local logger       = log_util.with_tag('graphql.config')
 
 local M = {}
 
@@ -88,13 +89,44 @@ function M.mutation_commit(root, args)
     if entry == nil then
         error('PREPARED_NOT_FOUND: ' .. tostring(args.prepared_id))
     end
-    -- Local mode: pretend to apply and clear. Real etcd CAS will
-    -- happen in the post-bootstrap commit task.
-    local _, err = twophase.commit(args.prepared_id, {})
+
+    -- etcd is the source of truth for cluster-wide config. Build a
+    -- client from `config.etcd.*` and write the YAML there. If the
+    -- block is missing or etcd is unreachable, fall back to the
+    -- legacy dry-run path so the operator still gets a clear
+    -- "validated but not persisted" outcome instead of an error.
+    local client, client_err = etcd_client.get_client()
+    local commit_opts = {}
+    if client ~= nil then commit_opts.etcd = client end
+
+    local result, err = twophase.commit(args.prepared_id, commit_opts)
     if err then error('COMMIT_FAILED: ' .. tostring(err)) end
-    logger.info('config commit local-only', { prepared_id = args.prepared_id })
-    return { revision = 0, applied = true,
-             message = 'committed in local mode (etcd not configured)' }
+
+    if commit_opts.etcd == nil then
+        logger.info('config commit dry-run (no etcd)', {
+            prepared_id = args.prepared_id, reason = client_err,
+        })
+        return {
+            revision = 0,
+            applied  = true,
+            message  = 'validated and prepared, but not persisted: '
+                .. (client_err or 'etcd unavailable')
+                .. '. Configure config.etcd.endpoints in cluster.yaml '
+                .. 'so commits land in the cluster-wide source of truth.',
+        }
+    end
+
+    local revision = (result and result.revision) or 0
+    logger.info('config commit ok', {
+        prepared_id = args.prepared_id, revision = revision,
+    })
+    return {
+        revision = revision,
+        applied  = true,
+        message  = 'committed to etcd (revision ' .. tostring(revision)
+            .. '). Replicas pick up the change through `box.watch'
+            .. "('config.info')` and apply it within one poll tick.",
+    }
 end
 
 function M.mutation_abort(root, args)

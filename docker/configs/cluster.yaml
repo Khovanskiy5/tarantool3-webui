@@ -5,11 +5,16 @@
 # selected via `tarantool --name <name>` (the entrypoint passes
 # INSTANCE_NAME).
 #
-# This config is file-based for fast bootstrap. The etcd service in the
-# same compose is intentionally NOT consulted at startup — it becomes
-# the source of truth for cluster-wide config only after Task 30 lands
-# the etcd-client integration. Until then it stays empty and is used
-# by integration tests that exercise the etcd adapter.
+# The file remains the bootstrap source: instances read it at start and
+# use it to come up. After bootstrap, the WebUI's commitConfig writes
+# the YAML into etcd under `roles_cfg.webui.etcd_writer.prefix` so
+# future config edits flow through a cluster-wide source of truth
+# instead of being limited to whichever container has the file
+# mounted. We intentionally do NOT put endpoints under the top-level
+# `config.etcd` block — that would tell Tarantool to ALSO read its
+# own config from etcd at boot, which fails on an empty store
+# (chicken-and-egg) and would require the operator to seed etcd
+# before the cluster can come up.
 
 credentials:
   users:
@@ -108,3 +113,11 @@ roles_cfg:
         url: 'http://127.0.0.1:1/sink'
         events: ['audit.security', 'issue.appeared', 'config.committed', 'webhook.test']
         enabled: true
+    # Where commitConfig persists YAML. The block is read by
+    # `webui.config_store.client.get_client()`. Unlike the top-level
+    # `config.etcd` Tarantool source, this block ONLY drives the
+    # WebUI write path — no boot-time read attempt, so an empty etcd
+    # is fine.
+    etcd_writer:
+      endpoints: ['http://etcd:2379']
+      prefix: '/tarantool/webui'

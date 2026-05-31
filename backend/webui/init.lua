@@ -129,6 +129,23 @@ function M.validate(cfg)
             return nil, 'roles_cfg.webui.rbac.users must be a {user = [roles]} table'
         end
     end
+    if cfg.etcd_writer ~= nil then
+        if type(cfg.etcd_writer) ~= 'table' then
+            return nil, 'roles_cfg.webui.etcd_writer must be a table'
+        end
+        if type(cfg.etcd_writer.endpoints) ~= 'table'
+            or #cfg.etcd_writer.endpoints == 0 then
+            return nil, 'roles_cfg.webui.etcd_writer.endpoints '
+                .. 'must be a non-empty list of URLs'
+        end
+        for _, ep in ipairs(cfg.etcd_writer.endpoints) do
+            if type(ep) ~= 'string' or #ep == 0 then
+                return nil,
+                    'roles_cfg.webui.etcd_writer.endpoints entries '
+                    .. 'must be non-empty strings'
+            end
+        end
+    end
 
     return true
 end
@@ -274,6 +291,42 @@ function M.start(opts)
         local trunc_ok, trunc_err = pcall(function() space:truncate() end)
         if not trunc_ok then return nil, tostring(trunc_err) end
         return { cleared = count }
+    end)
+
+    -- Expose _webui_prepared replace / delete over net.box. The
+    -- two-phase commit pipeline stores its prepared bundle there;
+    -- a follower forwards prepare() / commit() writes through these
+    -- shims so the prepared_id is reachable from any peer that the
+    -- round-robin balancer later picks.
+    rawset(_G, 'webui_prepared_put_remote', function(entry)
+        if type(entry) ~= 'table' or type(entry.id) ~= 'string' then
+            return { err = 'bad entry' }
+        end
+        local ok_sto, sto_mod = pcall(require, 'webui.storage.spaces')
+        if not ok_sto then return { err = 'storage module unavailable' } end
+        local space = sto_mod.prepared()
+        if space == nil then return { err = 'prepared space missing' } end
+        local repl_ok, repl_err = pcall(function()
+            space:replace({
+                entry.id,
+                entry.yaml,
+                entry.user or '',
+                entry.ts,
+                entry.expires_at,
+            })
+        end)
+        if not repl_ok then return { err = tostring(repl_err) } end
+        return { id = entry.id }
+    end)
+    rawset(_G, 'webui_prepared_delete_remote', function(id)
+        if type(id) ~= 'string' then return { err = 'bad id' } end
+        local ok_sto, sto_mod = pcall(require, 'webui.storage.spaces')
+        if not ok_sto then return { err = 'storage module unavailable' } end
+        local space = sto_mod.prepared()
+        if space == nil then return { err = 'prepared space missing' } end
+        local del_ok, del_err = pcall(function() space:delete({ id }) end)
+        if not del_ok then return { err = tostring(del_err) } end
+        return { deleted = true }
     end)
 
     -- Step 5 in the role start sequence: peer cookie (system user

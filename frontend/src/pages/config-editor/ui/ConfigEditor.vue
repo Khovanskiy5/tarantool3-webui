@@ -146,10 +146,6 @@ onMounted(load);
       </div>
     </header>
 
-    <Message severity="info" :closable="false">
-      M3 dry-run mode: prepare/commit are validated locally; multi-peer two-phase commit lands when etcd wiring is fully active.
-    </Message>
-
     <YamlEditor v-model="yaml" height="60vh" />
 
     <div class="webui-cfg__actions">
