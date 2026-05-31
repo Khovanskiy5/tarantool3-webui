@@ -584,6 +584,29 @@ function renderCell(v: unknown): string {
       </TabPanels>
     </Tabs>
 
+    <section v-if="explain" class="webui-sql__plans">
+      <h2>EXPLAIN QUERY PLAN</h2>
+      <div v-for="(p, idx) in explain.plans" :key="idx" class="webui-sql__plan">
+        <header>
+          <code>{{ p.statement }}</code>
+        </header>
+        <Message v-if="p.error" severity="error" :closable="false">{{ p.error }}</Message>
+        <DataTable
+          v-else
+          :value="(p.rows ?? []).map((r) => Object.fromEntries((p.metadata ?? []).map((m, i) => [m.name, r[i]])))"
+          size="small"
+          striped-rows
+        >
+          <Column
+            v-for="m in p.metadata ?? []"
+            :key="m.name"
+            :field="m.name"
+            :header="m.name"
+          />
+        </DataTable>
+      </div>
+    </section>
+
     </div>
 
     <Dialog
@@ -616,28 +639,6 @@ function renderCell(v: unknown): string {
       </template>
     </Dialog>
 
-    <section v-if="explain" class="webui-sql__plans">
-      <h2>EXPLAIN QUERY PLAN</h2>
-      <div v-for="(p, idx) in explain.plans" :key="idx" class="webui-sql__plan">
-        <header>
-          <code>{{ p.statement }}</code>
-        </header>
-        <Message v-if="p.error" severity="error" :closable="false">{{ p.error }}</Message>
-        <DataTable
-          v-else
-          :value="(p.rows ?? []).map((r) => Object.fromEntries((p.metadata ?? []).map((m, i) => [m.name, r[i]])))"
-          size="small"
-          striped-rows
-        >
-          <Column
-            v-for="m in p.metadata ?? []"
-            :key="m.name"
-            :field="m.name"
-            :header="m.name"
-          />
-        </DataTable>
-      </div>
-    </section>
   </section>
 </template>
 
