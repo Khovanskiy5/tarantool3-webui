@@ -1,0 +1,62 @@
+#
+# Cluster operator mutations (Phase 5).
+#
+# Backend resolver: backend/webui/graphql/resolvers/cluster_ops.lua.
+# All four families share the `TopologyEditResult` return shape so
+# the UI can render outcomes uniformly: diff_summary + message.
+#
+
+mutation PauseFailover($ttlSec: Int) {
+  pauseFailover(ttl_sec: $ttlSec) {
+    ...TopologyEditResultFields
+  }
+}
+
+mutation ResumeFailover {
+  resumeFailover {
+    ...TopologyEditResultFields
+  }
+}
+
+mutation PromoteInstance(
+  $alias: String!
+  $ttlSec: Int
+  $forceInconsistency: Boolean
+) {
+  promoteInstance(
+    alias: $alias
+    ttl_sec: $ttlSec
+    force_inconsistency: $forceInconsistency
+  ) {
+    ...TopologyEditResultFields
+  }
+}
+
+mutation DemoteInstance($alias: String!) {
+  demoteInstance(alias: $alias) {
+    ...TopologyEditResultFields
+  }
+}
+
+mutation SetInstanceState(
+  $alias: String!
+  $enabled: Boolean
+  $electable: Boolean
+) {
+  setInstanceState(alias: $alias, enabled: $enabled, electable: $electable) {
+    ...TopologyEditResultFields
+  }
+}
+
+mutation ExpelInstance($alias: String!, $force: Boolean) {
+  expelInstance(alias: $alias, force: $force) {
+    ...TopologyEditResultFields
+  }
+}
+
+fragment TopologyEditResultFields on TopologyEditResult {
+  applied
+  revision
+  diff_summary
+  message
+}

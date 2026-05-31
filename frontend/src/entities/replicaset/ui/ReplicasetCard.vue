@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 
 import { InstanceRow, type Instance } from '@/entities/instance';
+import { InstanceActionsMenu } from '@/features/cluster-ops';
 
 import type { Replicaset } from '../model/types';
 import { getLeaderAlias } from '../model/selectors';
@@ -10,6 +11,12 @@ const props = defineProps<{
   replicaset: Replicaset;
   servers: readonly Instance[];
   selfAlias?: string | null;
+  /** Toggle the operator-actions column on/off (admin only). */
+  showActions?: boolean;
+}>();
+
+const emit = defineEmits<{
+  (e: 'actionApplied'): void;
 }>();
 
 const statusClass = computed(() => `webui-rs-card--${props.replicaset.status}`);
@@ -43,16 +50,25 @@ const leader = computed(() => getLeaderAlias(props.replicaset));
           <th>Version</th>
           <th>Uptime</th>
           <th>Last error</th>
+          <th v-if="showActions">Actions</th>
         </tr>
       </thead>
       <tbody>
-        <InstanceRow
-          v-for="srv in servers"
-          :key="srv.alias"
-          :instance="srv"
-          :is-self="srv.alias === selfAlias"
-          :leader-alias="leader"
-        />
+        <template v-for="srv in servers" :key="srv.alias">
+          <InstanceRow
+            :instance="srv"
+            :is-self="srv.alias === selfAlias"
+            :leader-alias="leader"
+          >
+            <td v-if="showActions" class="webui-rs-card__actions-cell">
+              <InstanceActionsMenu
+                :alias="srv.alias"
+                :is-leader="leader === srv.alias"
+                @changed="emit('actionApplied')"
+              />
+            </td>
+          </InstanceRow>
+        </template>
       </tbody>
     </table>
   </section>
@@ -133,5 +149,9 @@ const leader = computed(() => getLeaderAlias(props.replicaset));
   color: var(--webui-text-muted);
   padding: 0.4rem 0.6rem;
   border-bottom: 1px solid var(--webui-border);
+}
+
+.webui-rs-card__actions-cell {
+  padding: 0.35rem 0.6rem;
 }
 </style>

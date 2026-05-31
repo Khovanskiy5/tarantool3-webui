@@ -8,6 +8,8 @@ const props = defineProps<{
   replicasets: readonly Replicaset[];
   servers: readonly Server[];
   selfAlias?: string | null;
+  /** Render the per-instance actions column. Admin-only. */
+  showActions?: boolean;
 }>();
 
 // The cluster query returns the replicaset's servers as a stripped
@@ -39,6 +41,7 @@ function membersFor(rs: Replicaset): Server[] {
       :replicaset="rs"
       :servers="membersFor(rs)"
       :self-alias="selfAlias"
+      :show-actions="showActions"
     />
     <p v-if="replicasets.length === 0" class="webui-cluster-topology__empty">
       No replicasets reported yet.

@@ -1,13 +1,52 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia';
+import { computed, onScopeDispose, ref } from 'vue';
 
 import { useClusterStore } from '@/entities/cluster';
+import { useSessionStore } from '@/entities/session';
+import { ClusterToolbar } from '@/features/cluster-ops';
+import { getClient } from '@/shared/api/graphql';
+import { wsClient } from '@/shared/api/ws';
 import { ClusterTopology } from '@/widgets/cluster-topology';
 import { SuggestionsBanner } from '@/widgets/suggestions-banner';
 
 const store = useClusterStore();
 const { servers, replicasets, selfAlias, counts, fetching, error, wsState } =
   storeToRefs(store);
+
+// Operator-toolkit affordances only for admin+. Viewers / operators
+// keep the read-only topology view they had before.
+const session = useSessionStore();
+const showActions = computed(() => session.hasRole('admin'));
+
+// failoverAgentStatus is sourced from etcd directly (Phase 5.11) so
+// the value is global — fetch it once on mount and refresh on every
+// WS snapshot tick. Pause toggles are rare, so polling the field
+// alongside the existing cluster snapshot is essentially free.
+const pausedUntil = ref<number | null>(null);
+
+async function refreshPauseStatus() {
+  const client = getClient();
+  const res = await client
+    .query<{ failoverAgentStatus: { paused_until: number | null } }>(
+      'query AgentPause { failoverAgentStatus { paused_until } }',
+      {},
+      { requestPolicy: 'network-only' },
+    )
+    .toPromise();
+  if (!res.error) {
+    pausedUntil.value = res.data?.failoverAgentStatus?.paused_until ?? null;
+  }
+}
+
+void refreshPauseStatus();
+
+const unsubMsg = wsClient.onMessage((msg) => {
+  if (msg.type === 'snapshot' || msg.type === 'initial') {
+    void refreshPauseStatus();
+  }
+});
+onScopeDispose(() => unsubMsg());
 </script>
 
 <template>
@@ -34,6 +73,12 @@ const { servers, replicasets, selfAlias, counts, fetching, error, wsState } =
 
     <SuggestionsBanner />
 
+    <ClusterToolbar
+      v-if="showActions"
+      :paused-until="pausedUntil"
+      @refresh="refreshPauseStatus"
+    />
+
     <p v-if="error" class="webui-cluster-page__error">
       {{ error.message }}
     </p>
@@ -45,6 +90,7 @@ const { servers, replicasets, selfAlias, counts, fetching, error, wsState } =
       :replicasets="replicasets"
       :servers="servers"
       :self-alias="selfAlias"
+      :show-actions="showActions"
     />
   </section>
 </template>

@@ -70,6 +70,11 @@ const reasonLabel = computed(() => props.instance.boxInfo?.roReason ?? '');
         {{ instance.lastError }}
       </span>
     </td>
+    <!--
+      Trailing slot lets a wrapping component (ReplicasetCard) inject
+      an extra <td> for operator actions without forking the row.
+    -->
+    <slot />
   </tr>
 </template>
 
