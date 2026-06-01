@@ -28,6 +28,7 @@ import Dialog from 'primevue/dialog';
 import InputText from 'primevue/inputtext';
 import InputNumber from 'primevue/inputnumber';
 import Checkbox from 'primevue/checkbox';
+import Fluid from 'primevue/fluid';
 
 import { getClient } from '@/shared/api/graphql';
 
@@ -704,46 +705,59 @@ async function quarantineWal(row: WalRow) {
       v-model:visible="sbOpen"
       modal
       header="Split-brain resolution"
-      :style="{ width: '42rem' }"
+      :style="{ width: '36rem' }"
+      class="rwf-dialog"
     >
-      <div class="webui-recovery__row">
-        <label>Winner</label>
-        <Select v-model="sbWinner" :options="peerOptions" option-label="label" option-value="value" />
-      </div>
-      <div class="webui-recovery__row">
-        <label>Losing peers</label>
-        <MultiSelect
-          v-model="sbLosers"
-          :options="peerOptions"
-          option-label="label"
-          option-value="value"
-        />
-      </div>
-      <div class="webui-recovery__row">
-        <label>Strategy</label>
-        <Select
-          v-model="sbAction"
-          :options="[
-            { label: 'Rebootstrap losing peers (clean cold-start)', value: 'rebootstrap_losing' },
-            { label: 'Force-promote winner with quorum=1', value: 'force_promote_winner' },
-            { label: 'Manual (do nothing automatically)', value: 'manual' },
-          ]"
-          option-label="label"
-          option-value="value"
-        />
-      </div>
+      <Fluid>
+        <div class="rwf-field">
+          <label for="sb-winner" class="rwf-field__label">Winner</label>
+          <Select
+            input-id="sb-winner"
+            v-model="sbWinner"
+            :options="peerOptions"
+            option-label="label"
+            option-value="value"
+          />
+        </div>
+        <div class="rwf-field">
+          <label for="sb-losers" class="rwf-field__label">Losing peers</label>
+          <MultiSelect
+            input-id="sb-losers"
+            v-model="sbLosers"
+            :options="peerOptions"
+            option-label="label"
+            option-value="value"
+          />
+        </div>
+        <div class="rwf-field">
+          <label for="sb-strategy" class="rwf-field__label">Strategy</label>
+          <Select
+            input-id="sb-strategy"
+            v-model="sbAction"
+            :options="[
+              { label: 'Rebootstrap losing peers (clean cold-start)', value: 'rebootstrap_losing' },
+              { label: 'Force-promote winner with quorum=1', value: 'force_promote_winner' },
+              { label: 'Manual (do nothing automatically)', value: 'manual' },
+            ]"
+            option-label="label"
+            option-value="value"
+          />
+        </div>
+      </Fluid>
       <Message severity="warn" :closable="false">
         Destructive action. Type
         <code>{{ sbConfirmExpected }}</code> to confirm.
       </Message>
-      <div class="webui-recovery__row">
-        <label>Confirm</label>
-        <InputText
-          v-model="sbConfirm"
-          :placeholder="sbConfirmExpected"
-          class="webui-recovery__confirm"
-        />
-      </div>
+      <Fluid>
+        <div class="rwf-field">
+          <label for="sb-confirm" class="rwf-field__label">Confirmation phrase</label>
+          <InputText
+            id="sb-confirm"
+            v-model="sbConfirm"
+            :placeholder="sbConfirmExpected"
+          />
+        </div>
+      </Fluid>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="sbOpen = false" />
         <Button
@@ -762,7 +776,8 @@ async function quarantineWal(row: WalRow) {
       v-model:visible="orOpen"
       modal
       header="Orphan resolver"
-      :style="{ width: '40rem' }"
+      :style="{ width: '36rem' }"
+      class="rwf-dialog"
     >
       <Message
         v-if="orphanPeers.length === 0"
@@ -780,30 +795,45 @@ async function quarantineWal(row: WalRow) {
       >
         Detected orphan peer(s): <strong>{{ orphanPeers.map((p) => p.alias).join(', ') }}</strong>.
       </Message>
-      <div class="webui-recovery__row">
-        <label>Target peer</label>
-        <Select v-model="orTarget" :options="peerOptions" option-label="label" option-value="value" />
-      </div>
-      <div class="webui-recovery__row">
-        <label>Strategy</label>
-        <Select
-          v-model="orAction"
-          :options="[
-            { label: 'Force reconnect (drop + reattach appliers)', value: 'force_reconnect' },
-            { label: 'Rebootstrap (wipe + cold-boot)', value: 'rebootstrap' },
-            { label: 'Solo promote (writable standalone)', value: 'solo_promote' },
-          ]"
-          option-label="label"
-          option-value="value"
-        />
-      </div>
+      <Fluid>
+        <div class="rwf-field">
+          <label for="or-target" class="rwf-field__label">Target peer</label>
+          <Select
+            input-id="or-target"
+            v-model="orTarget"
+            :options="peerOptions"
+            option-label="label"
+            option-value="value"
+          />
+        </div>
+        <div class="rwf-field">
+          <label for="or-strategy" class="rwf-field__label">Strategy</label>
+          <Select
+            input-id="or-strategy"
+            v-model="orAction"
+            :options="[
+              { label: 'Force reconnect (drop + reattach appliers)', value: 'force_reconnect' },
+              { label: 'Rebootstrap (wipe + cold-boot)', value: 'rebootstrap' },
+              { label: 'Solo promote (writable standalone)', value: 'solo_promote' },
+            ]"
+            option-label="label"
+            option-value="value"
+          />
+        </div>
+      </Fluid>
       <Message severity="warn" :closable="false">
         Type <code>{{ orConfirmExpected }}</code> to confirm.
       </Message>
-      <div class="webui-recovery__row">
-        <label>Confirm</label>
-        <InputText v-model="orConfirm" :placeholder="orConfirmExpected" class="webui-recovery__confirm" />
-      </div>
+      <Fluid>
+        <div class="rwf-field">
+          <label for="or-confirm" class="rwf-field__label">Confirmation phrase</label>
+          <InputText
+            id="or-confirm"
+            v-model="orConfirm"
+            :placeholder="orConfirmExpected"
+          />
+        </div>
+      </Fluid>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="orOpen = false" />
         <Button
@@ -822,7 +852,8 @@ async function quarantineWal(row: WalRow) {
       v-model:visible="qOpen"
       modal
       header="Quorum-loss escape hatch"
-      :style="{ width: '42rem' }"
+      :style="{ width: '38rem' }"
+      class="rwf-dialog"
     >
       <Message severity="error" :closable="false">
         <strong>Dangerous.</strong>
@@ -841,31 +872,54 @@ async function quarantineWal(row: WalRow) {
         synchronous writes start blocking. Opening it proactively
         is fine but you almost certainly want to wait.
       </Message>
-      <div class="webui-recovery__row">
-        <label>Target peer</label>
-        <Select v-model="qTarget" :options="peerOptions" option-label="label" option-value="value" />
-        <span v-if="qTarget && qTarget === currentQueueOwner" class="webui-recovery__muted">
-          ← current queue owner
-        </span>
+      <Fluid>
+        <div class="rwf-field">
+          <label for="q-target" class="rwf-field__label">Target peer</label>
+          <Select
+            input-id="q-target"
+            v-model="qTarget"
+            :options="peerOptions"
+            option-label="label"
+            option-value="value"
+          />
+          <small
+            v-if="qTarget && qTarget === currentQueueOwner"
+            class="rwf-field__hint"
+          >
+            ← current queue owner
+          </small>
+        </div>
+        <div class="rwf-field">
+          <label for="q-window" class="rwf-field__label">Window (seconds)</label>
+          <InputNumber
+            input-id="q-window"
+            v-model="qWindow"
+            :min="5"
+            :max="3600"
+            :use-grouping="false"
+          />
+          <small class="rwf-field__hint">
+            auto-restores original quorum after this window
+          </small>
+        </div>
+      </Fluid>
+      <div class="rwf-ack">
+        <Checkbox v-model="qAck" input-id="q-ack" binary />
+        <label for="q-ack">I accept the split-brain risk during the window</label>
       </div>
-      <div class="webui-recovery__row">
-        <label>Window (seconds)</label>
-        <InputNumber v-model="qWindow" :min="5" :max="3600" :use-grouping="false" class="webui-recovery__confirm" />
-        <span class="webui-recovery__muted">
-          auto-restores original quorum after this window
-        </span>
-      </div>
-      <label class="webui-recovery__ack">
-        <Checkbox v-model="qAck" binary />
-        <span>I accept the split-brain risk during the window</span>
-      </label>
       <Message severity="warn" :closable="false">
         Type <code>{{ qConfirmExpected }}</code> to confirm.
       </Message>
-      <div class="webui-recovery__row">
-        <label>Confirm</label>
-        <InputText v-model="qConfirm" :placeholder="qConfirmExpected" class="webui-recovery__confirm" />
-      </div>
+      <Fluid>
+        <div class="rwf-field">
+          <label for="q-confirm" class="rwf-field__label">Confirmation phrase</label>
+          <InputText
+            id="q-confirm"
+            v-model="qConfirm"
+            :placeholder="qConfirmExpected"
+          />
+        </div>
+      </Fluid>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="qOpen = false" />
         <Button
@@ -885,6 +939,7 @@ async function quarantineWal(row: WalRow) {
       modal
       header="Replication topology fix"
       :style="{ width: '44rem' }"
+      class="rwf-dialog"
     >
       <Message
         v-if="!tDiagnosed"
@@ -901,22 +956,23 @@ async function quarantineWal(row: WalRow) {
         No replication topology issues detected. Every declared peer
         URI matches what the cluster observes. Nothing to fix.
       </Message>
-      <table v-else class="webui-recovery__topo">
+      <table v-else class="rwf-table">
         <thead>
-          <tr><th>Peer</th><th>Reachable</th><th>Suggested URI</th></tr>
+          <tr>
+            <th>Peer</th>
+            <th>Reachable</th>
+            <th>Suggested URI</th>
+          </tr>
         </thead>
         <tbody>
           <tr v-for="p in tPeers" :key="p.alias">
             <td><code>{{ p.alias }}</code></td>
             <td>{{ p.reachable ? '✓' : '✗' }}</td>
             <td>
-              <InputText
-                v-if="tFixes[p.alias] !== undefined"
-                v-model="tFixes[p.alias]"
-                class="webui-recovery__confirm webui-recovery__topo-input"
-                fluid
-              />
-              <span v-else class="webui-recovery__muted">no change</span>
+              <Fluid v-if="tFixes[p.alias] !== undefined">
+                <InputText v-model="tFixes[p.alias]" />
+              </Fluid>
+              <span v-else class="rwf-field__hint">no change</span>
             </td>
           </tr>
         </tbody>
@@ -925,10 +981,16 @@ async function quarantineWal(row: WalRow) {
         <Message severity="warn" :closable="false">
           Type <code>{{ tConfirmExpected }}</code> to confirm.
         </Message>
-        <div class="webui-recovery__row">
-          <label>Confirm</label>
-          <InputText v-model="tConfirm" :placeholder="tConfirmExpected" class="webui-recovery__confirm" />
-        </div>
+        <Fluid>
+          <div class="rwf-field">
+            <label for="t-confirm" class="rwf-field__label">Confirmation phrase</label>
+            <InputText
+              id="t-confirm"
+              v-model="tConfirm"
+              :placeholder="tConfirmExpected"
+            />
+          </div>
+        </Fluid>
       </template>
       <template #footer>
         <Button label="Close" severity="secondary" text @click="tOpen = false" />
@@ -950,6 +1012,7 @@ async function quarantineWal(row: WalRow) {
       modal
       header="Point-in-time recovery (advisory)"
       :style="{ width: '50rem' }"
+      class="rwf-dialog"
     >
       <Message severity="info" :closable="false">
         Tarantool 3.x PITR requires an offline restart, which the
@@ -957,31 +1020,34 @@ async function quarantineWal(row: WalRow) {
         exact host-side commands you run; the recovery happens
         outside this page.
       </Message>
-      <div class="webui-recovery__row">
-        <label>Target LSN</label>
-        <input
-          v-model.number="pTargetLsn"
-          type="number"
-          min="1"
-          :max="pCurrentLsn || undefined"
-          class="webui-recovery__confirm"
+      <Fluid>
+        <div class="rwf-field">
+          <label for="p-lsn" class="rwf-field__label">Target LSN</label>
+          <InputNumber
+            input-id="p-lsn"
+            v-model="pTargetLsn"
+            :min="1"
+            :max="pCurrentLsn || undefined"
+            :use-grouping="false"
+          />
+          <small v-if="pCurrentLsn > 0" class="rwf-field__hint">
+            current = {{ pCurrentLsn }}
+          </small>
+        </div>
+      </Fluid>
+      <div class="rwf-actions">
+        <Button
+          label="Generate plan"
+          icon="pi pi-history"
+          severity="info"
+          :loading="pBusy"
+          :disabled="!pTargetLsn || pTargetLsn < 1"
+          @click="generatePitrPlan"
         />
-        <span v-if="pCurrentLsn > 0" class="webui-recovery__muted">
-          current = {{ pCurrentLsn }}
-        </span>
       </div>
-      <Button
-        label="Generate plan"
-        icon="pi pi-history"
-        size="small"
-        severity="info"
-        :loading="pBusy"
-        :disabled="!pTargetLsn || pTargetLsn < 1"
-        @click="generatePitrPlan"
-      />
-      <div v-if="pCommands.length > 0" class="webui-recovery__commands-wrap">
-        <div class="webui-recovery__commands-head">
-          <span class="webui-recovery__muted">
+      <div v-if="pCommands.length > 0" class="rwf-commands">
+        <div class="rwf-commands__head">
+          <span class="rwf-field__hint">
             Run these commands on the host (one block per peer):
           </span>
           <Button
@@ -993,7 +1059,7 @@ async function quarantineWal(row: WalRow) {
             @click="copyPitrCommands"
           />
         </div>
-        <pre class="webui-recovery__commands">{{ pCommands.join('\n') }}</pre>
+        <pre class="rwf-commands__pre">{{ pCommands.join('\n') }}</pre>
       </div>
       <template #footer>
         <Button label="Close" severity="secondary" text @click="pOpen = false" />
@@ -1005,7 +1071,8 @@ async function quarantineWal(row: WalRow) {
       v-model:visible="wOpen"
       modal
       header="WAL chain repair"
-      :style="{ width: '48rem' }"
+      :style="{ width: '50rem' }"
+      class="rwf-dialog"
     >
       <Message severity="warn" :closable="false">
         Lists every .xlog on this instance with an integrity probe.
@@ -1015,9 +1082,14 @@ async function quarantineWal(row: WalRow) {
         <code>force_recovery = true</code> in cluster YAML to
         let the bootstrap continue past the gap.
       </Message>
-      <table class="webui-recovery__topo">
+      <table class="rwf-table">
         <thead>
-          <tr><th>File</th><th>Status</th><th>Detail</th><th></th></tr>
+          <tr>
+            <th>File</th>
+            <th>Status</th>
+            <th>Detail</th>
+            <th></th>
+          </tr>
         </thead>
         <tbody>
           <tr v-for="row in wFiles" :key="row.file">
@@ -1028,7 +1100,7 @@ async function quarantineWal(row: WalRow) {
                 :value="row.ok ? 'OK' : 'BAD'"
               />
             </td>
-            <td class="webui-recovery__muted">{{ row.msg }}</td>
+            <td class="rwf-field__hint">{{ row.msg }}</td>
             <td>
               <Button
                 v-if="!row.ok"
@@ -1052,7 +1124,8 @@ async function quarantineWal(row: WalRow) {
       v-model:visible="ltOpen"
       modal
       header="Leader takeover"
-      :style="{ width: '40rem' }"
+      :style="{ width: '36rem' }"
+      class="rwf-dialog"
     >
       <Message
         v-if="currentQueueOwner"
@@ -1071,10 +1144,18 @@ async function quarantineWal(row: WalRow) {
         Cluster cannot accept synchronous writes — pick a leader and
         promote it.
       </Message>
-      <div class="webui-recovery__row">
-        <label>New leader</label>
-        <Select v-model="ltTarget" :options="peerOptions" option-label="label" option-value="value" />
-      </div>
+      <Fluid>
+        <div class="rwf-field">
+          <label for="lt-target" class="rwf-field__label">New leader</label>
+          <Select
+            input-id="lt-target"
+            v-model="ltTarget"
+            :options="peerOptions"
+            option-label="label"
+            option-value="value"
+          />
+        </div>
+      </Fluid>
       <Message
         v-if="ltTarget && ltTarget === currentQueueOwner"
         severity="warn"
@@ -1087,14 +1168,16 @@ async function quarantineWal(row: WalRow) {
         Drives <code>box.ctl.promote()</code> on the target peer.
         Type <code>{{ ltConfirmExpected }}</code> to confirm.
       </Message>
-      <div class="webui-recovery__row">
-        <label>Confirm</label>
-        <input
-          v-model="ltConfirm"
-          class="webui-recovery__confirm"
-          :placeholder="ltConfirmExpected"
-        />
-      </div>
+      <Fluid>
+        <div class="rwf-field">
+          <label for="lt-confirm" class="rwf-field__label">Confirmation phrase</label>
+          <InputText
+            id="lt-confirm"
+            v-model="ltConfirm"
+            :placeholder="ltConfirmExpected"
+          />
+        </div>
+      </Fluid>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="ltOpen = false" />
         <Button
@@ -1139,136 +1222,6 @@ async function quarantineWal(row: WalRow) {
 }
 .webui-recovery__last { border-top: 1px solid var(--webui-border); padding-top: 0.5rem; }
 .webui-recovery__last h2 { margin: 0 0 0.5rem 0; font-size: 1rem; }
-.webui-recovery__row {
-  display: grid;
-  grid-template-columns: 9rem minmax(0, 1fr) auto;
-  /* gap 1rem horizontally (between label and the form control) +
-     0.25rem vertically (rows themselves are separated by the
-     dialog-content flex gap, this is just safety). The previous
-     0.5rem made labels read as captions glued to inputs. */
-  column-gap: 1rem;
-  row-gap: 0.25rem;
-  align-items: center;
-  /* Crucial: allow the row to shrink with its parent. Without
-     `min-width: 0`, a wide Select option label ("Force reconnect
-     (drop + reattach appliers)") forces the whole grid to its
-     intrinsic width and pushes content past the dialog edge. */
-  min-width: 0;
-}
-.webui-recovery__row > * { min-width: 0; }
-
-/* Make every form control inside a recovery row fill the
-   available column AND truncate long option labels with an
-   ellipsis instead of overflowing the dialog. PrimeVue's
-   Select renders its trigger label as a nowrap span by
-   default — the ellipsis rule below makes the trigger respect
-   its grid cell width. */
-.webui-recovery__row :deep(.p-select),
-.webui-recovery__row :deep(.p-dropdown),
-.webui-recovery__row :deep(.p-inputtext),
-.webui-recovery__row :deep(.p-inputnumber),
-.webui-recovery__row :deep(.p-inputnumber-input),
-.webui-recovery__row input,
-.webui-recovery__row select {
-  width: 100%;
-  box-sizing: border-box;
-  min-width: 0;
-}
-/* Same medium-size height across every wrapper PrimeVue might
-   give us. Without this the Select sits at PrimeVue's default
-   (~40px) while InputText / InputNumber inherit the smaller
-   browser default (~30px) — that mismatch is what user flagged. */
-.webui-recovery__row :deep(.p-select),
-.webui-recovery__row :deep(.p-dropdown),
-.webui-recovery__row :deep(.p-inputtext),
-.webui-recovery__row :deep(.p-inputnumber-input) {
-  height: 2.5rem;
-}
-.webui-recovery__row :deep(.p-select-label),
-.webui-recovery__row :deep(.p-dropdown-label) {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  display: flex;
-  align-items: center;
-}
-/* Override for the muted hint that sits in the 3rd column —
-   it must stay auto-sized so it doesn't push the form control
-   to half-width. */
-.webui-recovery__row > .webui-recovery__muted {
-  width: auto;
-  white-space: nowrap;
-  font-size: 0.8rem;
-}
-
-/* Recovery dialogs were a soup of stacked Message banners, rows
-   and tables with ad-hoc margins. Stack every top-level child of
-   the dialog body with a uniform gap so banners breathe, rows
-   line up, and the destructive footer reads as a separate region.
-   Targeting `.p-dialog-content` via :deep — that is the PrimeVue
-   container that wraps the dialog body. */
-:deep(.p-dialog-content) {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-  padding-bottom: 1rem;
-}
-/* When several form rows stack in a row, the dialog-level gap
-   alone is fine — but a Message banner BETWEEN them collapses
-   visually because the banner already has its own padding. Add
-   a touch more breathing room above non-row direct children so
-   banners feel like separators rather than another row. */
-:deep(.p-dialog-content) > .p-message {
-  margin: 0;
-}
-/* Visual divider between the body and the action buttons so the
-   destructive footer stops looking glued to the form fields. */
-:deep(.p-dialog-footer) {
-  border-top: 1px solid var(--webui-border);
-  padding-top: 1rem;
-  padding-bottom: 1rem;
-  margin-top: 0.5rem;
-  gap: 0.5rem;
-}
-.webui-recovery__row label { color: var(--webui-text-muted); font-size: 0.85rem; }
-.webui-recovery__confirm {
-  background: var(--p-form-field-background, transparent);
-  color: var(--p-form-field-color, inherit);
-  border: 1px solid var(--p-form-field-border-color, var(--webui-border));
-  border-radius: var(--webui-radius);
-  /* Match PrimeVue's medium-size form-field height (≈40px) so
-     native <input> sits flush with adjacent PrimeVue Selects and
-     Buttons in the same row. Without this the native input
-     renders ~28px tall and the row becomes a stair-step. */
-  height: 2.5rem;
-  padding: 0 0.6rem;
-  font-family: var(--webui-font-mono);
-  font-size: 0.85rem;
-}
-/* Same height normalisation for the number inputs used in PITR
-   / Quorum (`type="number"`) and any other plain HTML input that
-   sneaks into a row. */
-.webui-recovery__row input[type='number'],
-.webui-recovery__row input[type='text'] {
-  height: 2.5rem;
-  padding: 0 0.6rem;
-}
-
-.webui-recovery__ack {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.9rem;
-  cursor: pointer;
-  /* Bigger checkbox so the operator's "I accept the risk" gesture
-     reads as a deliberate click, not a pixel-hunt. */
-}
-.webui-recovery__ack input[type='checkbox'] {
-  width: 1.1rem;
-  height: 1.1rem;
-  margin: 0;
-  cursor: pointer;
-}
 .webui-recovery__muted { color: var(--webui-text-muted); }
 .webui-recovery__toolbar {
   display: flex;
@@ -1276,25 +1229,113 @@ async function quarantineWal(row: WalRow) {
   padding-top: 0.25rem;
   border-top: 1px dashed var(--webui-border);
 }
-.webui-recovery__inline {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.85rem;
+
+/* ── Recovery Wizard Form (`rwf-*`) ─────────────────────────────
+   Single layout pattern for every wizard dialog:
+   - Dialog content is a vertical flex stack with 1rem gap so
+     PrimeVue Messages and `rwf-field` blocks read as discrete
+     sections.
+   - `rwf-field` stacks label → control → optional hint with
+     consistent 0.4rem gap. Width is owned by the surrounding
+     `<Fluid>` (PrimeVue v4) so we never fight a control's
+     intrinsic width with grid math.
+   - The footer gets a top border so the destructive button is
+     visually separated from the form body.
+*/
+
+.rwf-dialog :deep(.p-dialog-content) {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding-bottom: 1rem;
 }
-.webui-recovery__topo {
+.rwf-dialog :deep(.p-dialog-footer) {
+  border-top: 1px solid var(--webui-border);
+  padding-top: 1rem;
+  padding-bottom: 1rem;
+  margin-top: 0.5rem;
+  gap: 0.5rem;
+}
+/* PrimeVue's `<Fluid>` is a transparent container; render it as
+   a flex column so multiple fields inside one Fluid stack with
+   the same gap as the dialog itself. */
+.rwf-dialog :deep(.p-fluid) {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.rwf-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  /* min-width: 0 so a Select with a long option label cannot
+     push the field past the dialog edge. */
+  min-width: 0;
+}
+.rwf-field__label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--webui-text-muted);
+}
+.rwf-field__hint {
+  font-size: 0.78rem;
+  color: var(--webui-text-muted);
+  line-height: 1.3;
+}
+
+/* Acknowledgement row (e.g. Quorum-loss "I accept the risk").
+   Big-enough checkbox so it reads as a deliberate gesture. */
+.rwf-ack {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.9rem;
+}
+.rwf-ack label {
+  cursor: pointer;
+}
+
+.rwf-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* Table used by Topology fix + WAL repair dialogs. Compact
+   rows so the table reads as a status panel, not a form. */
+.rwf-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.85rem;
 }
-.webui-recovery__topo th,
-.webui-recovery__topo td {
+.rwf-table th,
+.rwf-table td {
   text-align: left;
-  padding: 0.3rem 0.5rem;
+  padding: 0.5rem 0.6rem;
   border-bottom: 1px solid var(--webui-border);
+  vertical-align: middle;
 }
-.webui-recovery__topo-input { width: 100%; }
-.webui-recovery__commands {
+.rwf-table th {
+  font-weight: 600;
+  color: var(--webui-text-muted);
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+}
+
+/* PITR generated commands block. */
+.rwf-commands {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.rwf-commands__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+.rwf-commands__pre {
   background: var(--p-content-background, #0e1117);
   color: var(--p-text-color, inherit);
   border: 1px solid var(--webui-border);
@@ -1306,16 +1347,5 @@ async function quarantineWal(row: WalRow) {
   max-height: 24rem;
   overflow: auto;
   margin: 0;
-}
-.webui-recovery__commands-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-}
-.webui-recovery__commands-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.5rem;
 }
 </style>
