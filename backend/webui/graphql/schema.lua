@@ -509,6 +509,51 @@ local Query = types.object {
             resolve = audit_resolver.query_audit,
         },
         -- Phase 4 Task 4.3 — audit hash-chain verifier.
+        -- Phase 6 Task DR — disaster recovery snapshot.
+        recoverySnapshot = {
+            kind = types.object({
+                name = 'RecoverySnapshot',
+                fields = {
+                    self_alias    = types.string,
+                    generation    = types.long,
+                    recommendation = types.string.nonNull,
+                    peers = types.list(types.object({
+                        name = 'RecoveryPeer',
+                        fields = {
+                            alias        = types.string.nonNull,
+                            uuid         = types.string,
+                            replicaset   = types.string,
+                            role         = types.string.nonNull,
+                            status       = types.string,
+                            ro           = types.boolean,
+                            reachable    = types.boolean,
+                            last_lsn     = types.long,
+                            current_term = types.long,
+                            queue_owner  = types.boolean,
+                            reasons      = types.list(types.string.nonNull),
+                        },
+                    })).nonNull,
+                    split_brain_groups = types.list(types.object({
+                        name = 'SplitBrainGroup',
+                        fields = {
+                            divergent_from = types.string,
+                            members = types.list(types.string.nonNull).nonNull,
+                        },
+                    })).nonNull,
+                },
+            }).nonNull,
+            description = 'Disaster-recovery diagnostic snapshot. ' ..
+                'Groups peers by recovery class (queue-owner / ' ..
+                'follower / orphan / split-brain / unreachable) and ' ..
+                'returns a high-level recommendation. Admin only.',
+            resolve = function(root, _args)
+                local rbac = require('webui.auth.rbac')
+                if not rbac.allowed((root and root.roles) or {}, 'admin') then
+                    error('FORBIDDEN: recoverySnapshot requires admin')
+                end
+                return require('webui.recovery.snapshot').build()
+            end,
+        },
         verifyAuditChain = {
             kind = types.object({
                 name = 'AuditChainVerifyResult',
@@ -1246,6 +1291,60 @@ local Mutation = types.object {
             description = 'Save a SQL snippet. Owner is the calling user; ' ..
                 '`shared = true` makes it visible to every operator+.',
             resolve = saved_queries_resolver.mutation_save,
+        },
+        -- Phase 6 — disaster recovery dispatcher. Single entry
+        -- point for split-brain / orphan / leader-takeover /
+        -- future PITR + WAL repair wizards.
+        recoveryAction = {
+            kind = types.object({
+                name = 'RecoveryActionResult',
+                fields = {
+                    ok      = types.boolean.nonNull,
+                    action  = types.string.nonNull,
+                    error   = types.string,
+                    results = types.list(types.object({
+                        name = 'RecoveryActionPeerResult',
+                        fields = {
+                            peer = types.string.nonNull,
+                            ok   = types.boolean.nonNull,
+                            msg  = types.string,
+                        },
+                    })).nonNull,
+                },
+            }).nonNull,
+            arguments = {
+                action  = types.string.nonNull,
+                payload = types.string,  -- JSON-encoded; per-action shape
+            },
+            description = 'Disaster-recovery dispatch. `action` ∈ ' ..
+                '{split_brain_resolve, leader_takeover}. ' ..
+                '`payload` is a JSON envelope; see /cluster-recovery ' ..
+                'page for per-action shape. Admin only; every call ' ..
+                'is audited.',
+            resolve = function(root, args)
+                local rbac = require('webui.auth.rbac')
+                if not rbac.allowed((root and root.roles) or {}, 'admin') then
+                    error('FORBIDDEN: recoveryAction requires admin')
+                end
+                local payload = {}
+                if type(args.payload) == 'string' and args.payload ~= '' then
+                    local ok, parsed = pcall(require('json').decode, args.payload)
+                    if not ok or type(parsed) ~= 'table' then
+                        error('VALIDATION_ERROR: payload must be a JSON object')
+                    end
+                    payload = parsed
+                end
+                if args.action == 'split_brain_resolve' then
+                    return require('webui.recovery.split_brain')
+                        .resolve(payload, root)
+                end
+                if args.action == 'leader_takeover' then
+                    return require('webui.recovery.leader_takeover')
+                        .promote(payload, root)
+                end
+                error('VALIDATION_ERROR: unsupported action '
+                    .. tostring(args.action))
+            end,
         },
         deleteSavedQuery = {
             kind = types.object({

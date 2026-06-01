@@ -24,6 +24,7 @@ const items: SidebarItem[] = [
   { key: 'sql',           to: '/sql',           iconClass: 'pi pi-bolt',        labelKey: 'widgets.sidebar.sql' },
   { key: 'users',         to: '/users',         iconClass: 'pi pi-users',       labelKey: 'widgets.sidebar.users' },
   { key: 'failover',      to: '/failover',      iconClass: 'pi pi-sync',        labelKey: 'widgets.sidebar.failover' },
+  { key: 'cluster-recovery', to: '/cluster-recovery', iconClass: 'pi pi-shield', labelKey: 'widgets.sidebar.cluster_recovery' },
   { key: 'vshard',        to: '/vshard',        iconClass: 'pi pi-th-large',    labelKey: 'widgets.sidebar.vshard' },
   { key: 'metrics',       to: '/metrics',       iconClass: 'pi pi-chart-line',  labelKey: 'widgets.sidebar.metrics' },
   { key: 'snapshots',     to: '/snapshots',     iconClass: 'pi pi-database',    labelKey: 'widgets.sidebar.snapshots' },

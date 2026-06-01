@@ -38,6 +38,7 @@
       "sql": "SQL",
       "users": "Users",
       "failover": "Failover",
+      "cluster_recovery": "Recovery",
       "vshard": "Vshard",
       "metrics": "Metrics",
       "snapshots": "Snapshots",

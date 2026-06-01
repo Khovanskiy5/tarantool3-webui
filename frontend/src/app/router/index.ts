@@ -31,6 +31,7 @@ import { CONFIG_EDITOR_ROUTE } from '@/pages/config-editor';
 // as a redirect below until the next breaking cleanup.
 import { DATA_EXPLORER_ROUTE } from '@/pages/data-explorer';
 import { SQL_ROUTE } from '@/pages/sql';
+import { CLUSTER_RECOVERY_ROUTE } from '@/pages/cluster-recovery';
 import { USERS_ROUTE } from '@/pages/users';
 import { FAILOVER_ROUTE } from '@/pages/failover';
 import { VSHARD_ROUTE } from '@/pages/vshard';
@@ -69,6 +70,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/schema', redirect: '/data-explorer' },
   USERS_ROUTE,
   FAILOVER_ROUTE,
+  CLUSTER_RECOVERY_ROUTE,
   VSHARD_ROUTE,
   METRICS_ROUTE,
   SNAPSHOTS_ROUTE,

@@ -38,6 +38,7 @@
       "sql": "SQL",
       "users": "Пользователи",
       "failover": "Failover",
+      "cluster_recovery": "Восстановление",
       "vshard": "Vshard",
       "metrics": "Метрики",
       "snapshots": "Снапшоты",
