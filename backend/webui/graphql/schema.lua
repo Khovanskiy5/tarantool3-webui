@@ -1354,6 +1354,62 @@ local Mutation = types.object {
                     return require('webui.recovery.topology_fix')
                         .apply(payload, root)
                 end
+                -- DR-4 PITR — advisory only. `target_lsn` in
+                -- payload picks the snapshot + xlog tail and
+                -- returns commands the operator runs on the
+                -- host (Tarantool 3.x PITR requires offline
+                -- restart, which the WebUI cannot do for itself).
+                if args.action == 'pitr_plan' then
+                    local pitr = require('webui.recovery.pitr')
+                    local target = tonumber(payload.target_lsn)
+                    if target == nil then
+                        return { ok = false, action = 'pitr_plan',
+                            results = {},
+                            error = 'target_lsn is required (number)' }
+                    end
+                    local plan, err = pitr.plan(target)
+                    if plan == nil then
+                        return { ok = false, action = 'pitr_plan',
+                            results = {}, error = err }
+                    end
+                    -- Render the plan into the same wire shape
+                    -- as the other recovery actions so the SPA
+                    -- can reuse the result block. Each command
+                    -- line is one "peer result" — easier than
+                    -- introducing a parallel type per action.
+                    local results = {}
+                    for _, line in ipairs(plan.commands) do
+                        table.insert(results, {
+                            peer = plan.instance, ok = true, msg = line,
+                        })
+                    end
+                    return { ok = true, action = 'pitr_plan',
+                        results = results }
+                end
+                -- DR-6 WAL repair — diagnose returns one row per
+                -- xlog with `ok` flag; quarantine renames a
+                -- corrupted file out of the boot path.
+                if args.action == 'wal_diagnose' then
+                    local wr = require('webui.recovery.wal_repair')
+                    local diag = wr.diagnose()
+                    local results = {}
+                    for _, f in ipairs(diag.files or {}) do
+                        table.insert(results, {
+                            peer = f.path:gsub('^.*/', ''),
+                            ok   = f.ok,
+                            msg  = f.ok
+                                and ('last_lsn=' .. tostring(f.last_lsn)
+                                    .. ' size=' .. f.size)
+                                or tostring(f.error),
+                        })
+                    end
+                    return { ok = true, action = 'wal_diagnose',
+                        results = results }
+                end
+                if args.action == 'wal_quarantine' then
+                    return require('webui.recovery.wal_repair')
+                        .quarantine(payload, root)
+                end
                 if args.action == 'topology_fix_diagnose' then
                     -- Pseudo-action: returns the diagnostic
                     -- report wrapped in the standard result

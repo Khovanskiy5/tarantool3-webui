@@ -367,6 +367,99 @@ async function executeTopology() {
   tOpen.value = false;
   await refresh();
 }
+
+// ── PITR (point-in-time recovery) wizard — advisory ───────────────
+const pOpen = ref(false);
+const pTargetLsn = ref<number>(0);
+const pCommands = ref<string[]>([]);
+const pBusy = ref(false);
+
+async function openPitrWizard() {
+  pOpen.value = true;
+  pCommands.value = [];
+  pBusy.value = false;
+  // Default target = current LSN minus 100 — gives the operator
+  // a sane starting point that "rewinds" the last few writes.
+  // They edit it to whatever incident point matters.
+  pTargetLsn.value = Math.max(
+    0,
+    ((snapshot.value?.peers ?? []).find((p) => p.queue_owner)?.last_lsn ?? 0)
+      - 100,
+  );
+}
+
+async function generatePitrPlan() {
+  if (!pTargetLsn.value || pTargetLsn.value < 0) return;
+  pBusy.value = true;
+  const res = await getClient()
+    .mutation(ACTION_M, {
+      action: 'pitr_plan',
+      payload: JSON.stringify({ target_lsn: pTargetLsn.value }),
+    })
+    .toPromise();
+  pBusy.value = false;
+  if (res.error) {
+    error.value = res.error.message;
+    pCommands.value = [];
+    return;
+  }
+  const r = (res.data as { recoveryAction: ActionResult } | undefined)
+    ?.recoveryAction;
+  if (r === undefined || !r.ok) {
+    error.value = r?.error ?? 'pitr plan failed';
+    pCommands.value = [];
+    return;
+  }
+  // Each result row carries one command line in `msg`.
+  pCommands.value = r.results.map((x) => x.msg ?? '');
+}
+
+// ── WAL repair wizard ─────────────────────────────────────────────
+interface WalRow {
+  file: string;
+  ok: boolean;
+  msg: string;
+}
+const wOpen = ref(false);
+const wFiles = ref<WalRow[]>([]);
+const wBusy = ref(false);
+
+async function openWalRepairWizard() {
+  wOpen.value = true;
+  wBusy.value = true;
+  wFiles.value = [];
+  const res = await getClient()
+    .mutation(ACTION_M, {
+      action: 'wal_diagnose',
+      payload: null,
+    })
+    .toPromise();
+  wBusy.value = false;
+  if (res.error) { error.value = res.error.message; return; }
+  const r = (res.data as { recoveryAction: ActionResult } | undefined)
+    ?.recoveryAction;
+  if (r === undefined || !r.ok) return;
+  wFiles.value = r.results.map((x) => ({
+    file: x.peer, ok: x.ok, msg: x.msg ?? '',
+  }));
+}
+
+async function quarantineWal(row: WalRow) {
+  if (row.ok) return;
+  if (!window.confirm(`Quarantine ${row.file}? `
+    + `It will be renamed to ${row.file}.corrupt and skipped on next boot.`)) {
+    return;
+  }
+  const res = await getClient()
+    .mutation(ACTION_M, {
+      action: 'wal_quarantine',
+      payload: JSON.stringify({ file: row.file }),
+    })
+    .toPromise();
+  if (res.error) { error.value = res.error.message; return; }
+  // Refresh the diagnostic so the quarantined file disappears.
+  await openWalRepairWizard();
+}
 </script>
 
 <template>
@@ -474,6 +567,22 @@ async function executeTopology() {
         severity="secondary"
         text
         @click="openOrphanWizard"
+      />
+      <Button
+        label="PITR plan"
+        icon="pi pi-history"
+        size="small"
+        severity="info"
+        text
+        @click="openPitrWizard"
+      />
+      <Button
+        label="WAL repair"
+        icon="pi pi-wrench"
+        size="small"
+        severity="warn"
+        text
+        @click="openWalRepairWizard"
       />
     </div>
 
@@ -727,6 +836,90 @@ async function executeTopology() {
       </template>
     </Dialog>
 
+    <!-- PITR wizard -->
+    <Dialog
+      v-model:visible="pOpen"
+      modal
+      header="Point-in-time recovery (advisory)"
+      :style="{ width: '50rem' }"
+    >
+      <Message severity="info" :closable="false">
+        Tarantool 3.x PITR requires an offline restart, which the
+        WebUI cannot drive for itself. This wizard generates the
+        exact host-side commands you run; the recovery happens
+        outside this page.
+      </Message>
+      <div class="webui-recovery__row">
+        <label>Target LSN</label>
+        <input
+          v-model.number="pTargetLsn"
+          type="number"
+          min="0"
+          class="webui-recovery__confirm"
+        />
+      </div>
+      <Button
+        label="Generate plan"
+        icon="pi pi-history"
+        size="small"
+        severity="info"
+        :loading="pBusy"
+        :disabled="!pTargetLsn || pTargetLsn < 0"
+        @click="generatePitrPlan"
+      />
+      <pre v-if="pCommands.length > 0" class="webui-recovery__commands">{{ pCommands.join('\n') }}</pre>
+      <template #footer>
+        <Button label="Close" severity="secondary" text @click="pOpen = false" />
+      </template>
+    </Dialog>
+
+    <!-- WAL repair wizard -->
+    <Dialog
+      v-model:visible="wOpen"
+      modal
+      header="WAL chain repair"
+      :style="{ width: '48rem' }"
+    >
+      <Message severity="warn" :closable="false">
+        Lists every .xlog on this instance with an integrity probe.
+        Files marked <strong>BAD</strong> can be quarantined
+        (renamed to <code>.corrupt</code>) so the next boot skips
+        them. After quarantine, restart the instance with
+        <code>force_recovery = true</code> in cluster YAML to
+        let the bootstrap continue past the gap.
+      </Message>
+      <table class="webui-recovery__topo">
+        <thead>
+          <tr><th>File</th><th>Status</th><th>Detail</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in wFiles" :key="row.file">
+            <td><code>{{ row.file }}</code></td>
+            <td>
+              <Tag
+                :severity="row.ok ? 'success' : 'danger'"
+                :value="row.ok ? 'OK' : 'BAD'"
+              />
+            </td>
+            <td class="webui-recovery__muted">{{ row.msg }}</td>
+            <td>
+              <Button
+                v-if="!row.ok"
+                icon="pi pi-trash"
+                size="small"
+                severity="danger"
+                text
+                @click="quarantineWal(row)"
+              />
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <template #footer>
+        <Button label="Close" severity="secondary" text @click="wOpen = false" />
+      </template>
+    </Dialog>
+
     <!-- Leader takeover wizard -->
     <Dialog
       v-model:visible="ltOpen"
@@ -837,4 +1030,17 @@ async function executeTopology() {
   border-bottom: 1px solid var(--webui-border);
 }
 .webui-recovery__topo-input { width: 100%; }
+.webui-recovery__commands {
+  background: var(--p-content-background, #0e1117);
+  color: var(--p-text-color, inherit);
+  border: 1px solid var(--webui-border);
+  border-radius: var(--webui-radius);
+  padding: 0.75rem;
+  font-family: var(--webui-font-mono);
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  max-height: 24rem;
+  overflow: auto;
+  margin-top: 0.5rem;
+}
 </style>
