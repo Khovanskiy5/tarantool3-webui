@@ -38,10 +38,35 @@ local M = {}
 -- Prefer `box.cfg.wal_dir` / `box.cfg.memtx_dir` over a hard-coded
 -- compose path so the helper survives operators who relocate work
 -- volumes; defensive fallback covers the dev-compose layout.
+--
+-- IMPORTANT: Tarantool 3.x stores `box.cfg.wal_dir` as the literal
+-- string from the YAML (often relative, e.g. "var/lib/tt-1"), and
+-- resolves it relative to `box.cfg.work_dir` at I/O time. The wipe
+-- helper opens these paths via `fio.*` which does NOT consult
+-- `box.cfg.work_dir` — so passing the relative string in directly
+-- looks for files in CWD and silently finds nothing. The result is
+-- a "successful" wipe that left every WAL in place, which caused
+-- the next boot to hit "invalid instance UUID" and crash-loop. Fix:
+-- join `work_dir` + the relative segment when needed so the path
+-- matches what the runtime actually reads/writes.
+local function _resolve_one(p, work_dir)
+    if p == nil then return nil end
+    -- Absolute path — use as-is.
+    if p:sub(1, 1) == '/' then return p end
+    -- Relative — anchor to work_dir (Tarantool's own convention).
+    if work_dir == nil or work_dir == '' then return p end
+    local sep = (work_dir:sub(-1) == '/') and '' or '/'
+    return work_dir .. sep .. p
+end
+
 local function resolve_work_paths()
-    local wal_dir   = (box.cfg and box.cfg.wal_dir)   or '/opt/webui/var/lib'
-    local memtx_dir = (box.cfg and box.cfg.memtx_dir) or '/opt/webui/var/lib'
-    local vinyl_dir = (box.cfg and box.cfg.vinyl_dir) or '/opt/webui/var/lib'
+    local work_dir  = (box.cfg and box.cfg.work_dir)  or '/opt/webui/var/lib'
+    local wal_dir   = _resolve_one(box.cfg and box.cfg.wal_dir,   work_dir)
+        or '/opt/webui/var/lib'
+    local memtx_dir = _resolve_one(box.cfg and box.cfg.memtx_dir, work_dir)
+        or '/opt/webui/var/lib'
+    local vinyl_dir = _resolve_one(box.cfg and box.cfg.vinyl_dir, work_dir)
+        or '/opt/webui/var/lib'
     -- De-duplicate when all three point to the same dir (default).
     local seen = {}
     local dirs = {}
@@ -277,5 +302,10 @@ function M.handler(req)
         body = json.encode(payload),
     }
 end
+
+-- Exposed for unit tests only — the wipe path-resolution bug
+-- (relative wal_dir silently misses the real data) was hard to
+-- catch without a direct seam.
+M._resolve_one = _resolve_one
 
 return M
