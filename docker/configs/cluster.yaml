@@ -1,4 +1,8 @@
 ---
+iproto:
+  advertise:
+    peer:
+      login: replicator
 credentials:
   users:
     webui_peer:
@@ -25,21 +29,26 @@ credentials:
       password: viewer-dev-password
       roles:
       - public
-log:
-  to: file
-  file: var/log/tarantool.log
-  level: 5
 replication:
   synchro_quorum: N/2 + 1
   failover: off
   synchro_timeout: 3
-roles:
-- webui
+log:
+  level: 5
+  to: file
+  file: var/log/tarantool.log
 groups:
   default:
     replicasets:
       rs-1:
         instances:
+          tt-3:
+            iproto:
+              listen:
+              - uri: 0.0.0.0:3301
+              advertise:
+                peer:
+                  uri: tt-3:3301          
           tt-2:
             iproto:
               listen:
@@ -47,26 +56,19 @@ groups:
               advertise:
                 peer:
                   uri: tt-2:3301
-          tt-3:
-            iproto:
-              listen:
-              - uri: 0.0.0.0:3301
-              advertise:
-                peer:
-                  uri: tt-3:3301
           tt-1:
-            database:
-              mode: rw
             iproto:
               listen:
               - uri: 0.0.0.0:3301
               advertise:
                 peer:
                   uri: tt-1:3301
+            database:
+              mode: rw
 roles_cfg:
   webui:
-    log_level: debug
     graphiql_enabled: true
+    log_level: debug
     failover:
       keepalive_interval: 1
       agent: true
@@ -89,12 +91,11 @@ roles_cfg:
       enabled: true
       name: dev-loopback
       url: http://127.0.0.1:1/sink
-iproto:
-  advertise:
-    peer:
-      login: replicator
+roles:
+- webui
 config:
   etcd:
     endpoints:
     - http://etcd:2379
     prefix: /tarantool/webui
+...
