@@ -42,6 +42,7 @@
       "vshard": "Vshard",
       "metrics": "Метрики",
       "snapshots": "Снапшоты",
+      "logs": "Логи",
       "console": "Консоль",
       "audit": "Аудит"
     }

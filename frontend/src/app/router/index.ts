@@ -37,6 +37,7 @@ import { FAILOVER_ROUTE } from '@/pages/failover';
 import { VSHARD_ROUTE } from '@/pages/vshard';
 import { METRICS_ROUTE } from '@/pages/metrics';
 import { SNAPSHOTS_ROUTE } from '@/pages/snapshots';
+import { LOGS_ROUTE } from '@/pages/logs';
 import { CONSOLE_ROUTE } from '@/pages/console';
 import { BOOTSTRAP_ROUTE } from '@/pages/bootstrap';
 import { WEBHOOKS_ROUTE } from '@/pages/webhooks-settings';
@@ -49,6 +50,7 @@ const ROUTE_ROLES: Record<string, Role> = {
   users:    'admin',
   console:  'superuser',
   snapshots: 'admin',
+  logs:     'admin',
   failover: 'admin',
   vshard:   'admin',
 };
@@ -74,6 +76,7 @@ const routes: RouteRecordRaw[] = [
   VSHARD_ROUTE,
   METRICS_ROUTE,
   SNAPSHOTS_ROUTE,
+  LOGS_ROUTE,
   CONSOLE_ROUTE,
   BOOTSTRAP_ROUTE,
   WEBHOOKS_ROUTE,

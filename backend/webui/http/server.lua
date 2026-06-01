@@ -122,6 +122,14 @@ local function register_builtin_routes(httpd, role_opts)
                 { auth = 'admin' }))
     end
 
+    -- Tarantool log tail.
+    local logs_ok, logs_mod = pcall(require, 'webui.api.logs')
+    if logs_ok then
+        httpd:route({ path = '/api/logs', method = 'GET' },
+            middleware.wrap('logs_tail', logs_mod.handler_tail,
+                { auth = 'admin' }))
+    end
+
     -- Snapshots (Task 43).
     local snap_ok, snapshots = pcall(require, 'webui.api.snapshots')
     if snap_ok then

@@ -25,6 +25,10 @@ credentials:
       password: viewer-dev-password
       roles:
       - public
+log:
+  to: file
+  file: var/log/tarantool.log
+  level: 5
 replication:
   synchro_quorum: N/2 + 1
   failover: off
