@@ -68,7 +68,11 @@ function M.handler(req)
             -- `box.execute` returns (result, err). Multi-return
             -- so the SPA renders SQL errors (Scanning is not
             -- allowed, syntax errors, etc.) instead of an empty
-            -- `null` result panel.
+            -- `null` result panel. We raise with level 0 so the
+            -- pcall below catches the SQL error message verbatim,
+            -- and the handler reports `ok: false, error: "..."`
+            -- with status 200 — the SPA's existing `if !res.ok`
+            -- branch then renders the red banner.
             local res, sql_err = box.execute(parsed.code)
             if sql_err ~= nil then
                 error(tostring(sql_err), 0)
@@ -122,7 +126,13 @@ function M.handler(req)
     })
 
     return {
-        status = ok_eval and 200 or 500,
+        -- Always 200; eval is allowed to fail at the snippet
+        -- level (syntax error, SQL parse error, runtime raise).
+        -- The SPA reads `ok` from the body and renders an error
+        -- banner — that is far more useful than a generic 500
+        -- that the rest client would turn into an opaque
+        -- RestApiError without the SQL message.
+        status = 200,
         headers = { ['content-type'] = 'application/json' },
         body = json.encode({
             ok = ok_eval, result = out, error = err,
