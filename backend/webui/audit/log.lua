@@ -102,6 +102,15 @@ function M.record_local(entry)
         id = tuple.id, action = entry.action, user = entry.user,
         prev_hash = prev_hash, current_hash = current_hash,
     })
+
+    -- Phase 4 Task 4.5 — optional side-channel forwarding to
+    -- syslog / file. Best-effort: a failing forwarder logs a
+    -- WARN but does not affect the primary insert. Lazy require
+    -- so unit tests that never touch forwarders avoid loading
+    -- the socket / fio modules.
+    local ok_fwd, fwd_mod = pcall(require, 'webui.audit.forwarder')
+    if ok_fwd then pcall(fwd_mod.handle, tuple) end
+
     return tuple
 end
 

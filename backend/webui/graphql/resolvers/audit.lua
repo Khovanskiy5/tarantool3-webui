@@ -76,13 +76,19 @@ function M.collect_page(iter, filter, limit, after)
     return out, has_more, next_cursor
 end
 
-local function encode_entry(tuple)
+-- Project an audit tuple into the JSON-friendly export shape.
+-- `opts.include_chain` (default false) attaches the hash-chain
+-- fields. The GraphQL `entries` field stays slim for the SPA;
+-- exports flip the flag so an offline verifier can recompute
+-- the chain from the file alone.
+local function encode_entry(tuple, opts)
+    opts = opts or {}
     local payload
     if tuple.payload ~= nil then
         local ok, encoded = pcall(json.encode, tuple.payload)
         payload = ok and encoded or nil
     end
-    return {
+    local row = {
         id         = tuple.id,
         ts         = tuple.ts,
         user       = tuple.user,
@@ -91,6 +97,12 @@ local function encode_entry(tuple)
         request_id = tuple.request_id,
         payload    = payload,
     }
+    if opts.include_chain then
+        row.prev_hash    = tuple.prev_hash
+        row.current_hash = tuple.current_hash
+        row.chain_seal   = tuple.chain_seal == true
+    end
+    return row
 end
 
 function M.query_audit(root, args)
@@ -125,14 +137,14 @@ function M.mutation_export_audit(root, args)
     if space == nil then
         return { format = 'json', body = '[]', record_count = 0 }
     end
+    -- Walk forward (id ascending) so an offline verifier can
+    -- recompute the chain directly. The previous REQ iterator
+    -- gave newest-first ordering — fine for UI scrolling, but
+    -- wrong for chain verification.
     local entries = {}
-    local gen, param, ctrl = space:pairs({}, { iterator = 'REQ' })
-    while true do
-        local k, tuple = gen(param, ctrl)
-        if tuple == nil then break end
-        ctrl = k
+    for _, tuple in space.index.primary:pairs({}, { iterator = 'GE' }) do
         if M.matches_filter(tuple, args.filter) then
-            table.insert(entries, encode_entry(tuple))
+            table.insert(entries, encode_entry(tuple, { include_chain = true }))
         end
     end
     return {

@@ -568,6 +568,16 @@ function M.start(opts)
         STATE.audit_retention = retention
     end
 
+    -- Audit forwarders (Phase 4 Task 4.5). Opt-in side channels
+    -- (syslog / file). Configured from
+    -- `roles_cfg.webui.audit.forwarders`; absent → no-op.
+    local fwd_ok, fwd_mod = pcall(require, 'webui.audit.forwarder')
+    if fwd_ok then
+        local audit_opts = (opts.audit and type(opts.audit) == 'table')
+            and opts.audit or {}
+        pcall(fwd_mod.configure, { forwarders = audit_opts.forwarders })
+    end
+
     -- Failover-commands journal retention fiber (Task 5.13). Same
     -- shape as audit retention: leader-only, time-based prune,
     -- per-tick budget. Default 30 days. Roll forward gracefully
