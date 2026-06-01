@@ -61,6 +61,12 @@ function M.handler(req)
             'snippet exceeds 4 KiB', req.request_id)
     end
 
+    -- Optional: temporarily allow full-table scans for THIS sql
+    -- snippet only. The /sql workbench has the same toggle behind
+    -- its "Re-run with SEQSCAN" banner; mirror the contract here
+    -- so /console covers the same recovery flow.
+    local seqscan_allowed = parsed.seqscan_allowed == true
+
     local started = clock.monotonic()
     local out, err
     local function run()
@@ -73,7 +79,25 @@ function M.handler(req)
             -- and the handler reports `ok: false, error: "..."`
             -- with status 200 — the SPA's existing `if !res.ok`
             -- branch then renders the red banner.
+            local prev_seq
+            local settings = (rawget(_G, 'box') and box.space
+                and box.space._session_settings) or nil
+            if settings ~= nil and seqscan_allowed then
+                local ok_get, tuple = pcall(function()
+                    return settings:get('sql_seq_scan')
+                end)
+                if ok_get and tuple ~= nil then prev_seq = tuple[2] end
+                pcall(function()
+                    settings:update('sql_seq_scan', { { '=', 'value', true } })
+                end)
+            end
             local res, sql_err = box.execute(parsed.code)
+            if settings ~= nil and seqscan_allowed and prev_seq ~= nil then
+                pcall(function()
+                    settings:update('sql_seq_scan',
+                        { { '=', 'value', prev_seq } })
+                end)
+            end
             if sql_err ~= nil then
                 error(tostring(sql_err), 0)
             end

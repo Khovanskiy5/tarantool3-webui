@@ -31,6 +31,7 @@ import Tab from 'primevue/tab';
 import TabPanels from 'primevue/tabpanels';
 import TabPanel from 'primevue/tabpanel';
 import Tag from 'primevue/tag';
+import ToggleSwitch from 'primevue/toggleswitch';
 import Dialog from 'primevue/dialog';
 import InputText from 'primevue/inputtext';
 import Checkbox from 'primevue/checkbox';
@@ -93,6 +94,11 @@ const error = ref<string | null>(null);
 const running = ref(false);
 const explainRunning = ref(false);
 const seqscanRequired = ref(false);
+// Sticky "allow full scan" toggle — when on, every Run is sent
+// with seqscan_allowed=true so the operator does not have to
+// click the banner button on every iteration. Disabled by default
+// so a casual SELECT cannot accidentally pin the tx-thread.
+const allowFullScan = ref(false);
 // PrimeVue 4 Tabs addresses panels by `value` (string-or-number).
 // We use the statement index converted to string so it matches the
 // `:value="idx"` binding on each Tab without TS friction.
@@ -185,10 +191,14 @@ async function runQuery(opts: { seqscanAllowed?: boolean } = {}) {
   running.value = true;
   error.value = null;
   seqscanRequired.value = false;
+  // Either the sticky toggle OR the one-off banner button arms
+  // seqscan; either way the backend restores `sql_seq_scan` after
+  // the call.
+  const seqscan = opts.seqscanAllowed === true || allowFullScan.value;
   try {
     const body = await restClient.post<SqlResponse>('/api/sql', {
       statement: currentSql.value,
-      seqscan_allowed: opts.seqscanAllowed === true,
+      seqscan_allowed: seqscan,
     });
     result.value = body;
     latency.value = body.latency_ms ?? null;
@@ -495,6 +505,10 @@ function renderCell(v: unknown): string {
           text
           @click="openSaveDialog"
         />
+        <label class="webui-sql__full-scan">
+          <ToggleSwitch v-model="allowFullScan" />
+          <span>allow full scan</span>
+        </label>
         <span v-if="latency !== null" class="webui-sql__latency">
           {{ latency.toFixed(1) }} ms
         </span>
@@ -718,6 +732,16 @@ function renderCell(v: unknown): string {
   padding-left: 0.5rem;
   border-left: 1px solid var(--webui-border);
   margin-left: 0.25rem;
+}
+.webui-sql__full-scan {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--webui-text-muted);
+  margin-left: 0.25rem;
+  padding-left: 0.5rem;
+  border-left: 1px solid var(--webui-border);
 }
 /* New PrimeVue 4 Tabs uses its own --p-tabs-* token family; the
  * Aura dark scheme leaves those at light defaults, so without a
