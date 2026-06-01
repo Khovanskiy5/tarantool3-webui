@@ -5,9 +5,21 @@ import DataTable from 'primevue/datatable';
 import Column from 'primevue/column';
 import InputText from 'primevue/inputtext';
 import Button from 'primevue/button';
+import Tag from 'primevue/tag';
 
 import { useAuditStore } from '@/entities/audit-entry';
 import { downloadExportedAudit } from '@/features/audit-export';
+import { getClient } from '@/shared/api/graphql';
+
+interface ChainVerifyResult {
+  ok: boolean;
+  scanned: number;
+  seals: number;
+  broken_at?: number | null;
+  expected_hash?: string | null;
+  actual_hash?: string | null;
+  reason?: string | null;
+}
 
 const store = useAuditStore();
 const { entries, pending, error, hasMore } = storeToRefs(store);
@@ -80,6 +92,48 @@ const setPreset = (preset: ActionPreset) => {
 
 const fmtTs = (us: number) => new Date(Math.floor(us / 1000)).toISOString();
 
+// ── audit chain verifier (Phase 4 Task 4.3) ────────────────────────
+//
+// Operator-triggered: clicking "Verify chain" walks the
+// `_webui_audit` chain on the local instance and returns a
+// success/failure result. A failed chain renders a destructive
+// red Tag — that's the cue to investigate (corruption was
+// inserted between the chain's last seal and the first broken
+// row).
+
+import { ref } from 'vue';
+
+const VERIFY_Q = /* GraphQL */ `
+  query AuditChainVerify {
+    verifyAuditChain {
+      ok scanned seals broken_at expected_hash actual_hash reason
+    }
+  }
+`;
+
+const verifying = ref(false);
+const verifyResult = ref<ChainVerifyResult | null>(null);
+
+async function verifyChain() {
+  verifying.value = true;
+  try {
+    const res = await getClient()
+      .query<{ verifyAuditChain: ChainVerifyResult }>(
+        VERIFY_Q, {}, { requestPolicy: 'network-only' })
+      .toPromise();
+    if (res.error) {
+      verifyResult.value = {
+        ok: false, scanned: 0, seals: 0,
+        reason: res.error.message,
+      };
+      return;
+    }
+    verifyResult.value = res.data?.verifyAuditChain ?? null;
+  } finally {
+    verifying.value = false;
+  }
+}
+
 onMounted(() => { store.load({}); });
 </script>
 
@@ -87,12 +141,31 @@ onMounted(() => { store.load({}); });
   <section class="webui-audit">
     <header class="webui-audit__head">
       <h1>Audit log</h1>
-      <Button
-        size="small"
-        icon="pi pi-download"
-        label="Export JSON"
-        @click="exportNow"
-      />
+      <div class="webui-audit__head-actions">
+        <Tag
+          v-if="verifyResult"
+          :severity="verifyResult.ok ? 'success' : 'danger'"
+          :value="verifyResult.ok
+            ? `chain OK — ${verifyResult.scanned} rows, ${verifyResult.seals} seal(s)`
+            : `chain BROKEN — ${verifyResult.reason ?? 'see broken_at'}`"
+          class="webui-audit__chain-badge"
+        />
+        <Button
+          size="small"
+          icon="pi pi-shield"
+          label="Verify chain"
+          severity="info"
+          text
+          :loading="verifying"
+          @click="verifyChain"
+        />
+        <Button
+          size="small"
+          icon="pi pi-download"
+          label="Export JSON"
+          @click="exportNow"
+        />
+      </div>
     </header>
 
     <div class="webui-audit__presets">

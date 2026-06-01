@@ -230,6 +230,105 @@ M.migrations = {
             })
         end
     end,
+
+    -- Tamper-evident audit hash chain (Phase 4 Task 4.1).
+    -- Adds prev_hash / current_hash / chain_seal to the
+    -- `_webui_audit` format and back-fills the chain over the
+    -- existing tail in id-order. After this step every row links
+    -- to the canonical hash of the previous one; verifier walks
+    -- the chain in either direction.
+    [8] = function(box)
+        local audit = box.space._webui_audit
+        if audit == nil then
+            error('migration 8: _webui_audit space is missing', 0)
+        end
+        -- Extend format if not already at the new shape. format()
+        -- on an existing space rewrites the layout; we only
+        -- rewrite when the new fields are absent so a re-run is
+        -- idempotent.
+        local current_format = audit:format()
+        local has_prev_hash = false
+        for _, f in ipairs(current_format) do
+            if f.name == 'prev_hash' then has_prev_hash = true; break end
+        end
+        if not has_prev_hash then
+            local new_format = {}
+            for _, f in ipairs(current_format) do table.insert(new_format, f) end
+            table.insert(new_format, { name = 'prev_hash',
+                type = 'string',  is_nullable = true })
+            table.insert(new_format, { name = 'current_hash',
+                type = 'string',  is_nullable = true })
+            table.insert(new_format, { name = 'chain_seal',
+                type = 'boolean', is_nullable = true })
+            audit:format(new_format)
+        end
+        -- Backfill the chain over the existing tail. We re-derive
+        -- the hash for every row in id-order. Skipping the
+        -- backfill is technically rolling-safe (new code tolerates
+        -- nil hashes, verifier treats the first non-nil row as
+        -- the chain root), but compliance frameworks prefer a
+        -- fully-sealed history from day one.
+        local chain  = require('webui.audit.chain')
+        local prev   = nil
+        local count  = 0
+        for _, tuple in audit:pairs() do
+            -- Skip rows that already have a current_hash (re-run
+            -- after a partial migration), but use them as the
+            -- previous link for the next backfill.
+            local existing = tuple.current_hash
+            if existing ~= nil and existing ~= '' then
+                prev = existing
+            else
+                local digest = chain.row_hash(prev, tuple)
+                audit:update({ tuple.id }, {
+                    { '=', 'prev_hash',    prev or box.NULL },
+                    { '=', 'current_hash', digest },
+                })
+                prev = digest
+                count = count + 1
+            end
+        end
+        require('log').info(
+            string.format('migration 8: hash chain backfilled for %d audit row(s)',
+                count))
+    end,
+
+    -- Re-backfill the audit chain with the stable canonical
+    -- form (Phase 4 Task 4.1 follow-up). Step 8 was correct in
+    -- shape but used `json.encode` directly, whose key order is
+    -- implementation-defined in LuaJIT and therefore
+    -- non-reproducible. The verifier could not match recorded
+    -- hashes to recomputed ones, so the chain looked broken on
+    -- every cluster that ran step 8 against existing data.
+    --
+    -- This step forcibly recomputes prev_hash / current_hash for
+    -- every row in id-order using the sorted-keys serializer
+    -- from `webui.audit.chain`. Idempotent: a fresh install has
+    -- no rows yet and skips immediately.
+    [9] = function(box)
+        local audit = box.space._webui_audit
+        if audit == nil then
+            error('migration 9: _webui_audit space is missing', 0)
+        end
+        local chain = require('webui.audit.chain')
+        local prev = nil
+        local count = 0
+        for _, tuple in audit:pairs() do
+            -- A pre-existing chain_seal still resets the link —
+            -- retention may have already sealed mid-history.
+            local sealed = tuple.chain_seal == true
+            local digest = chain.row_hash(sealed and nil or prev, tuple)
+            audit:update({ tuple.id }, {
+                { '=', 'prev_hash',    (sealed and box.NULL) or (prev or box.NULL) },
+                { '=', 'current_hash', digest },
+            })
+            prev = digest
+            count = count + 1
+        end
+        require('log').info(
+            string.format('migration 9: hash chain re-backfilled for %d audit row(s)',
+                count))
+    end,
 }
 
 -- ─────────────────────────────────────────────────────────────────────

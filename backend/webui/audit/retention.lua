@@ -53,6 +53,21 @@ local function leader_only()
 end
 
 -- Sweep one batch. Returns (deleted_count, more_to_do_flag).
+--
+-- Phase 4 Task 4.1c: after deletion, the oldest surviving row's
+-- `prev_hash` points at a tuple that is no longer in storage —
+-- a naive verifier would flag this as corruption. We resolve it
+-- by SEALING the chain at the new boundary:
+--   * the survivor's `chain_seal` is flipped to `true`
+--   * its `prev_hash` is cleared to `box.NULL`
+--   * an audit row `retention.chain_sealed` is appended so the
+--     event is itself part of the chain (the next link uses the
+--     survivor's existing `current_hash`).
+--
+-- The seal is the verifier's contract: a row with `chain_seal =
+-- true` is a legitimate restart point. Distinguishing seal from
+-- corruption is mandatory because retention runs forever and
+-- otherwise every cluster would alarm hourly.
 function M.sweep_once(opts)
     opts = opts or {}
     local space = storage.audit()
@@ -63,15 +78,58 @@ function M.sweep_once(opts)
     if idx == nil then return 0, false end
     local budget = opts.budget or M.MAX_DELETIONS_PER_TICK
     local deleted = 0
+    local deleted_max_id = 0
     for _, tuple in idx:pairs({}, { iterator = 'GE' }) do
         if tuple.ts >= horizon then break end
+        if tuple.id > deleted_max_id then deleted_max_id = tuple.id end
         space:delete({ tuple.id })
         deleted = deleted + 1
         if deleted >= budget then
+            -- Seal eagerly here too — partial sweep, but the
+            -- survivor we just exposed is still the new oldest.
+            M._seal_after_delete(space, deleted, deleted_max_id)
             return deleted, true
         end
     end
+    if deleted > 0 then
+        M._seal_after_delete(space, deleted, deleted_max_id)
+    end
     return deleted, false
+end
+
+-- Seal the chain at the new oldest row. Idempotent — re-sealing
+-- a row that is already sealed is a no-op (the update writes the
+-- same values).
+function M._seal_after_delete(space, deleted_count, deleted_max_id)
+    local oldest
+    pcall(function() oldest = space.index.primary:min() end)
+    if oldest == nil then return end
+    -- Already sealed by a prior sweep? Skip the update and the
+    -- audit row to avoid spamming the chain.
+    local was_sealed = oldest.chain_seal == true
+        and (oldest.prev_hash == nil or oldest.prev_hash == '')
+    if was_sealed then return end
+    pcall(function()
+        space:update({ oldest.id }, {
+            { '=', 'prev_hash',  box.NULL },
+            { '=', 'chain_seal', true },
+        })
+    end)
+    -- Self-document the seal as a regular audit row so the event
+    -- is searchable and itself part of the chain.
+    pcall(function()
+        local log = require('webui.audit.log')
+        log.record_local({
+            user   = 'system:retention',
+            action = 'retention.chain_sealed',
+            scope  = 'audit',
+            payload = {
+                deleted_count       = deleted_count,
+                deleted_max_id      = deleted_max_id,
+                new_chain_start_id  = oldest.id,
+            },
+        })
+    end)
 end
 
 local function loop()

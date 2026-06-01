@@ -65,7 +65,14 @@ function M.handler(req)
     local out, err
     local function run()
         if parsed.lang == 'sql' then
-            local res = box.execute(parsed.code)
+            -- `box.execute` returns (result, err). Multi-return
+            -- so the SPA renders SQL errors (Scanning is not
+            -- allowed, syntax errors, etc.) instead of an empty
+            -- `null` result panel.
+            local res, sql_err = box.execute(parsed.code)
+            if sql_err ~= nil then
+                error(tostring(sql_err), 0)
+            end
             return res
         end
         -- Default: Lua. We compile the snippet in a sandboxed env

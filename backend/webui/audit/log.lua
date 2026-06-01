@@ -34,6 +34,13 @@ end
 -- Direct insert into the local `_webui_audit` space. Only valid on
 -- the leader; followers raise READONLY. Exposed for the net.box
 -- shim in `init.lua` so a follower can hop here over the peer pool.
+--
+-- Hash chain (Phase 4 Task 4.1): each insert reads the last row
+-- via the by_ts index (descending → first()), computes
+-- `current_hash = sha256(prev || canonical(row))`, and stores
+-- both fields. The space is sync + leader-only, and the
+-- TX-thread serialises concurrent fibers, so the chain stays
+-- consistent without any extra locking.
 function M.record_local(entry)
     checks({
         user       = '?string',
@@ -46,18 +53,54 @@ function M.record_local(entry)
     if space == nil then
         return nil, 'audit storage is not bootstrapped'
     end
-    -- box.NULL drives the primary key's sequence.
+
+    -- Resolve the previous link. `:max()` on the primary index is
+    -- O(log N) on tree-indexed memtx spaces. We read once per
+    -- write — the cost is dwarfed by the synchronous quorum
+    -- round-trip that follows.
+    local chain = require('webui.audit.chain')
+    local last = nil
+    pcall(function() last = space.index.primary:max() end)
+    local prev_hash = chain.next_link(last)
+
+    local ts = now()
+    -- Compute current_hash from the projection BEFORE the
+    -- insert — the projection includes `id`, which we don't know
+    -- yet. We derive the next id as `max + 1`; this is safe
+    -- because the TX thread serialises us, so nobody can move
+    -- the max between this read and the insert below. Sequence-
+    -- backed primary indexes accept an explicit id and update
+    -- their internal counter accordingly (Tarantool 3.x).
+    local max_id = 0
+    if last ~= nil then max_id = last.id end
+    local next_id = max_id + 1
+
+    local hash_input = {
+        id         = next_id,
+        ts         = ts,
+        user       = entry.user,
+        action     = entry.action,
+        scope      = entry.scope,
+        payload    = entry.payload,
+        request_id = entry.request_id,
+    }
+    local current_hash = chain.row_hash(prev_hash, hash_input)
+
     local tuple = space:insert({
-        box.NULL,
-        now(),
+        next_id,
+        ts,
         entry.user,
         entry.action,
         entry.scope,
         entry.payload,
         entry.request_id,
+        prev_hash or box.NULL,
+        current_hash,
+        false,           -- chain_seal — only the retention sweeper sets true
     })
     logger.debug('audit entry recorded', {
         id = tuple.id, action = entry.action, user = entry.user,
+        prev_hash = prev_hash, current_hash = current_hash,
     })
     return tuple
 end

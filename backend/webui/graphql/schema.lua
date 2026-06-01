@@ -508,6 +508,46 @@ local Query = types.object {
             },
             resolve = audit_resolver.query_audit,
         },
+        -- Phase 4 Task 4.3 — audit hash-chain verifier.
+        verifyAuditChain = {
+            kind = types.object({
+                name = 'AuditChainVerifyResult',
+                fields = {
+                    ok            = types.boolean.nonNull,
+                    scanned       = types.long.nonNull,
+                    seals         = types.long.nonNull,
+                    broken_at     = types.long,
+                    expected_hash = types.string,
+                    actual_hash   = types.string,
+                    reason        = types.string,
+                },
+            }).nonNull,
+            arguments = {
+                from_id = types.long,
+                to_id   = types.long,
+            },
+            description = 'Walk the `_webui_audit` hash chain and ' ..
+                'return the first broken row (or ok=true). ' ..
+                'chain_seal rows are treated as legitimate restarts ' ..
+                '(retention sweeps). Admin only.',
+            resolve = function(root, args)
+                local rbac = require('webui.auth.rbac')
+                if not rbac.allowed((root and root.roles) or {}, 'admin') then
+                    error('FORBIDDEN: verifyAuditChain requires admin')
+                end
+                local res = require('webui.audit.verifier').verify({
+                    from_id = args.from_id,
+                    to_id   = args.to_id,
+                })
+                -- The verifier returns `seals = nil` on certain
+                -- error paths (no storage); GraphQL types insist
+                -- on non-null. Default to 0 — the operator sees
+                -- the descriptive `reason` field anyway.
+                res.scanned = res.scanned or 0
+                res.seals   = res.seals   or 0
+                return res
+            end,
+        },
         bootstrapStatus = {
             kind = types.object({
                 name = 'BootstrapStatus',

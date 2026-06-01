@@ -108,6 +108,7 @@ M.GRAPHQL_FIELD = {
     savedQueries   = 'operator',
     users        = 'admin',
     audit        = 'admin',
+    verifyAuditChain = 'admin',
     issues       = 'viewer',
     suggestions  = 'viewer',
     metrics      = 'viewer',

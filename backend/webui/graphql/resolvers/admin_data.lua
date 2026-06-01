@@ -277,6 +277,24 @@ function M.query_tuples(root, args)
         idx, covered = de_filter.pick_index(space, raw_filter)
     end
     if idx == nil then idx, covered = space.index[0], 0 end
+    -- Some space engines (blackhole, sysview shims around empty
+    -- system tables) ship without any usable index — `space.index`
+    -- is an empty table and `space.index[0]` is nil. We surface
+    -- an empty connection instead of crashing the resolver so the
+    -- UI can still render the table header.
+    if idx == nil then
+        logger.info('tuples scan skipped (no index)', {
+            space = space_name,
+        })
+        return {
+            items         = {},
+            next_cursor   = nil,
+            total         = 0,
+            partial_scan  = false,
+            truncated     = false,
+            index_used    = nil,
+        }
+    end
 
     local key, iter = de_filter.build_key(idx, covered, raw_filter)
     local residual  = de_filter.residual(raw_filter, idx, covered)

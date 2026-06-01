@@ -79,7 +79,19 @@ M.NAMES = {
 --       Task 3.4). Per-user snippets with optional `shared = true`
 --       visibility. Replicated + sync so a saved query the
 --       operator wrote on leader survives an immediate failover.
-M.CURRENT_SCHEMA_VERSION = 7
+--   8 — `_webui_audit` extended with prev_hash / current_hash /
+--       chain_seal (Phase 4 Task 4.1). Append-only hash chain
+--       lets a verifier prove the log was not tampered with
+--       after the fact. Backfill computes the chain over the
+--       existing tail by id-order; rolling-safe because the new
+--       fields are nullable.
+--   9 — Re-backfill the audit chain with the stable sorted-keys
+--       serializer. Step 8 used `json.encode` which does not
+--       guarantee key order in LuaJIT, so its hashes could not
+--       be reproduced by the verifier. This step recomputes
+--       every row's prev_hash / current_hash from scratch in
+--       id-order using the new canonical form.
+M.CURRENT_SCHEMA_VERSION = 9
 
 local SCHEMA_VERSION_KEY = 'schema_version'
 
@@ -173,13 +185,22 @@ local function ensure_audit()
         -- once per request and is dwarfed by the request itself.
         is_sync = true,
         format = {
-            { name = 'id',          type = 'unsigned' },
-            { name = 'ts',          type = 'unsigned' },
-            { name = 'user',        type = 'string',  is_nullable = true },
-            { name = 'action',      type = 'string' },
-            { name = 'scope',       type = 'string',  is_nullable = true },
-            { name = 'payload',     type = 'any',     is_nullable = true },
-            { name = 'request_id',  type = 'string',  is_nullable = true },
+            { name = 'id',           type = 'unsigned' },
+            { name = 'ts',           type = 'unsigned' },
+            { name = 'user',         type = 'string',  is_nullable = true },
+            { name = 'action',       type = 'string' },
+            { name = 'scope',        type = 'string',  is_nullable = true },
+            { name = 'payload',      type = 'any',     is_nullable = true },
+            { name = 'request_id',   type = 'string',  is_nullable = true },
+            -- Phase 4 Task 4.1 — tamper-evident hash chain. Every
+            -- row stores the SHA-256 of the previous row's
+            -- canonical form (`prev_hash`) and its own
+            -- (`current_hash`). The chain seal flag marks rows
+            -- where retention sweeps cut history — verifier treats
+            -- those as legitimate restarts, not corruption.
+            { name = 'prev_hash',    type = 'string',  is_nullable = true },
+            { name = 'current_hash', type = 'string',  is_nullable = true },
+            { name = 'chain_seal',   type = 'boolean', is_nullable = true },
         },
     })
     box.space[M.NAMES.AUDIT]:create_index('primary', {
