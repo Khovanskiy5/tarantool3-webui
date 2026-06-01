@@ -131,6 +131,9 @@ local function register_builtin_routes(httpd, role_opts)
         httpd:route({ path = '/api/snapshots',      method = 'GET' },
             middleware.wrap('snapshot_list', snapshots.handler_list,
                 { auth = 'admin' }))
+        httpd:route({ path = '/api/snapshots/download', method = 'GET' },
+            middleware.wrap('snapshot_download', snapshots.handler_download,
+                { auth = 'admin' }))
     end
 
     -- Diagnostic bundle (Task 55).
