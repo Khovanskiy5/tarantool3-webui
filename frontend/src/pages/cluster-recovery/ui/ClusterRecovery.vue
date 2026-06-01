@@ -1140,10 +1140,28 @@ async function quarantineWal(row: WalRow) {
 .webui-recovery__last h2 { margin: 0 0 0.5rem 0; font-size: 1rem; }
 .webui-recovery__row {
   display: grid;
-  grid-template-columns: 10rem 1fr;
+  grid-template-columns: 10rem 1fr auto;
   gap: 0.5rem;
   align-items: center;
-  margin-bottom: 0.5rem;
+}
+
+/* Recovery dialogs were a soup of stacked Message banners, rows
+   and tables with ad-hoc margins. Stack every top-level child of
+   the dialog body with a uniform gap so banners breathe, rows
+   line up, and the destructive footer reads as a separate region.
+   Targeting `.p-dialog-content` via :deep — that is the PrimeVue
+   container that wraps the dialog body. */
+:deep(.p-dialog-content) {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+/* Visual divider between the body and the action buttons so the
+   destructive footer stops looking glued to the form fields. */
+:deep(.p-dialog-footer) {
+  border-top: 1px solid var(--webui-border);
+  padding-top: 0.75rem;
+  margin-top: 0.25rem;
 }
 .webui-recovery__row label { color: var(--webui-text-muted); font-size: 0.85rem; }
 .webui-recovery__confirm {
@@ -1172,7 +1190,6 @@ async function quarantineWal(row: WalRow) {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.85rem;
-  margin-bottom: 0.5rem;
 }
 .webui-recovery__topo th,
 .webui-recovery__topo td {
@@ -1192,10 +1209,12 @@ async function quarantineWal(row: WalRow) {
   white-space: pre-wrap;
   max-height: 24rem;
   overflow: auto;
-  margin-top: 0.5rem;
+  margin: 0;
 }
 .webui-recovery__commands-wrap {
-  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
 }
 .webui-recovery__commands-head {
   display: flex;
