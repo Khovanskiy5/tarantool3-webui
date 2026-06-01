@@ -114,6 +114,7 @@ desktop.ini
 # ──────────────────────────────────────────────────────────────
 cartridge-*/
 tarantool-*/
+primevue/
 
 # ──────────────────────────────────────────────────────────────
 # Local tooling state (not part of the project)

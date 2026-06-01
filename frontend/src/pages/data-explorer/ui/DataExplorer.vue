@@ -487,6 +487,7 @@ watch(includeSystem, () => {
       <InputText
         v-model="sidebarFilter"
         placeholder="filter…"
+        size="small"
         class="webui-dx__sidebar-filter"
       />
       <ul v-if="!loadingSpaces" class="webui-dx__list">
@@ -571,7 +572,12 @@ watch(includeSystem, () => {
 
       <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 
-      <!-- Filter bar -->
+      <!-- Filter bar — every control rendered at PrimeVue's
+           `small` size so the dense toolbar reads as one
+           horizontal band instead of a mix of 32 / 40px
+           controls. The Add button used to be the only `small`
+           one which made it visibly squat next to the medium
+           Selects / InputText. -->
       <div v-if="selectedSpace" class="webui-dx__filters">
         <Select
           v-model="newFilterField"
@@ -579,6 +585,7 @@ watch(includeSystem, () => {
           option-label="label"
           option-value="value"
           placeholder="field"
+          size="small"
           class="webui-dx__filter-field"
         />
         <Select
@@ -586,11 +593,13 @@ watch(includeSystem, () => {
           :options="OP_OPTIONS"
           option-label="label"
           option-value="value"
+          size="small"
           class="webui-dx__filter-op"
         />
         <InputText
           v-model="newFilterValue"
           placeholder="value"
+          size="small"
           class="webui-dx__filter-value"
           @keyup.enter="addFilterChip"
         />
