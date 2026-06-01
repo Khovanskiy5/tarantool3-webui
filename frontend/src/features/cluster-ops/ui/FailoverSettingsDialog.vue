@@ -37,6 +37,14 @@ const props = defineProps<{
   initialMode: string;
   /** Server count for the N/2+1 quorum hint. */
   instanceCount: number;
+  /**
+   * Whether the open-source supervised agent is currently enabled.
+   * Used to seed the "Enable supervised agent on top of failover:
+   * off" checkbox when the dialog opens — otherwise an operator
+   * who already has the agent running would see an unchecked box
+   * and assume it's disabled.
+   */
+  initialAgentEnabled?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -106,7 +114,14 @@ watch(
         ? (props.initialMode as Mode)
         : 'off';
       mode.value = m;
-      agentEnabled.value = m === 'supervised';
+      // Reflect the live agent state. The agent is independent of
+      // the raft `mode` — it can run on top of `off`. The dialog
+      // previously only set the checkbox when mode === supervised,
+      // so an operator with `mode=off + agent=true` saw the
+      // checkbox unchecked and could accidentally disable the
+      // agent on Apply.
+      agentEnabled.value = props.initialAgentEnabled === true
+        || m === 'supervised';
       synchroQuorum.value = '';
       synchroTimeout.value = '';
       electionTimeout.value = '';

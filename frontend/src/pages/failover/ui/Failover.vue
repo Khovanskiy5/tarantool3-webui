@@ -170,6 +170,15 @@ onMounted(load);
     <header class="webui-failover__head">
       <h1>Failover</h1>
       <Tag :value="`mode: ${mode}`" severity="info" />
+      <!-- The `mode` badge tells you only the Raft setting. When
+           the open-source supervised agent is running on top, that
+           is the actual leadership driver — surface a second badge
+           so the page header reflects reality. -->
+      <Tag
+        v-if="agent !== null && agent.enabled"
+        value="agent: on"
+        severity="success"
+      />
       <button
         v-if="canEditFailover"
         type="button"
@@ -329,6 +338,7 @@ onMounted(load);
       :open="settingsOpen"
       :initial-mode="mode"
       :instance-count="instanceCount"
+      :initial-agent-enabled="agent !== null && agent.enabled"
       @close="settingsOpen = false"
       @applied="load"
     />
