@@ -61,10 +61,15 @@ function M.rebootstrap_one(alias)
     end
     local rpc = find_rpc_module()
     if rpc == nil then return false, 'rpc module unavailable' end
-    local ok_call, res = pcall(rpc.map_eval,
-        'return _G.webui_rebootstrap_remote and ' ..
-        '_G.webui_rebootstrap_remote() or { err = "no rebootstrap rpc" }',
-        {}, { timeout = 5, peers = { alias } })
+    -- Use map_call (per-function privilege) instead of map_eval
+    -- (universe execute) — the peer user `webui_peer` is granted
+    -- EXECUTE on the named function only. map_eval over an
+    -- arbitrary Lua string would require `execute on universe`
+    -- which is intentionally withheld from peer users.
+    local ok_call, res = pcall(rpc.map_call,
+        'webui_rebootstrap_remote', {}, {
+            timeout = 5, peers = { alias },
+        })
     if not ok_call then return false, tostring(res) end
     if type(res) ~= 'table' or res[alias] == nil then
         return false, 'no response from ' .. alias
@@ -75,7 +80,13 @@ function M.rebootstrap_one(alias)
     end
     local v = r.value
     if type(v) == 'table' and v.err ~= nil then
-        return false, tostring(v.err)
+        -- Surface the full message (e.g. "this instance owns the
+        -- synchronous queue; promote another peer first") instead
+        -- of the bare error code — the operator reads it from the
+        -- last-action panel and needs the remediation hint.
+        local msg = v.message and (tostring(v.err) .. ': ' .. tostring(v.message))
+            or tostring(v.err)
+        return false, msg
     end
     return true, 'rebootstrap dispatched on ' .. alias
 end
@@ -162,6 +173,45 @@ function M.resolve(payload, root)
         if type(losers) ~= 'table' or #losers == 0 then
             return { ok = false, action = action,
                 results = {}, error = 'losing_aliases is required' }
+        end
+        -- If any losing peer is the current synchro queue owner,
+        -- rebootstrap_handler will reject it (would lose
+        -- uncommitted synchro writes). Auto-promote the winner
+        -- first to move ownership off the loser. The winner is
+        -- required for this two-step path.
+        local state = require('webui.cluster.state')
+        local snap = state.snapshot() or {}
+        local servers = snap.servers or {}
+        local loser_owns_queue = false
+        for _, peer in ipairs(losers) do
+            local s = servers[peer]
+            local info = s and s.box_info
+            local syn = info and info.synchro
+            if type(syn) == 'table' and type(syn.queue) == 'table'
+                and syn.queue.owner == info.id then
+                loser_owns_queue = true
+            end
+        end
+        if loser_owns_queue then
+            if type(winner) ~= 'string' or winner == '' then
+                return { ok = false, action = action, results = {},
+                    error = 'winner_alias is required to move queue '
+                        .. 'ownership off a losing peer before rebootstrap' }
+            end
+            local pok, pmsg = M.force_promote(winner, payload)
+            table.insert(results, {
+                peer = winner, ok = pok,
+                msg = 'pre-rebootstrap promote: ' .. tostring(pmsg),
+            })
+            if not pok then
+                -- Bail out — rebootstrapping the loser without a
+                -- new queue owner would just hit FORBIDDEN.
+                return { ok = false, action = action, results = results,
+                    error = 'pre-rebootstrap promote failed' }
+            end
+            -- Give the cluster a moment for the new owner to take
+            -- effect before re-trying rebootstrap.
+            require('fiber').sleep(1)
         end
         for _, peer in ipairs(losers) do
             local ok, msg = M.rebootstrap_one(peer)

@@ -116,14 +116,21 @@ function M.recommend(classified)
     local has_split_brain = false
     local has_orphan = false
     local has_queue_owner = false
+    local has_unreachable = false
     for _, e in pairs(classified or {}) do
         if e.role == 'split-brain' then has_split_brain = true end
         if e.role == 'orphan' then has_orphan = true end
         if e.role == 'queue-owner' then has_queue_owner = true end
+        if e.role == 'unreachable' then has_unreachable = true end
     end
     if has_split_brain then return 'split_brain_resolve' end
     if has_orphan then return 'orphan_resolve' end
     if not has_queue_owner then return 'leader_takeover' end
+    -- Quorum is intact (queue owner present) but at least one peer
+    -- is gone — flag the cluster as degraded so the operator sees
+    -- a warning banner instead of the green "healthy" one. No
+    -- automatic dispatch — the wizards remain available manually.
+    if has_unreachable then return 'degraded' end
     return 'no_action_needed'
 end
 

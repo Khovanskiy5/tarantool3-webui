@@ -138,6 +138,11 @@ const healthyPeers = computed(() => {
   );
 });
 
+const unreachablePeers = computed(() => {
+  if (snapshot.value === null) return [] as PeerEntry[];
+  return snapshot.value.peers.filter((p) => p.role === 'unreachable');
+});
+
 function openSplitBrainWizard() {
   sbOpen.value = true;
   sbWinner.value = healthyPeers.value.find((p) => p.queue_owner)?.alias
@@ -371,21 +376,35 @@ async function executeTopology() {
 // ── PITR (point-in-time recovery) wizard — advisory ───────────────
 const pOpen = ref(false);
 const pTargetLsn = ref<number>(0);
+const pCurrentLsn = ref<number>(0);
 const pCommands = ref<string[]>([]);
+const pCopied = ref(false);
 const pBusy = ref(false);
 
 async function openPitrWizard() {
   pOpen.value = true;
   pCommands.value = [];
   pBusy.value = false;
-  // Default target = current LSN minus 100 — gives the operator
-  // a sane starting point that "rewinds" the last few writes.
-  // They edit it to whatever incident point matters.
-  pTargetLsn.value = Math.max(
-    0,
-    ((snapshot.value?.peers ?? []).find((p) => p.queue_owner)?.last_lsn ?? 0)
-      - 100,
-  );
+  // Default target = current LSN minus a sane delta. For a small
+  // dev cluster (current_lsn=97) `-100` would clamp to 0 and the
+  // backend rejects negatives — pick half-step instead so the
+  // default is always a runnable starting point. The operator
+  // edits it to whatever incident point matters.
+  const owner = (snapshot.value?.peers ?? []).find((p) => p.queue_owner);
+  const cur = owner?.last_lsn ?? 0;
+  pCurrentLsn.value = cur;
+  pTargetLsn.value = cur > 200 ? cur - 100 : Math.max(1, Math.floor(cur / 2));
+}
+
+async function copyPitrCommands() {
+  if (pCommands.value.length === 0) return;
+  try {
+    await navigator.clipboard.writeText(pCommands.value.join('\n'));
+    pCopied.value = true;
+    setTimeout(() => { pCopied.value = false; }, 1500);
+  } catch {
+    pCopied.value = false;
+  }
 }
 
 async function generatePitrPlan() {
@@ -539,6 +558,18 @@ async function quarantineWal(row: WalRow) {
       />
     </Message>
 
+    <Message
+      v-else-if="snapshot && snapshot.recommendation === 'degraded'"
+      severity="warn"
+      :closable="false"
+    >
+      <strong>Cluster degraded.</strong>
+      {{ unreachablePeers.length }} peer(s) unreachable — quorum is
+      still intact, but the cluster can no longer tolerate another
+      failure. Investigate the missing peer(s) before they cause an
+      outage.
+    </Message>
+
     <!-- Always-on toolbar: every wizard available regardless of
          the snapshot recommendation, so an operator can apply
          them proactively (e.g. fix a typo in cluster.yaml before
@@ -602,7 +633,10 @@ async function quarantineWal(row: WalRow) {
       </Column>
       <Column field="status" header="Status" />
       <Column header="RO">
-        <template #body="{ data }">{{ data.ro === true ? 'yes' : 'no' }}</template>
+        <template #body="{ data }">
+          <span v-if="!data.reachable" class="webui-recovery__muted">—</span>
+          <template v-else>{{ data.ro === true ? 'yes' : 'no' }}</template>
+        </template>
       </Column>
       <Column field="last_lsn" header="Last LSN" />
       <Column field="current_term" header="Term" />
@@ -854,9 +888,13 @@ async function quarantineWal(row: WalRow) {
         <input
           v-model.number="pTargetLsn"
           type="number"
-          min="0"
+          min="1"
+          :max="pCurrentLsn || undefined"
           class="webui-recovery__confirm"
         />
+        <span v-if="pCurrentLsn > 0" class="webui-recovery__muted">
+          current = {{ pCurrentLsn }}
+        </span>
       </div>
       <Button
         label="Generate plan"
@@ -864,10 +902,25 @@ async function quarantineWal(row: WalRow) {
         size="small"
         severity="info"
         :loading="pBusy"
-        :disabled="!pTargetLsn || pTargetLsn < 0"
+        :disabled="!pTargetLsn || pTargetLsn < 1"
         @click="generatePitrPlan"
       />
-      <pre v-if="pCommands.length > 0" class="webui-recovery__commands">{{ pCommands.join('\n') }}</pre>
+      <div v-if="pCommands.length > 0" class="webui-recovery__commands-wrap">
+        <div class="webui-recovery__commands-head">
+          <span class="webui-recovery__muted">
+            Run these commands on the host (one block per peer):
+          </span>
+          <Button
+            :label="pCopied ? 'Copied!' : 'Copy'"
+            :icon="pCopied ? 'pi pi-check' : 'pi pi-copy'"
+            size="small"
+            text
+            severity="secondary"
+            @click="copyPitrCommands"
+          />
+        </div>
+        <pre class="webui-recovery__commands">{{ pCommands.join('\n') }}</pre>
+      </div>
       <template #footer>
         <Button label="Close" severity="secondary" text @click="pOpen = false" />
       </template>
@@ -1042,5 +1095,14 @@ async function quarantineWal(row: WalRow) {
   max-height: 24rem;
   overflow: auto;
   margin-top: 0.5rem;
+}
+.webui-recovery__commands-wrap {
+  margin-top: 0.5rem;
+}
+.webui-recovery__commands-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
 }
 </style>

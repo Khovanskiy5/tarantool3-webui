@@ -103,6 +103,19 @@ g.test_recommendation_no_action_when_healthy = function()
     t.assert_equals(snap.recommend(classified), 'no_action_needed')
 end
 
+g.test_recommendation_degraded_when_peer_unreachable = function()
+    -- Quorum is intact (queue owner present) but at least one peer
+    -- is gone. The cluster is operational but cannot tolerate
+    -- another failure — UI should show a degraded banner, not the
+    -- green "healthy" one.
+    local classified = {
+        ['tt-1'] = { role = 'queue-owner' },
+        ['tt-2'] = { role = 'follower' },
+        ['tt-3'] = { role = 'unreachable' },
+    }
+    t.assert_equals(snap.recommend(classified), 'degraded')
+end
+
 g.test_split_brain_groups_groups_by_divergent_from = function()
     local classified = {
         ['tt-1'] = {
