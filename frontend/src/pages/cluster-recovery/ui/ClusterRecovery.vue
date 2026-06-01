@@ -25,6 +25,9 @@ import Message from 'primevue/message';
 import Select from 'primevue/select';
 import MultiSelect from 'primevue/multiselect';
 import Dialog from 'primevue/dialog';
+import InputText from 'primevue/inputtext';
+import InputNumber from 'primevue/inputnumber';
+import Checkbox from 'primevue/checkbox';
 
 import { getClient } from '@/shared/api/graphql';
 
@@ -701,7 +704,7 @@ async function quarantineWal(row: WalRow) {
       v-model:visible="sbOpen"
       modal
       header="Split-brain resolution"
-      :style="{ width: '36rem' }"
+      :style="{ width: '42rem' }"
     >
       <div class="webui-recovery__row">
         <label>Winner</label>
@@ -735,10 +738,10 @@ async function quarantineWal(row: WalRow) {
       </Message>
       <div class="webui-recovery__row">
         <label>Confirm</label>
-        <input
+        <InputText
           v-model="sbConfirm"
-          class="webui-recovery__confirm"
           :placeholder="sbConfirmExpected"
+          class="webui-recovery__confirm"
         />
       </div>
       <template #footer>
@@ -759,7 +762,7 @@ async function quarantineWal(row: WalRow) {
       v-model:visible="orOpen"
       modal
       header="Orphan resolver"
-      :style="{ width: '32rem' }"
+      :style="{ width: '40rem' }"
     >
       <Message
         v-if="orphanPeers.length === 0"
@@ -799,7 +802,7 @@ async function quarantineWal(row: WalRow) {
       </Message>
       <div class="webui-recovery__row">
         <label>Confirm</label>
-        <input v-model="orConfirm" class="webui-recovery__confirm" :placeholder="orConfirmExpected" />
+        <InputText v-model="orConfirm" :placeholder="orConfirmExpected" class="webui-recovery__confirm" />
       </div>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="orOpen = false" />
@@ -819,7 +822,7 @@ async function quarantineWal(row: WalRow) {
       v-model:visible="qOpen"
       modal
       header="Quorum-loss escape hatch"
-      :style="{ width: '36rem' }"
+      :style="{ width: '42rem' }"
     >
       <Message severity="error" :closable="false">
         <strong>Dangerous.</strong>
@@ -847,24 +850,21 @@ async function quarantineWal(row: WalRow) {
       </div>
       <div class="webui-recovery__row">
         <label>Window (seconds)</label>
-        <input v-model.number="qWindow" type="number" min="5" max="3600" class="webui-recovery__confirm" />
+        <InputNumber v-model="qWindow" :min="5" :max="3600" :use-grouping="false" class="webui-recovery__confirm" />
         <span class="webui-recovery__muted">
           auto-restores original quorum after this window
         </span>
       </div>
-      <div class="webui-recovery__row">
-        <label>Risk</label>
-        <label class="webui-recovery__inline">
-          <input v-model="qAck" type="checkbox" />
-          <span>I accept the split-brain risk during the window</span>
-        </label>
-      </div>
+      <label class="webui-recovery__ack">
+        <Checkbox v-model="qAck" binary />
+        <span>I accept the split-brain risk during the window</span>
+      </label>
       <Message severity="warn" :closable="false">
         Type <code>{{ qConfirmExpected }}</code> to confirm.
       </Message>
       <div class="webui-recovery__row">
         <label>Confirm</label>
-        <input v-model="qConfirm" class="webui-recovery__confirm" :placeholder="qConfirmExpected" />
+        <InputText v-model="qConfirm" :placeholder="qConfirmExpected" class="webui-recovery__confirm" />
       </div>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="qOpen = false" />
@@ -910,10 +910,11 @@ async function quarantineWal(row: WalRow) {
             <td><code>{{ p.alias }}</code></td>
             <td>{{ p.reachable ? '✓' : '✗' }}</td>
             <td>
-              <input
+              <InputText
                 v-if="tFixes[p.alias] !== undefined"
                 v-model="tFixes[p.alias]"
                 class="webui-recovery__confirm webui-recovery__topo-input"
+                fluid
               />
               <span v-else class="webui-recovery__muted">no change</span>
             </td>
@@ -926,7 +927,7 @@ async function quarantineWal(row: WalRow) {
         </Message>
         <div class="webui-recovery__row">
           <label>Confirm</label>
-          <input v-model="tConfirm" class="webui-recovery__confirm" :placeholder="tConfirmExpected" />
+          <InputText v-model="tConfirm" :placeholder="tConfirmExpected" class="webui-recovery__confirm" />
         </div>
       </template>
       <template #footer>
@@ -1051,7 +1052,7 @@ async function quarantineWal(row: WalRow) {
       v-model:visible="ltOpen"
       modal
       header="Leader takeover"
-      :style="{ width: '32rem' }"
+      :style="{ width: '40rem' }"
     >
       <Message
         v-if="currentQueueOwner"
@@ -1140,7 +1141,7 @@ async function quarantineWal(row: WalRow) {
 .webui-recovery__last h2 { margin: 0 0 0.5rem 0; font-size: 1rem; }
 .webui-recovery__row {
   display: grid;
-  grid-template-columns: 10rem 1fr auto;
+  grid-template-columns: 9rem minmax(0, 1fr) auto;
   /* gap 1rem horizontally (between label and the form control) +
      0.25rem vertically (rows themselves are separated by the
      dialog-content flex gap, this is just safety). The previous
@@ -1148,21 +1149,48 @@ async function quarantineWal(row: WalRow) {
   column-gap: 1rem;
   row-gap: 0.25rem;
   align-items: center;
+  /* Crucial: allow the row to shrink with its parent. Without
+     `min-width: 0`, a wide Select option label ("Force reconnect
+     (drop + reattach appliers)") forces the whole grid to its
+     intrinsic width and pushes content past the dialog edge. */
+  min-width: 0;
 }
+.webui-recovery__row > * { min-width: 0; }
 
 /* Make every form control inside a recovery row fill the
-   available column. PrimeVue's Select / Dropdown / Input render
-   with `width: auto` by default, so without this the dropdown
-   trigger shrinks to its content width and labels hang next to
-   it with empty space on the right of the input — looks broken,
-   especially with short Selects like "tt-1 · queue-owner". */
+   available column AND truncate long option labels with an
+   ellipsis instead of overflowing the dialog. PrimeVue's
+   Select renders its trigger label as a nowrap span by
+   default — the ellipsis rule below makes the trigger respect
+   its grid cell width. */
 .webui-recovery__row :deep(.p-select),
 .webui-recovery__row :deep(.p-dropdown),
 .webui-recovery__row :deep(.p-inputtext),
+.webui-recovery__row :deep(.p-inputnumber),
+.webui-recovery__row :deep(.p-inputnumber-input),
 .webui-recovery__row input,
 .webui-recovery__row select {
   width: 100%;
   box-sizing: border-box;
+  min-width: 0;
+}
+/* Same medium-size height across every wrapper PrimeVue might
+   give us. Without this the Select sits at PrimeVue's default
+   (~40px) while InputText / InputNumber inherit the smaller
+   browser default (~30px) — that mismatch is what user flagged. */
+.webui-recovery__row :deep(.p-select),
+.webui-recovery__row :deep(.p-dropdown),
+.webui-recovery__row :deep(.p-inputtext),
+.webui-recovery__row :deep(.p-inputnumber-input) {
+  height: 2.5rem;
+}
+.webui-recovery__row :deep(.p-select-label),
+.webui-recovery__row :deep(.p-dropdown-label) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
 }
 /* Override for the muted hint that sits in the 3rd column —
    it must stay auto-sized so it doesn't push the form control
@@ -1170,6 +1198,7 @@ async function quarantineWal(row: WalRow) {
 .webui-recovery__row > .webui-recovery__muted {
   width: auto;
   white-space: nowrap;
+  font-size: 0.8rem;
 }
 
 /* Recovery dialogs were a soup of stacked Message banners, rows
@@ -1181,14 +1210,25 @@ async function quarantineWal(row: WalRow) {
 :deep(.p-dialog-content) {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 1rem;
+  padding-bottom: 1rem;
+}
+/* When several form rows stack in a row, the dialog-level gap
+   alone is fine — but a Message banner BETWEEN them collapses
+   visually because the banner already has its own padding. Add
+   a touch more breathing room above non-row direct children so
+   banners feel like separators rather than another row. */
+:deep(.p-dialog-content) > .p-message {
+  margin: 0;
 }
 /* Visual divider between the body and the action buttons so the
    destructive footer stops looking glued to the form fields. */
 :deep(.p-dialog-footer) {
   border-top: 1px solid var(--webui-border);
-  padding-top: 0.75rem;
-  margin-top: 0.25rem;
+  padding-top: 1rem;
+  padding-bottom: 1rem;
+  margin-top: 0.5rem;
+  gap: 0.5rem;
 }
 .webui-recovery__row label { color: var(--webui-text-muted); font-size: 0.85rem; }
 .webui-recovery__confirm {
@@ -1196,9 +1236,38 @@ async function quarantineWal(row: WalRow) {
   color: var(--p-form-field-color, inherit);
   border: 1px solid var(--p-form-field-border-color, var(--webui-border));
   border-radius: var(--webui-radius);
-  padding: 0.35rem 0.5rem;
+  /* Match PrimeVue's medium-size form-field height (≈40px) so
+     native <input> sits flush with adjacent PrimeVue Selects and
+     Buttons in the same row. Without this the native input
+     renders ~28px tall and the row becomes a stair-step. */
+  height: 2.5rem;
+  padding: 0 0.6rem;
   font-family: var(--webui-font-mono);
   font-size: 0.85rem;
+}
+/* Same height normalisation for the number inputs used in PITR
+   / Quorum (`type="number"`) and any other plain HTML input that
+   sneaks into a row. */
+.webui-recovery__row input[type='number'],
+.webui-recovery__row input[type='text'] {
+  height: 2.5rem;
+  padding: 0 0.6rem;
+}
+
+.webui-recovery__ack {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+  /* Bigger checkbox so the operator's "I accept the risk" gesture
+     reads as a deliberate click, not a pixel-hunt. */
+}
+.webui-recovery__ack input[type='checkbox'] {
+  width: 1.1rem;
+  height: 1.1rem;
+  margin: 0;
+  cursor: pointer;
 }
 .webui-recovery__muted { color: var(--webui-text-muted); }
 .webui-recovery__toolbar {
