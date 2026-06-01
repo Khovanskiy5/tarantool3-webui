@@ -705,59 +705,61 @@ async function quarantineWal(row: WalRow) {
       v-model:visible="sbOpen"
       modal
       header="Split-brain resolution"
-      :style="{ width: '36rem' }"
-      class="rwf-dialog"
+      :style="{ width: '32rem' }"
     >
-      <Fluid>
-        <div class="rwf-field">
-          <label for="sb-winner" class="rwf-field__label">Winner</label>
-          <Select
-            input-id="sb-winner"
-            v-model="sbWinner"
-            :options="peerOptions"
-            option-label="label"
-            option-value="value"
-          />
-        </div>
-        <div class="rwf-field">
-          <label for="sb-losers" class="rwf-field__label">Losing peers</label>
-          <MultiSelect
-            input-id="sb-losers"
-            v-model="sbLosers"
-            :options="peerOptions"
-            option-label="label"
-            option-value="value"
-          />
-        </div>
-        <div class="rwf-field">
-          <label for="sb-strategy" class="rwf-field__label">Strategy</label>
-          <Select
-            input-id="sb-strategy"
-            v-model="sbAction"
-            :options="[
-              { label: 'Rebootstrap losing peers (clean cold-start)', value: 'rebootstrap_losing' },
-              { label: 'Force-promote winner with quorum=1', value: 'force_promote_winner' },
-              { label: 'Manual (do nothing automatically)', value: 'manual' },
-            ]"
-            option-label="label"
-            option-value="value"
-          />
-        </div>
-      </Fluid>
-      <Message severity="warn" :closable="false">
-        Destructive action. Type
-        <code>{{ sbConfirmExpected }}</code> to confirm.
-      </Message>
-      <Fluid>
-        <div class="rwf-field">
-          <label for="sb-confirm" class="rwf-field__label">Confirmation phrase</label>
-          <InputText
-            id="sb-confirm"
-            v-model="sbConfirm"
-            :placeholder="sbConfirmExpected"
-          />
-        </div>
-      </Fluid>
+      <div class="r-body">
+        <Fluid>
+          <div class="r-field">
+            <label for="sb-winner">Winner</label>
+            <Select
+              input-id="sb-winner"
+              v-model="sbWinner"
+              :options="peerOptions"
+              option-label="label"
+              option-value="value"
+            />
+          </div>
+          <div class="r-field">
+            <label for="sb-losers">Losing peers</label>
+            <MultiSelect
+              input-id="sb-losers"
+              v-model="sbLosers"
+              :options="peerOptions"
+              option-label="label"
+              option-value="value"
+            />
+          </div>
+          <div class="r-field">
+            <label for="sb-strategy">Strategy</label>
+            <Select
+              input-id="sb-strategy"
+              v-model="sbAction"
+              :options="[
+                { label: 'Rebootstrap losing peers (clean cold-start)', value: 'rebootstrap_losing' },
+                { label: 'Force-promote winner with quorum=1', value: 'force_promote_winner' },
+                { label: 'Manual (do nothing automatically)', value: 'manual' },
+              ]"
+              option-label="label"
+              option-value="value"
+            />
+          </div>
+          <div class="r-field">
+            <label for="sb-confirm">Confirmation phrase</label>
+            <InputText
+              id="sb-confirm"
+              v-model="sbConfirm"
+              :placeholder="sbConfirmExpected"
+            />
+            <Message
+              size="small"
+              severity="warn"
+              variant="simple"
+            >
+              Destructive action. Type <code>{{ sbConfirmExpected }}</code>.
+            </Message>
+          </div>
+        </Fluid>
+      </div>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="sbOpen = false" />
         <Button
@@ -776,64 +778,63 @@ async function quarantineWal(row: WalRow) {
       v-model:visible="orOpen"
       modal
       header="Orphan resolver"
-      :style="{ width: '36rem' }"
-      class="rwf-dialog"
+      :style="{ width: '32rem' }"
     >
-      <Message
-        v-if="orphanPeers.length === 0"
-        severity="info"
-        :closable="false"
-      >
-        No peers currently report status = orphan. The wizard is
-        still usable as a proactive force-reconnect / rebootstrap
-        for any peer — pick the target manually.
-      </Message>
-      <Message
-        v-else
-        severity="warn"
-        :closable="false"
-      >
-        Detected orphan peer(s): <strong>{{ orphanPeers.map((p) => p.alias).join(', ') }}</strong>.
-      </Message>
-      <Fluid>
-        <div class="rwf-field">
-          <label for="or-target" class="rwf-field__label">Target peer</label>
-          <Select
-            input-id="or-target"
-            v-model="orTarget"
-            :options="peerOptions"
-            option-label="label"
-            option-value="value"
-          />
-        </div>
-        <div class="rwf-field">
-          <label for="or-strategy" class="rwf-field__label">Strategy</label>
-          <Select
-            input-id="or-strategy"
-            v-model="orAction"
-            :options="[
-              { label: 'Force reconnect (drop + reattach appliers)', value: 'force_reconnect' },
-              { label: 'Rebootstrap (wipe + cold-boot)', value: 'rebootstrap' },
-              { label: 'Solo promote (writable standalone)', value: 'solo_promote' },
-            ]"
-            option-label="label"
-            option-value="value"
-          />
-        </div>
-      </Fluid>
-      <Message severity="warn" :closable="false">
-        Type <code>{{ orConfirmExpected }}</code> to confirm.
-      </Message>
-      <Fluid>
-        <div class="rwf-field">
-          <label for="or-confirm" class="rwf-field__label">Confirmation phrase</label>
-          <InputText
-            id="or-confirm"
-            v-model="orConfirm"
-            :placeholder="orConfirmExpected"
-          />
-        </div>
-      </Fluid>
+      <div class="r-body">
+        <Message
+          v-if="orphanPeers.length === 0"
+          severity="info"
+          :closable="false"
+        >
+          No peers currently report status = orphan. The wizard is
+          still usable as a proactive force-reconnect / rebootstrap
+          for any peer — pick the target manually.
+        </Message>
+        <Message
+          v-else
+          severity="warn"
+          :closable="false"
+        >
+          Detected orphan peer(s): <strong>{{ orphanPeers.map((p) => p.alias).join(', ') }}</strong>.
+        </Message>
+        <Fluid>
+          <div class="r-field">
+            <label for="or-target">Target peer</label>
+            <Select
+              input-id="or-target"
+              v-model="orTarget"
+              :options="peerOptions"
+              option-label="label"
+              option-value="value"
+            />
+          </div>
+          <div class="r-field">
+            <label for="or-strategy">Strategy</label>
+            <Select
+              input-id="or-strategy"
+              v-model="orAction"
+              :options="[
+                { label: 'Force reconnect (drop + reattach appliers)', value: 'force_reconnect' },
+                { label: 'Rebootstrap (wipe + cold-boot)', value: 'rebootstrap' },
+                { label: 'Solo promote (writable standalone)', value: 'solo_promote' },
+              ]"
+              option-label="label"
+              option-value="value"
+            />
+          </div>
+          <div class="r-field">
+            <label for="or-confirm">Confirmation phrase</label>
+            <InputText
+              id="or-confirm"
+              v-model="orConfirm"
+              :placeholder="orConfirmExpected"
+            />
+            <Message size="small" severity="warn" variant="simple">
+              Type <code>{{ orConfirmExpected }}</code>.
+            </Message>
+          </div>
+        </Fluid>
+      </div>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="orOpen = false" />
         <Button
@@ -852,74 +853,75 @@ async function quarantineWal(row: WalRow) {
       v-model:visible="qOpen"
       modal
       header="Quorum-loss escape hatch"
-      :style="{ width: '38rem' }"
-      class="rwf-dialog"
+      :style="{ width: '34rem' }"
     >
-      <Message severity="error" :closable="false">
-        <strong>Dangerous.</strong>
-        Flips <code>synchro_quorum</code> to 1 on the target peer
-        for the chosen window. A partition during the window can
-        fork the WAL — fix the underlying quorum problem ASAP
-        and prefer ending the window early via cluster YAML.
-      </Message>
-      <Message
-        v-if="unreachablePeers.length === 0"
-        severity="info"
-        :closable="false"
-      >
-        Every peer is currently reachable. The escape hatch is
-        usually applied when one or more peers are unreachable and
-        synchronous writes start blocking. Opening it proactively
-        is fine but you almost certainly want to wait.
-      </Message>
-      <Fluid>
-        <div class="rwf-field">
-          <label for="q-target" class="rwf-field__label">Target peer</label>
-          <Select
-            input-id="q-target"
-            v-model="qTarget"
-            :options="peerOptions"
-            option-label="label"
-            option-value="value"
-          />
-          <small
-            v-if="qTarget && qTarget === currentQueueOwner"
-            class="rwf-field__hint"
-          >
-            ← current queue owner
-          </small>
-        </div>
-        <div class="rwf-field">
-          <label for="q-window" class="rwf-field__label">Window (seconds)</label>
-          <InputNumber
-            input-id="q-window"
-            v-model="qWindow"
-            :min="5"
-            :max="3600"
-            :use-grouping="false"
-          />
-          <small class="rwf-field__hint">
-            auto-restores original quorum after this window
-          </small>
-        </div>
-      </Fluid>
-      <div class="rwf-ack">
-        <Checkbox v-model="qAck" input-id="q-ack" binary />
-        <label for="q-ack">I accept the split-brain risk during the window</label>
+      <div class="r-body">
+        <Message severity="error" :closable="false">
+          <strong>Dangerous.</strong>
+          Flips <code>synchro_quorum</code> to 1 on the target peer
+          for the chosen window. A partition during the window can
+          fork the WAL — fix the underlying quorum problem ASAP
+          and prefer ending the window early via cluster YAML.
+        </Message>
+        <Message
+          v-if="unreachablePeers.length === 0"
+          severity="info"
+          :closable="false"
+        >
+          Every peer is currently reachable. The escape hatch is
+          usually applied when one or more peers are unreachable and
+          synchronous writes start blocking. Opening it proactively
+          is fine but you almost certainly want to wait.
+        </Message>
+        <Fluid>
+          <div class="r-field">
+            <label for="q-target">Target peer</label>
+            <Select
+              input-id="q-target"
+              v-model="qTarget"
+              :options="peerOptions"
+              option-label="label"
+              option-value="value"
+            />
+            <Message
+              v-if="qTarget && qTarget === currentQueueOwner"
+              size="small"
+              severity="secondary"
+              variant="simple"
+            >
+              Selected peer is the current queue owner.
+            </Message>
+          </div>
+          <div class="r-field">
+            <label for="q-window">Window (seconds)</label>
+            <InputNumber
+              input-id="q-window"
+              v-model="qWindow"
+              :min="5"
+              :max="3600"
+              :use-grouping="false"
+            />
+            <Message size="small" severity="secondary" variant="simple">
+              Auto-restores original quorum after this window.
+            </Message>
+          </div>
+          <div class="r-ack">
+            <Checkbox v-model="qAck" input-id="q-ack" binary />
+            <label for="q-ack">I accept the split-brain risk during the window</label>
+          </div>
+          <div class="r-field">
+            <label for="q-confirm">Confirmation phrase</label>
+            <InputText
+              id="q-confirm"
+              v-model="qConfirm"
+              :placeholder="qConfirmExpected"
+            />
+            <Message size="small" severity="warn" variant="simple">
+              Type <code>{{ qConfirmExpected }}</code>.
+            </Message>
+          </div>
+        </Fluid>
       </div>
-      <Message severity="warn" :closable="false">
-        Type <code>{{ qConfirmExpected }}</code> to confirm.
-      </Message>
-      <Fluid>
-        <div class="rwf-field">
-          <label for="q-confirm" class="rwf-field__label">Confirmation phrase</label>
-          <InputText
-            id="q-confirm"
-            v-model="qConfirm"
-            :placeholder="qConfirmExpected"
-          />
-        </div>
-      </Fluid>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="qOpen = false" />
         <Button
@@ -938,60 +940,64 @@ async function quarantineWal(row: WalRow) {
       v-model:visible="tOpen"
       modal
       header="Replication topology fix"
-      :style="{ width: '44rem' }"
-      class="rwf-dialog"
+      :style="{ width: '40rem' }"
     >
-      <Message
-        v-if="!tDiagnosed"
-        severity="info"
-        :closable="false"
-      >
-        Diagnosing topology…
-      </Message>
-      <Message
-        v-else-if="Object.keys(tFixes).length === 0"
-        severity="success"
-        :closable="false"
-      >
-        No replication topology issues detected. Every declared peer
-        URI matches what the cluster observes. Nothing to fix.
-      </Message>
-      <table v-else class="rwf-table">
-        <thead>
-          <tr>
-            <th>Peer</th>
-            <th>Reachable</th>
-            <th>Suggested URI</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="p in tPeers" :key="p.alias">
-            <td><code>{{ p.alias }}</code></td>
-            <td>{{ p.reachable ? '✓' : '✗' }}</td>
-            <td>
-              <Fluid v-if="tFixes[p.alias] !== undefined">
-                <InputText v-model="tFixes[p.alias]" />
-              </Fluid>
-              <span v-else class="rwf-field__hint">no change</span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <template v-if="tDiagnosed && Object.keys(tFixes).length > 0">
-        <Message severity="warn" :closable="false">
-          Type <code>{{ tConfirmExpected }}</code> to confirm.
+      <div class="r-body">
+        <Message
+          v-if="!tDiagnosed"
+          severity="info"
+          :closable="false"
+        >
+          Diagnosing topology…
         </Message>
-        <Fluid>
-          <div class="rwf-field">
-            <label for="t-confirm" class="rwf-field__label">Confirmation phrase</label>
+        <Message
+          v-else-if="Object.keys(tFixes).length === 0"
+          severity="success"
+          :closable="false"
+        >
+          No replication topology issues detected. Every declared peer
+          URI matches what the cluster observes. Nothing to fix.
+        </Message>
+        <table v-else class="r-table">
+          <thead>
+            <tr>
+              <th>Peer</th>
+              <th>Reachable</th>
+              <th>Suggested URI</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="p in tPeers" :key="p.alias">
+              <td><code>{{ p.alias }}</code></td>
+              <td>{{ p.reachable ? '✓' : '✗' }}</td>
+              <td>
+                <Fluid v-if="tFixes[p.alias] !== undefined">
+                  <InputText v-model="tFixes[p.alias]" />
+                </Fluid>
+                <Message
+                  v-else
+                  size="small"
+                  severity="secondary"
+                  variant="simple"
+                >no change</Message>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <Fluid v-if="tDiagnosed && Object.keys(tFixes).length > 0">
+          <div class="r-field">
+            <label for="t-confirm">Confirmation phrase</label>
             <InputText
               id="t-confirm"
               v-model="tConfirm"
               :placeholder="tConfirmExpected"
             />
+            <Message size="small" severity="warn" variant="simple">
+              Type <code>{{ tConfirmExpected }}</code>.
+            </Message>
           </div>
         </Fluid>
-      </template>
+      </div>
       <template #footer>
         <Button label="Close" severity="secondary" text @click="tOpen = false" />
         <Button
@@ -1011,55 +1017,61 @@ async function quarantineWal(row: WalRow) {
       v-model:visible="pOpen"
       modal
       header="Point-in-time recovery (advisory)"
-      :style="{ width: '50rem' }"
-      class="rwf-dialog"
+      :style="{ width: '46rem' }"
     >
-      <Message severity="info" :closable="false">
-        Tarantool 3.x PITR requires an offline restart, which the
-        WebUI cannot drive for itself. This wizard generates the
-        exact host-side commands you run; the recovery happens
-        outside this page.
-      </Message>
-      <Fluid>
-        <div class="rwf-field">
-          <label for="p-lsn" class="rwf-field__label">Target LSN</label>
-          <InputNumber
-            input-id="p-lsn"
-            v-model="pTargetLsn"
-            :min="1"
-            :max="pCurrentLsn || undefined"
-            :use-grouping="false"
-          />
-          <small v-if="pCurrentLsn > 0" class="rwf-field__hint">
-            current = {{ pCurrentLsn }}
-          </small>
-        </div>
-      </Fluid>
-      <div class="rwf-actions">
-        <Button
-          label="Generate plan"
-          icon="pi pi-history"
-          severity="info"
-          :loading="pBusy"
-          :disabled="!pTargetLsn || pTargetLsn < 1"
-          @click="generatePitrPlan"
-        />
-      </div>
-      <div v-if="pCommands.length > 0" class="rwf-commands">
-        <div class="rwf-commands__head">
-          <span class="rwf-field__hint">
-            Run these commands on the host (one block per peer):
-          </span>
+      <div class="r-body">
+        <Message severity="info" :closable="false">
+          Tarantool 3.x PITR requires an offline restart, which the
+          WebUI cannot drive for itself. This wizard generates the
+          exact host-side commands you run; the recovery happens
+          outside this page.
+        </Message>
+        <Fluid>
+          <div class="r-field">
+            <label for="p-lsn">Target LSN</label>
+            <InputNumber
+              input-id="p-lsn"
+              v-model="pTargetLsn"
+              :min="1"
+              :max="pCurrentLsn || undefined"
+              :use-grouping="false"
+            />
+            <Message
+              v-if="pCurrentLsn > 0"
+              size="small"
+              severity="secondary"
+              variant="simple"
+            >
+              current = {{ pCurrentLsn }}
+            </Message>
+          </div>
+        </Fluid>
+        <div class="r-actions">
           <Button
-            :label="pCopied ? 'Copied!' : 'Copy'"
-            :icon="pCopied ? 'pi pi-check' : 'pi pi-copy'"
-            size="small"
-            text
-            severity="secondary"
-            @click="copyPitrCommands"
+            label="Generate plan"
+            icon="pi pi-history"
+            severity="info"
+            :loading="pBusy"
+            :disabled="!pTargetLsn || pTargetLsn < 1"
+            @click="generatePitrPlan"
           />
         </div>
-        <pre class="rwf-commands__pre">{{ pCommands.join('\n') }}</pre>
+        <div v-if="pCommands.length > 0" class="r-commands">
+          <div class="r-commands__head">
+            <Message size="small" severity="secondary" variant="simple">
+              Run these commands on the host (one block per peer):
+            </Message>
+            <Button
+              :label="pCopied ? 'Copied!' : 'Copy'"
+              :icon="pCopied ? 'pi pi-check' : 'pi pi-copy'"
+              size="small"
+              text
+              severity="secondary"
+              @click="copyPitrCommands"
+            />
+          </div>
+          <pre class="r-commands__pre">{{ pCommands.join('\n') }}</pre>
+        </div>
       </div>
       <template #footer>
         <Button label="Close" severity="secondary" text @click="pOpen = false" />
@@ -1071,49 +1083,50 @@ async function quarantineWal(row: WalRow) {
       v-model:visible="wOpen"
       modal
       header="WAL chain repair"
-      :style="{ width: '50rem' }"
-      class="rwf-dialog"
+      :style="{ width: '46rem' }"
     >
-      <Message severity="warn" :closable="false">
-        Lists every .xlog on this instance with an integrity probe.
-        Files marked <strong>BAD</strong> can be quarantined
-        (renamed to <code>.corrupt</code>) so the next boot skips
-        them. After quarantine, restart the instance with
-        <code>force_recovery = true</code> in cluster YAML to
-        let the bootstrap continue past the gap.
-      </Message>
-      <table class="rwf-table">
-        <thead>
-          <tr>
-            <th>File</th>
-            <th>Status</th>
-            <th>Detail</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in wFiles" :key="row.file">
-            <td><code>{{ row.file }}</code></td>
-            <td>
-              <Tag
-                :severity="row.ok ? 'success' : 'danger'"
-                :value="row.ok ? 'OK' : 'BAD'"
-              />
-            </td>
-            <td class="rwf-field__hint">{{ row.msg }}</td>
-            <td>
-              <Button
-                v-if="!row.ok"
-                icon="pi pi-trash"
-                size="small"
-                severity="danger"
-                text
-                @click="quarantineWal(row)"
-              />
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="r-body">
+        <Message severity="warn" :closable="false">
+          Lists every .xlog on this instance with an integrity probe.
+          Files marked <strong>BAD</strong> can be quarantined
+          (renamed to <code>.corrupt</code>) so the next boot skips
+          them. After quarantine, restart the instance with
+          <code>force_recovery = true</code> in cluster YAML to
+          let the bootstrap continue past the gap.
+        </Message>
+        <table class="r-table">
+          <thead>
+            <tr>
+              <th>File</th>
+              <th>Status</th>
+              <th>Detail</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in wFiles" :key="row.file">
+              <td><code>{{ row.file }}</code></td>
+              <td>
+                <Tag
+                  :severity="row.ok ? 'success' : 'danger'"
+                  :value="row.ok ? 'OK' : 'BAD'"
+                />
+              </td>
+              <td>{{ row.msg }}</td>
+              <td>
+                <Button
+                  v-if="!row.ok"
+                  icon="pi pi-trash"
+                  size="small"
+                  severity="danger"
+                  text
+                  @click="quarantineWal(row)"
+                />
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
       <template #footer>
         <Button label="Close" severity="secondary" text @click="wOpen = false" />
       </template>
@@ -1124,60 +1137,54 @@ async function quarantineWal(row: WalRow) {
       v-model:visible="ltOpen"
       modal
       header="Leader takeover"
-      :style="{ width: '36rem' }"
-      class="rwf-dialog"
+      :style="{ width: '32rem' }"
     >
-      <Message
-        v-if="currentQueueOwner"
-        severity="info"
-        :closable="false"
-      >
-        Current queue owner: <strong>{{ currentQueueOwner }}</strong>.
-        Default candidate has the highest LSN among healthy peers.
-      </Message>
-      <Message
-        v-else
-        severity="error"
-        :closable="false"
-      >
-        <strong>No queue owner detected.</strong>
-        Cluster cannot accept synchronous writes — pick a leader and
-        promote it.
-      </Message>
-      <Fluid>
-        <div class="rwf-field">
-          <label for="lt-target" class="rwf-field__label">New leader</label>
-          <Select
-            input-id="lt-target"
-            v-model="ltTarget"
-            :options="peerOptions"
-            option-label="label"
-            option-value="value"
-          />
-        </div>
-      </Fluid>
-      <Message
-        v-if="ltTarget && ltTarget === currentQueueOwner"
-        severity="warn"
-        :closable="false"
-      >
-        Selected peer already owns the queue. Promote on a different
-        peer to actually take leadership over.
-      </Message>
-      <Message severity="warn" :closable="false">
-        Drives <code>box.ctl.promote()</code> on the target peer.
-        Type <code>{{ ltConfirmExpected }}</code> to confirm.
-      </Message>
-      <Fluid>
-        <div class="rwf-field">
-          <label for="lt-confirm" class="rwf-field__label">Confirmation phrase</label>
-          <InputText
-            id="lt-confirm"
-            v-model="ltConfirm"
-            :placeholder="ltConfirmExpected"
-          />
-        </div>
-      </Fluid>
+      <div class="r-body">
+        <Message
+          v-if="currentQueueOwner"
+          severity="info"
+          :closable="false"
+        >
+          Current queue owner: <strong>{{ currentQueueOwner }}</strong>.
+          Default candidate has the highest LSN among healthy peers.
+        </Message>
+        <Message v-else severity="error" :closable="false">
+          <strong>No queue owner detected.</strong>
+          Cluster cannot accept synchronous writes — pick a leader and
+          promote it.
+        </Message>
+        <Fluid>
+          <div class="r-field">
+            <label for="lt-target">New leader</label>
+            <Select
+              input-id="lt-target"
+              v-model="ltTarget"
+              :options="peerOptions"
+              option-label="label"
+              option-value="value"
+            />
+            <Message
+              v-if="ltTarget && ltTarget === currentQueueOwner"
+              size="small"
+              severity="warn"
+              variant="simple"
+            >
+              Selected peer already owns the queue — pick a different one.
+            </Message>
+          </div>
+          <div class="r-field">
+            <label for="lt-confirm">Confirmation phrase</label>
+            <InputText
+              id="lt-confirm"
+              v-model="ltConfirm"
+              :placeholder="ltConfirmExpected"
+            />
+            <Message size="small" severity="warn" variant="simple">
+              Drives <code>box.ctl.promote()</code>. Type <code>{{ ltConfirmExpected }}</code>.
+            </Message>
+          </div>
+        </Fluid>
+      </div>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="ltOpen = false" />
         <Button
@@ -1230,119 +1237,97 @@ async function quarantineWal(row: WalRow) {
   border-top: 1px dashed var(--webui-border);
 }
 
-/* ── Recovery Wizard Form (`rwf-*`) ─────────────────────────────
-   Single layout pattern for every wizard dialog:
-   - Dialog content is a vertical flex stack with 1rem gap so
-     PrimeVue Messages and `rwf-field` blocks read as discrete
-     sections.
-   - `rwf-field` stacks label → control → optional hint with
-     consistent 0.4rem gap. Width is owned by the surrounding
-     `<Fluid>` (PrimeVue v4) so we never fight a control's
-     intrinsic width with grid math.
-   - The footer gets a top border so the destructive button is
-     visually separated from the form body.
+/* ── Recovery Wizard Forms ──────────────────────────────────────
+   Follow the PrimeVue Aura Dialog idiom verbatim:
+   - Dialog content already has 1.25rem padding from the theme
+     (overlay.modal.padding) — do NOT add a border between
+     content and footer, and do NOT override paddings.
+   - Form fields use the official "label-stacked" pattern from
+     PrimeVue's InputText/HelpText docs:
+         <div class="r-field">
+           <label>…</label>
+           <Component … />
+           <Message size="small" severity="secondary" variant="simple">help…</Message>
+         </div>
+   - Multiple fields stack inside a `<Fluid>` so every control
+     auto-fills the column. The Fluid gap is set in CSS below.
 */
 
-.rwf-dialog :deep(.p-dialog-content) {
+.r-body {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
-  padding-bottom: 1rem;
+  gap: 1.25rem;
 }
-.rwf-dialog :deep(.p-dialog-footer) {
-  border-top: 1px solid var(--webui-border);
-  padding-top: 1rem;
-  padding-bottom: 1rem;
-  margin-top: 0.5rem;
-  gap: 0.5rem;
-}
-/* PrimeVue's `<Fluid>` is a transparent container; render it as
-   a flex column so multiple fields inside one Fluid stack with
-   the same gap as the dialog itself. */
-.rwf-dialog :deep(.p-fluid) {
+.r-body :deep(.p-fluid) {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 1.25rem;
 }
 
-.rwf-field {
+.r-field {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
-  /* min-width: 0 so a Select with a long option label cannot
-     push the field past the dialog edge. */
+  gap: 0.5rem;
   min-width: 0;
 }
-.rwf-field__label {
-  font-size: 0.85rem;
-  font-weight: 500;
-  color: var(--webui-text-muted);
-}
-.rwf-field__hint {
-  font-size: 0.78rem;
-  color: var(--webui-text-muted);
-  line-height: 1.3;
+.r-field label {
+  font-size: 0.875rem;
+  font-weight: 600;
 }
 
-/* Acknowledgement row (e.g. Quorum-loss "I accept the risk").
-   Big-enough checkbox so it reads as a deliberate gesture. */
-.rwf-ack {
+.r-ack {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  font-size: 0.9rem;
+  gap: 0.5rem;
+  font-size: 0.875rem;
 }
-.rwf-ack label {
-  cursor: pointer;
-}
+.r-ack label { cursor: pointer; user-select: none; }
 
-.rwf-actions {
+.r-actions {
   display: flex;
   gap: 0.5rem;
 }
 
-/* Table used by Topology fix + WAL repair dialogs. Compact
-   rows so the table reads as a status panel, not a form. */
-.rwf-table {
+.r-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.85rem;
+  font-size: 0.875rem;
 }
-.rwf-table th,
-.rwf-table td {
+.r-table th,
+.r-table td {
   text-align: left;
-  padding: 0.5rem 0.6rem;
-  border-bottom: 1px solid var(--webui-border);
+  padding: 0.625rem 0.75rem;
+  border-bottom: 1px solid var(--p-content-border-color, var(--webui-border));
   vertical-align: middle;
 }
-.rwf-table th {
+.r-table th {
   font-weight: 600;
-  color: var(--webui-text-muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
-  font-size: 0.72rem;
-  letter-spacing: 0.04em;
+  color: var(--p-text-muted-color, var(--webui-text-muted));
 }
 
-/* PITR generated commands block. */
-.rwf-commands {
+.r-commands {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: 0.5rem;
 }
-.rwf-commands__head {
+.r-commands__head {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 0.5rem;
 }
-.rwf-commands__pre {
-  background: var(--p-content-background, #0e1117);
+.r-commands__pre {
+  background: var(--p-surface-950, #0a0a0a);
   color: var(--p-text-color, inherit);
-  border: 1px solid var(--webui-border);
-  border-radius: var(--webui-radius);
-  padding: 0.75rem;
+  border: 1px solid var(--p-content-border-color, var(--webui-border));
+  border-radius: var(--p-content-border-radius, 6px);
+  padding: 0.875rem 1rem;
   font-family: var(--webui-font-mono);
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
+  line-height: 1.5;
   white-space: pre-wrap;
   max-height: 24rem;
   overflow: auto;
