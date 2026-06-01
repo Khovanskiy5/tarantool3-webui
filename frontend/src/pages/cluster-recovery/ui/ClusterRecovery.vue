@@ -218,6 +218,155 @@ const peerOptions = computed(() =>
     value: p.alias,
   })),
 );
+
+// ── Orphan wizard ─────────────────────────────────────────────────
+const orOpen = ref(false);
+const orTarget = ref<string>('');
+const orAction = ref<'force_reconnect' | 'rebootstrap' | 'solo_promote'>('force_reconnect');
+const orConfirm = ref('');
+const orBusy = ref(false);
+
+function openOrphanWizard() {
+  orOpen.value = true;
+  orTarget.value = (snapshot.value?.peers ?? [])
+    .find((p) => p.role === 'orphan')?.alias ?? '';
+  orAction.value = 'force_reconnect';
+  orConfirm.value = '';
+}
+
+const orConfirmExpected = computed(() => `ORPHAN ${orTarget.value}`);
+
+async function executeOrphan() {
+  if (orConfirm.value.trim() !== orConfirmExpected.value) return;
+  orBusy.value = true;
+  const res = await getClient()
+    .mutation(ACTION_M, {
+      action: 'orphan_resolve',
+      payload: JSON.stringify({
+        target_alias: orTarget.value,
+        action: orAction.value,
+      }),
+    })
+    .toPromise();
+  orBusy.value = false;
+  if (res.error) { error.value = res.error.message; return; }
+  lastResult.value = (res.data as { recoveryAction: ActionResult } | undefined)
+    ?.recoveryAction ?? null;
+  orOpen.value = false;
+  await refresh();
+}
+
+// ── Quorum loss wizard ────────────────────────────────────────────
+const qOpen = ref(false);
+const qTarget = ref<string>('');
+const qWindow = ref<number>(300);
+const qAck = ref(false);
+const qConfirm = ref('');
+const qBusy = ref(false);
+
+function openQuorumWizard() {
+  qOpen.value = true;
+  qTarget.value = (snapshot.value?.peers ?? [])
+    .find((p) => p.queue_owner)?.alias
+    ?? (snapshot.value?.peers ?? [])[0]?.alias ?? '';
+  qWindow.value = 300;
+  qAck.value = false;
+  qConfirm.value = '';
+}
+
+const qConfirmExpected = computed(() => `QUORUM ${qTarget.value}`);
+
+async function executeQuorum() {
+  if (qConfirm.value.trim() !== qConfirmExpected.value || !qAck.value) return;
+  qBusy.value = true;
+  const res = await getClient()
+    .mutation(ACTION_M, {
+      action: 'quorum_loss_escape',
+      payload: JSON.stringify({
+        target_alias: qTarget.value,
+        window_sec: qWindow.value,
+        risk_acknowledged: true,
+      }),
+    })
+    .toPromise();
+  qBusy.value = false;
+  if (res.error) { error.value = res.error.message; return; }
+  lastResult.value = (res.data as { recoveryAction: ActionResult } | undefined)
+    ?.recoveryAction ?? null;
+  qOpen.value = false;
+  await refresh();
+}
+
+// ── Topology fix wizard ───────────────────────────────────────────
+interface TopologyPeer {
+  alias: string;
+  declared_uri: string | null;
+  observed_uri: string | null;
+  reachable: boolean;
+  suggestion: string | null;
+}
+const tOpen = ref(false);
+const tPeers = ref<TopologyPeer[]>([]);
+const tFixes = ref<Record<string, string>>({});
+const tConfirm = ref('');
+const tBusy = ref(false);
+
+async function openTopologyWizard() {
+  tOpen.value = true;
+  tConfirm.value = '';
+  tBusy.value = false;
+  // Use the diagnose pseudo-action — backend returns its
+  // diagnostic via the standard recoveryAction shape so the
+  // results array carries one row per peer with `msg` filled
+  // when a fix is suggested.
+  const diag = await getClient()
+    .mutation(ACTION_M, {
+      action: 'topology_fix_diagnose', payload: null,
+    })
+    .toPromise();
+  const arr: TopologyPeer[] = [];
+  const peers = ((diag.data as { recoveryAction: ActionResult } | undefined)
+    ?.recoveryAction?.results) ?? [];
+  for (const p of peers) {
+    arr.push({
+      alias: p.peer,
+      declared_uri: null,
+      observed_uri: null,
+      reachable: p.ok,
+      suggestion: p.ok ? null : p.msg,
+    });
+  }
+  tPeers.value = arr;
+  tFixes.value = {};
+  for (const p of arr) {
+    if (p.suggestion) {
+      // suggestion msg currently encodes `declared=X observed=Y`
+      // — pull the Y portion as the proposed value.
+      const m = p.suggestion.match(/observed=(\S+)/);
+      if (m) tFixes.value[p.alias] = m[1];
+    }
+  }
+}
+
+const tConfirmExpected = 'TOPOLOGY FIX';
+
+async function executeTopology() {
+  if (tConfirm.value.trim() !== tConfirmExpected) return;
+  if (Object.keys(tFixes.value).length === 0) return;
+  tBusy.value = true;
+  const res = await getClient()
+    .mutation(ACTION_M, {
+      action: 'topology_fix',
+      payload: JSON.stringify({ fixes: tFixes.value }),
+    })
+    .toPromise();
+  tBusy.value = false;
+  if (res.error) { error.value = res.error.message; return; }
+  lastResult.value = (res.data as { recoveryAction: ActionResult } | undefined)
+    ?.recoveryAction ?? null;
+  tOpen.value = false;
+  await refresh();
+}
 </script>
 
 <template>
@@ -278,6 +427,55 @@ const peerOptions = computed(() =>
         @click="openTakeoverWizard"
       />
     </Message>
+
+    <Message
+      v-else-if="snapshot && snapshot.recommendation === 'orphan_resolve'"
+      severity="warn"
+      :closable="false"
+      class="webui-recovery__cta"
+    >
+      <strong>Orphan peer.</strong>
+      One or more peers report status = orphan — joined but cannot
+      find a writable leader. Force-reconnect or rebootstrap.
+      <Button
+        label="Open Orphan wizard"
+        icon="pi pi-link"
+        size="small"
+        severity="warn"
+        @click="openOrphanWizard"
+      />
+    </Message>
+
+    <!-- Always-on toolbar: every wizard available regardless of
+         the snapshot recommendation, so an operator can apply
+         them proactively (e.g. fix a typo in cluster.yaml before
+         any peer goes into the broken state). -->
+    <div class="webui-recovery__toolbar">
+      <Button
+        label="Topology fix"
+        icon="pi pi-link"
+        size="small"
+        severity="info"
+        text
+        @click="openTopologyWizard"
+      />
+      <Button
+        label="Quorum-loss escape"
+        icon="pi pi-bolt"
+        size="small"
+        severity="warn"
+        text
+        @click="openQuorumWizard"
+      />
+      <Button
+        label="Orphan resolve"
+        icon="pi pi-cog"
+        size="small"
+        severity="secondary"
+        text
+        @click="openOrphanWizard"
+      />
+    </div>
 
     <DataTable
       v-if="snapshot"
@@ -382,6 +580,153 @@ const peerOptions = computed(() =>
       </template>
     </Dialog>
 
+    <!-- Orphan wizard -->
+    <Dialog
+      v-model:visible="orOpen"
+      modal
+      header="Orphan resolver"
+      :style="{ width: '32rem' }"
+    >
+      <div class="webui-recovery__row">
+        <label>Orphan peer</label>
+        <Select v-model="orTarget" :options="peerOptions" option-label="label" option-value="value" />
+      </div>
+      <div class="webui-recovery__row">
+        <label>Strategy</label>
+        <Select
+          v-model="orAction"
+          :options="[
+            { label: 'Force reconnect (drop + reattach appliers)', value: 'force_reconnect' },
+            { label: 'Rebootstrap (wipe + cold-boot)', value: 'rebootstrap' },
+            { label: 'Solo promote (writable standalone)', value: 'solo_promote' },
+          ]"
+          option-label="label"
+          option-value="value"
+        />
+      </div>
+      <Message severity="warn" :closable="false">
+        Type <code>{{ orConfirmExpected }}</code> to confirm.
+      </Message>
+      <div class="webui-recovery__row">
+        <label>Confirm</label>
+        <input v-model="orConfirm" class="webui-recovery__confirm" :placeholder="orConfirmExpected" />
+      </div>
+      <template #footer>
+        <Button label="Cancel" severity="secondary" text @click="orOpen = false" />
+        <Button
+          label="Resolve"
+          icon="pi pi-link"
+          severity="warn"
+          :loading="orBusy"
+          :disabled="orConfirm.trim() !== orConfirmExpected"
+          @click="executeOrphan"
+        />
+      </template>
+    </Dialog>
+
+    <!-- Quorum-loss escape wizard -->
+    <Dialog
+      v-model:visible="qOpen"
+      modal
+      header="Quorum-loss escape hatch"
+      :style="{ width: '36rem' }"
+    >
+      <Message severity="error" :closable="false">
+        <strong>Dangerous.</strong>
+        Flips <code>synchro_quorum</code> to 1 on the target peer
+        for the chosen window. A partition during the window can
+        fork the WAL — fix the underlying quorum problem ASAP
+        and prefer ending the window early via cluster YAML.
+      </Message>
+      <div class="webui-recovery__row">
+        <label>Target peer</label>
+        <Select v-model="qTarget" :options="peerOptions" option-label="label" option-value="value" />
+      </div>
+      <div class="webui-recovery__row">
+        <label>Window (seconds)</label>
+        <input v-model.number="qWindow" type="number" min="5" max="3600" class="webui-recovery__confirm" />
+      </div>
+      <div class="webui-recovery__row">
+        <label>Risk</label>
+        <label class="webui-recovery__inline">
+          <input v-model="qAck" type="checkbox" />
+          <span>I accept the split-brain risk during the window</span>
+        </label>
+      </div>
+      <Message severity="warn" :closable="false">
+        Type <code>{{ qConfirmExpected }}</code> to confirm.
+      </Message>
+      <div class="webui-recovery__row">
+        <label>Confirm</label>
+        <input v-model="qConfirm" class="webui-recovery__confirm" :placeholder="qConfirmExpected" />
+      </div>
+      <template #footer>
+        <Button label="Cancel" severity="secondary" text @click="qOpen = false" />
+        <Button
+          label="Lower quorum"
+          icon="pi pi-bolt"
+          severity="danger"
+          :loading="qBusy"
+          :disabled="!qAck || qConfirm.trim() !== qConfirmExpected"
+          @click="executeQuorum"
+        />
+      </template>
+    </Dialog>
+
+    <!-- Topology fix wizard -->
+    <Dialog
+      v-model:visible="tOpen"
+      modal
+      header="Replication topology fix"
+      :style="{ width: '44rem' }"
+    >
+      <Message
+        v-if="tPeers.length === 0"
+        severity="info"
+        :closable="false"
+      >
+        Diagnosing topology…
+      </Message>
+      <table v-else class="webui-recovery__topo">
+        <thead>
+          <tr><th>Peer</th><th>Reachable</th><th>Suggested URI</th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="p in tPeers" :key="p.alias">
+            <td><code>{{ p.alias }}</code></td>
+            <td>{{ p.reachable ? '✓' : '✗' }}</td>
+            <td>
+              <input
+                v-if="tFixes[p.alias] !== undefined"
+                v-model="tFixes[p.alias]"
+                class="webui-recovery__confirm webui-recovery__topo-input"
+              />
+              <span v-else class="webui-recovery__muted">no change</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <Message severity="warn" :closable="false">
+        Type <code>{{ tConfirmExpected }}</code> to confirm.
+      </Message>
+      <div class="webui-recovery__row">
+        <label>Confirm</label>
+        <input v-model="tConfirm" class="webui-recovery__confirm" :placeholder="tConfirmExpected" />
+      </div>
+      <template #footer>
+        <Button label="Cancel" severity="secondary" text @click="tOpen = false" />
+        <Button
+          label="Apply fix"
+          icon="pi pi-link"
+          severity="warn"
+          :loading="tBusy"
+          :disabled="tConfirm.trim() !== tConfirmExpected
+            || Object.keys(tFixes).length === 0"
+          @click="executeTopology"
+        />
+      </template>
+    </Dialog>
+
     <!-- Leader takeover wizard -->
     <Dialog
       v-model:visible="ltOpen"
@@ -467,4 +812,29 @@ const peerOptions = computed(() =>
   font-size: 0.85rem;
 }
 .webui-recovery__muted { color: var(--webui-text-muted); }
+.webui-recovery__toolbar {
+  display: flex;
+  gap: 0.5rem;
+  padding-top: 0.25rem;
+  border-top: 1px dashed var(--webui-border);
+}
+.webui-recovery__inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+.webui-recovery__topo {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+}
+.webui-recovery__topo th,
+.webui-recovery__topo td {
+  text-align: left;
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--webui-border);
+}
+.webui-recovery__topo-input { width: 100%; }
 </style>

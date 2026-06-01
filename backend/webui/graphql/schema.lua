@@ -1350,6 +1350,37 @@ local Mutation = types.object {
                     return require('webui.recovery.quorum_loss')
                         .escape(payload, root)
                 end
+                if args.action == 'topology_fix' then
+                    return require('webui.recovery.topology_fix')
+                        .apply(payload, root)
+                end
+                if args.action == 'topology_fix_diagnose' then
+                    -- Pseudo-action: returns the diagnostic
+                    -- report wrapped in the standard result
+                    -- shape so the SPA only has one mutation
+                    -- contract to render.
+                    local diag = require('webui.recovery.topology_fix')
+                        .diagnose()
+                    if diag.error then
+                        return { ok = false, action = 'topology_fix_diagnose',
+                            error = diag.error, results = {} }
+                    end
+                    local results = {}
+                    for _, p in ipairs(diag.peers or {}) do
+                        table.insert(results, {
+                            peer = p.alias,
+                            ok   = p.suggestion == nil,
+                            msg  = p.suggestion ~= nil
+                                and ('declared=' .. tostring(p.declared_uri)
+                                    .. ' observed=' .. tostring(p.observed_uri))
+                                or nil,
+                        })
+                    end
+                    return {
+                        ok = true, action = 'topology_fix_diagnose',
+                        results = results,
+                    }
+                end
                 error('VALIDATION_ERROR: unsupported action '
                     .. tostring(args.action))
             end,
