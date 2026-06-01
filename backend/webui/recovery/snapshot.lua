@@ -42,6 +42,11 @@ function M.classify(servers)
         local info = srv.box_info
         if type(info) == 'table' then
             entry.status      = info.status or entry.status
+            -- Live `box.info.ro` overrides the cached poll value
+            -- — promotion / demotion takes effect immediately on
+            -- the target peer but propagates to other peers only
+            -- on the next replication tick.
+            if info.ro ~= nil then entry.ro = info.ro end
             entry.current_term = info.election and info.election.term
             local synchro = info.synchro
             if type(synchro) == 'table' and type(synchro.queue) == 'table' then
@@ -174,6 +179,7 @@ local function fetch_box_info_per_peer(servers)
                 out[alias] = {
                     id     = box.info.id,
                     status = box.info.status,
+                    ro     = box.info.ro,
                     election = box.info.election,
                     synchro  = box.info.synchro,
                     vclock   = box.info.vclock,
@@ -190,6 +196,7 @@ local function fetch_box_info_per_peer(servers)
         return {
             id          = box.info.id,
             status      = box.info.status,
+            ro          = box.info.ro,
             election    = box.info.election,
             synchro     = box.info.synchro,
             vclock      = box.info.vclock,

@@ -1342,6 +1342,14 @@ local Mutation = types.object {
                     return require('webui.recovery.leader_takeover')
                         .promote(payload, root)
                 end
+                if args.action == 'orphan_resolve' then
+                    return require('webui.recovery.orphan')
+                        .resolve(payload, root)
+                end
+                if args.action == 'quorum_loss_escape' then
+                    return require('webui.recovery.quorum_loss')
+                        .escape(payload, root)
+                end
                 error('VALIDATION_ERROR: unsupported action '
                     .. tostring(args.action))
             end,
