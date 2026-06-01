@@ -1141,8 +1141,35 @@ async function quarantineWal(row: WalRow) {
 .webui-recovery__row {
   display: grid;
   grid-template-columns: 10rem 1fr auto;
-  gap: 0.5rem;
+  /* gap 1rem horizontally (between label and the form control) +
+     0.25rem vertically (rows themselves are separated by the
+     dialog-content flex gap, this is just safety). The previous
+     0.5rem made labels read as captions glued to inputs. */
+  column-gap: 1rem;
+  row-gap: 0.25rem;
   align-items: center;
+}
+
+/* Make every form control inside a recovery row fill the
+   available column. PrimeVue's Select / Dropdown / Input render
+   with `width: auto` by default, so without this the dropdown
+   trigger shrinks to its content width and labels hang next to
+   it with empty space on the right of the input — looks broken,
+   especially with short Selects like "tt-1 · queue-owner". */
+.webui-recovery__row :deep(.p-select),
+.webui-recovery__row :deep(.p-dropdown),
+.webui-recovery__row :deep(.p-inputtext),
+.webui-recovery__row input,
+.webui-recovery__row select {
+  width: 100%;
+  box-sizing: border-box;
+}
+/* Override for the muted hint that sits in the 3rd column —
+   it must stay auto-sized so it doesn't push the form control
+   to half-width. */
+.webui-recovery__row > .webui-recovery__muted {
+  width: auto;
+  white-space: nowrap;
 }
 
 /* Recovery dialogs were a soup of stacked Message banners, rows
