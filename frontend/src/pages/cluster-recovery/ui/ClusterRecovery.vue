@@ -143,6 +143,16 @@ const unreachablePeers = computed(() => {
   return snapshot.value.peers.filter((p) => p.role === 'unreachable');
 });
 
+const orphanPeers = computed(() => {
+  if (snapshot.value === null) return [] as PeerEntry[];
+  return snapshot.value.peers.filter((p) => p.role === 'orphan');
+});
+
+const currentQueueOwner = computed(() => {
+  if (snapshot.value === null) return null;
+  return snapshot.value.peers.find((p) => p.queue_owner)?.alias ?? null;
+});
+
 function openSplitBrainWizard() {
   sbOpen.value = true;
   sbWinner.value = healthyPeers.value.find((p) => p.queue_owner)?.alias
@@ -233,8 +243,17 @@ const orBusy = ref(false);
 
 function openOrphanWizard() {
   orOpen.value = true;
-  orTarget.value = (snapshot.value?.peers ?? [])
-    .find((p) => p.role === 'orphan')?.alias ?? '';
+  // If a peer is actually orphan, pre-select it. Otherwise allow
+  // the operator to pick any peer (the wizard is also useful as
+  // a proactive force-reconnect tool, not just for true orphans)
+  // — fall back to the queue owner so the destructive options
+  // surface a high-impact target instead of an empty Select.
+  const orphan = (snapshot.value?.peers ?? []).find((p) => p.role === 'orphan');
+  const owner = (snapshot.value?.peers ?? []).find((p) => p.queue_owner);
+  orTarget.value = orphan?.alias
+    ?? owner?.alias
+    ?? (snapshot.value?.peers ?? [])[0]?.alias
+    ?? '';
   orAction.value = 'force_reconnect';
   orConfirm.value = '';
 }
@@ -315,11 +334,15 @@ const tPeers = ref<TopologyPeer[]>([]);
 const tFixes = ref<Record<string, string>>({});
 const tConfirm = ref('');
 const tBusy = ref(false);
+const tDiagnosed = ref(false);
 
 async function openTopologyWizard() {
   tOpen.value = true;
   tConfirm.value = '';
   tBusy.value = false;
+  tDiagnosed.value = false;
+  tPeers.value = [];
+  tFixes.value = {};
   // Use the diagnose pseudo-action — backend returns its
   // diagnostic via the standard recoveryAction shape so the
   // results array carries one row per peer with `msg` filled
@@ -342,7 +365,6 @@ async function openTopologyWizard() {
     });
   }
   tPeers.value = arr;
-  tFixes.value = {};
   for (const p of arr) {
     if (p.suggestion) {
       // suggestion msg currently encodes `declared=X observed=Y`
@@ -351,6 +373,7 @@ async function openTopologyWizard() {
       if (m) tFixes.value[p.alias] = m[1];
     }
   }
+  tDiagnosed.value = true;
 }
 
 const tConfirmExpected = 'TOPOLOGY FIX';
@@ -600,6 +623,14 @@ async function quarantineWal(row: WalRow) {
         @click="openOrphanWizard"
       />
       <Button
+        label="Leader takeover"
+        icon="pi pi-arrow-up-right"
+        size="small"
+        severity="warn"
+        text
+        @click="openTakeoverWizard"
+      />
+      <Button
         label="PITR plan"
         icon="pi pi-history"
         size="small"
@@ -730,8 +761,24 @@ async function quarantineWal(row: WalRow) {
       header="Orphan resolver"
       :style="{ width: '32rem' }"
     >
+      <Message
+        v-if="orphanPeers.length === 0"
+        severity="info"
+        :closable="false"
+      >
+        No peers currently report status = orphan. The wizard is
+        still usable as a proactive force-reconnect / rebootstrap
+        for any peer — pick the target manually.
+      </Message>
+      <Message
+        v-else
+        severity="warn"
+        :closable="false"
+      >
+        Detected orphan peer(s): <strong>{{ orphanPeers.map((p) => p.alias).join(', ') }}</strong>.
+      </Message>
       <div class="webui-recovery__row">
-        <label>Orphan peer</label>
+        <label>Target peer</label>
         <Select v-model="orTarget" :options="peerOptions" option-label="label" option-value="value" />
       </div>
       <div class="webui-recovery__row">
@@ -781,13 +828,29 @@ async function quarantineWal(row: WalRow) {
         fork the WAL — fix the underlying quorum problem ASAP
         and prefer ending the window early via cluster YAML.
       </Message>
+      <Message
+        v-if="unreachablePeers.length === 0"
+        severity="info"
+        :closable="false"
+      >
+        Every peer is currently reachable. The escape hatch is
+        usually applied when one or more peers are unreachable and
+        synchronous writes start blocking. Opening it proactively
+        is fine but you almost certainly want to wait.
+      </Message>
       <div class="webui-recovery__row">
         <label>Target peer</label>
         <Select v-model="qTarget" :options="peerOptions" option-label="label" option-value="value" />
+        <span v-if="qTarget && qTarget === currentQueueOwner" class="webui-recovery__muted">
+          ← current queue owner
+        </span>
       </div>
       <div class="webui-recovery__row">
         <label>Window (seconds)</label>
         <input v-model.number="qWindow" type="number" min="5" max="3600" class="webui-recovery__confirm" />
+        <span class="webui-recovery__muted">
+          auto-restores original quorum after this window
+        </span>
       </div>
       <div class="webui-recovery__row">
         <label>Risk</label>
@@ -824,11 +887,19 @@ async function quarantineWal(row: WalRow) {
       :style="{ width: '44rem' }"
     >
       <Message
-        v-if="tPeers.length === 0"
+        v-if="!tDiagnosed"
         severity="info"
         :closable="false"
       >
         Diagnosing topology…
+      </Message>
+      <Message
+        v-else-if="Object.keys(tFixes).length === 0"
+        severity="success"
+        :closable="false"
+      >
+        No replication topology issues detected. Every declared peer
+        URI matches what the cluster observes. Nothing to fix.
       </Message>
       <table v-else class="webui-recovery__topo">
         <thead>
@@ -849,22 +920,24 @@ async function quarantineWal(row: WalRow) {
           </tr>
         </tbody>
       </table>
-      <Message severity="warn" :closable="false">
-        Type <code>{{ tConfirmExpected }}</code> to confirm.
-      </Message>
-      <div class="webui-recovery__row">
-        <label>Confirm</label>
-        <input v-model="tConfirm" class="webui-recovery__confirm" :placeholder="tConfirmExpected" />
-      </div>
+      <template v-if="tDiagnosed && Object.keys(tFixes).length > 0">
+        <Message severity="warn" :closable="false">
+          Type <code>{{ tConfirmExpected }}</code> to confirm.
+        </Message>
+        <div class="webui-recovery__row">
+          <label>Confirm</label>
+          <input v-model="tConfirm" class="webui-recovery__confirm" :placeholder="tConfirmExpected" />
+        </div>
+      </template>
       <template #footer>
-        <Button label="Cancel" severity="secondary" text @click="tOpen = false" />
+        <Button label="Close" severity="secondary" text @click="tOpen = false" />
         <Button
+          v-if="tDiagnosed && Object.keys(tFixes).length > 0"
           label="Apply fix"
           icon="pi pi-link"
           severity="warn"
           :loading="tBusy"
-          :disabled="tConfirm.trim() !== tConfirmExpected
-            || Object.keys(tFixes).length === 0"
+          :disabled="tConfirm.trim() !== tConfirmExpected"
           @click="executeTopology"
         />
       </template>
@@ -980,10 +1053,35 @@ async function quarantineWal(row: WalRow) {
       header="Leader takeover"
       :style="{ width: '32rem' }"
     >
+      <Message
+        v-if="currentQueueOwner"
+        severity="info"
+        :closable="false"
+      >
+        Current queue owner: <strong>{{ currentQueueOwner }}</strong>.
+        Default candidate has the highest LSN among healthy peers.
+      </Message>
+      <Message
+        v-else
+        severity="error"
+        :closable="false"
+      >
+        <strong>No queue owner detected.</strong>
+        Cluster cannot accept synchronous writes — pick a leader and
+        promote it.
+      </Message>
       <div class="webui-recovery__row">
         <label>New leader</label>
         <Select v-model="ltTarget" :options="peerOptions" option-label="label" option-value="value" />
       </div>
+      <Message
+        v-if="ltTarget && ltTarget === currentQueueOwner"
+        severity="warn"
+        :closable="false"
+      >
+        Selected peer already owns the queue. Promote on a different
+        peer to actually take leadership over.
+      </Message>
       <Message severity="warn" :closable="false">
         Drives <code>box.ctl.promote()</code> on the target peer.
         Type <code>{{ ltConfirmExpected }}</code> to confirm.
