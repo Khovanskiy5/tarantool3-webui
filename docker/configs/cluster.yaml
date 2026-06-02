@@ -42,13 +42,6 @@ groups:
     replicasets:
       rs-1:
         instances:
-          tt-3:
-            iproto:
-              listen:
-              - uri: 0.0.0.0:3301
-              advertise:
-                peer:
-                  uri: tt-3:3301          
           tt-2:
             iproto:
               listen:
@@ -56,6 +49,13 @@ groups:
               advertise:
                 peer:
                   uri: tt-2:3301
+          tt-3:
+            iproto:
+              listen:
+              - uri: 0.0.0.0:3301
+              advertise:
+                peer:
+                  uri: tt-3:3301
           tt-1:
             iproto:
               listen:
@@ -63,8 +63,6 @@ groups:
               advertise:
                 peer:
                   uri: tt-1:3301
-            database:
-              mode: rw
 roles_cfg:
   webui:
     graphiql_enabled: true
