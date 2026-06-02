@@ -126,34 +126,6 @@ local ClusterPayload = types.object {
     },
 }
 
--- ── Shared bootstrap types ────────────────────────────────────────────
--- Declared before Query/Mutation so both blocks can reference them.
-
--- Wizard input for the first admin user. Used by both `bootstrapRender`
--- (live preview) and `bootstrapInitialize` (commit). The mutation
--- rejects the call when this block is absent or invalid — see resolver
--- and `bootstrap.lua` validators for the exact rules (login regex
--- `^[a-z][a-z0-9_]*$`, password ≥ 12 chars with letters + digits).
-local AdminCredentialsInput = types.inputObject({
-    name = 'AdminCredentialsInput',
-    fields = {
-        login    = types.string.nonNull,
-        password = types.string.nonNull,
-    },
-})
-
--- Per-peer reload failure surfaced from `twophase.commit` when the
--- bootstrap path opts into `fanout_reload`. The bootstrap UI uses
--- this list to tell the operator which followers did not pick up
--- the new config and need a manual nudge.
-local PeerReloadFailure = types.object({
-    name = 'PeerReloadFailure',
-    fields = {
-        alias = types.string.nonNull,
-        err   = types.string.nonNull,
-    },
-})
-
 -- ── Query root ────────────────────────────────────────────────────────
 
 local Query = types.object {
@@ -662,15 +634,10 @@ local Query = types.object {
                 },
             }).nonNull,
             arguments = {
-                template          = types.string.nonNull,
-                cluster_name      = types.string,
-                admin_credentials = AdminCredentialsInput,
+                template     = types.string.nonNull,
+                cluster_name = types.string,
             },
-            description = 'Preview the YAML the wizard would commit, without '
-                .. 'writing it. When `admin_credentials` is supplied, the '
-                .. 'preview drops the legacy dev fixtures (admin_dev / '
-                .. 'superuser_dev) and renders with the operator-chosen '
-                .. 'user instead.',
+            description = 'Preview the YAML the wizard would commit, without writing it.',
             resolve = bootstrap_resolver.query_render,
         },
         webhooks = {
@@ -751,9 +718,6 @@ local TopologyEditResult = types.object {
         message      = types.string,
     },
 }
-
--- AdminCredentialsInput and PeerReloadFailure are declared above
--- the Query/Mutation blocks so they can be referenced from both.
 
 -- Mutations.
 --
@@ -853,34 +817,22 @@ local Mutation = types.object {
             kind = types.object({
                 name = 'BootstrapInitResult',
                 fields = {
-                    ok              = types.boolean.nonNull,
-                    yaml            = types.string,
-                    revision        = types.long,
-                    dry_run         = types.boolean,
-                    reloaded_count  = types.int,
-                    reload_failures = types.list(PeerReloadFailure.nonNull),
-                    etcd_used       = types.boolean,
-                    etcd_error      = types.string,
-                    error_code      = types.string,
-                    message         = types.string,
+                    ok          = types.boolean.nonNull,
+                    yaml        = types.string,
+                    revision    = types.long,
+                    dry_run     = types.boolean,
+                    etcd_used   = types.boolean,
+                    etcd_error  = types.string,
+                    error_code  = types.string,
+                    message     = types.string,
                 },
             }).nonNull,
             arguments = {
-                template          = types.string.nonNull,
-                cluster_name      = types.string,
-                -- inputObject does not expose `.nonNull` directly —
-                -- wrap explicitly (same idiom the data-explorer
-                -- mutations use for `TupleFilterInput`).
-                admin_credentials = types.nonNull(AdminCredentialsInput),
+                template     = types.string.nonNull,
+                cluster_name = types.string,
             },
             description = 'Render the chosen template and commit it through the '
-                .. 'two-phase pipeline. `admin_credentials` is required: the '
-                .. 'wizard refuses to ship a YAML that ends up with hardcoded '
-                .. 'dev passwords. After the etcd put, fans `config:reload()` '
-                .. 'out to every peer so the new topology applies right away; '
-                .. 'partial fan-out outcomes are reported in `reloaded_count` '
-                .. 'and `reload_failures`. Refuses to run when '
-                .. '`bootstrapStatus.needed` is false.',
+                .. 'two-phase pipeline. Refuses to run when status.needed is false.',
             resolve = bootstrap_resolver.mutation_initialize,
         },
         bootstrapVshard = {
