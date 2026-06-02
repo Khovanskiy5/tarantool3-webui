@@ -47,6 +47,13 @@ generates:
         DateTime: string
         UUID: string
         JSON: 'Record<string, unknown>'
+        # `Long` is GraphQL.js's 64-bit integer scalar. Tarantool can
+        # technically produce values past Number.MAX_SAFE_INTEGER
+        # (2^53), but the fields we ship (audit ids, snapshot
+        # revisions, memory bytes, bucket counts) all sit comfortably
+        # below that, so `number` is the correct TS shape and saves
+        # every caller from casting `unknown`.
+        Long: number
       enumsAsTypes: true
       namingConvention:
         typeNames: keep

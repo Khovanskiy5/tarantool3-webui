@@ -21,6 +21,22 @@ const emit = defineEmits<{
 
 const statusClass = computed(() => `webui-rs-card--${props.replicaset.status}`);
 const leader = computed(() => getLeaderAlias(props.replicaset));
+
+// Replicaset-wide bucket aggregate for the tooltip on each row's
+// buckets column. Every vshard storage replica reports the same
+// bucket set (master + followers are mirrors), so we take the max
+// across members instead of summing — summing would triple-count
+// when all three replicas are healthy and read 3000 each. Null
+// when the replicaset is not a vshard storage.
+const replicasetBucketsTotal = computed(() => {
+  let max: number | null = null;
+  for (const s of props.servers) {
+    const c = s.statistics?.bucketsCount;
+    if (c == null) continue;
+    if (max == null || c > max) max = c;
+  }
+  return max;
+});
 </script>
 
 <template>
@@ -49,13 +65,20 @@ const leader = computed(() => getLeaderAlias(props.replicaset));
           <th>URI</th>
           <th>Version</th>
           <th>Uptime</th>
+          <th>Buckets</th>
+          <th>Memory</th>
           <th>Last error</th>
           <th v-if="showActions">Actions</th>
         </tr>
       </thead>
       <tbody>
         <template v-for="srv in servers" :key="srv.alias">
-          <InstanceRow :instance="srv" :is-self="srv.alias === selfAlias" :leader-alias="leader">
+          <InstanceRow
+            :instance="srv"
+            :is-self="srv.alias === selfAlias"
+            :leader-alias="leader"
+            :total-buckets="replicasetBucketsTotal"
+          >
             <td v-if="showActions" class="webui-rs-card__actions-cell">
               <InstanceActionsMenu
                 :alias="srv.alias"

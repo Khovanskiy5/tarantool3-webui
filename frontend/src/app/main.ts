@@ -10,6 +10,7 @@
 import { createApp, watch } from 'vue';
 import PrimeVue from 'primevue/config';
 import Aura from '@primevue/themes/aura';
+import Tooltip from 'primevue/tooltip';
 
 import App from './App.vue';
 import { router } from './router';
@@ -41,6 +42,13 @@ app.use(PrimeVue, {
     },
   },
 });
+
+// PrimeVue Tooltip is wired as a directive so any widget that wants a
+// tooltip can use `v-tooltip` instead of the native `title` attribute.
+// The native attribute has a fixed ~700ms browser delay and ignores
+// theme tokens; the PrimeVue tooltip fires immediately and follows
+// the Aura dark theme bridge already configured above.
+app.directive('tooltip', Tooltip);
 
 installUrql(app);
 

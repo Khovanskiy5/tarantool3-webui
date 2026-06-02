@@ -149,6 +149,12 @@ function M.merge_probe(server, probe)
         server.items_used_ratio = parse_ratio(probe.slab.items_used_ratio)
         server.quota_used_ratio = parse_ratio(probe.slab.quota_used_ratio)
     end
+    -- vshard.storage.buckets_count() — null for routers and non-vshard
+    -- peers. Distinct from slab so storages that briefly fail to read
+    -- box.slab.info() still surface their bucket count.
+    if probe.buckets_count ~= nil then
+        server.buckets_count = probe.buckets_count
+    end
     server.election      = probe.election or server.election
     server.clock         = probe.clock or server.clock
     server.reachable     = true

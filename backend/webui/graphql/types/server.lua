@@ -82,11 +82,24 @@ M.BoxInfo = types.object {
     },
 }
 
+-- Pull a byte counter out of the cached probe.slab snapshot. The
+-- table can be nil (probe not yet run, or the peer just bootstrapped
+-- and box.slab.info() raised); resolvers return nil in that case so
+-- the GraphQL field stays null rather than crashing the query.
+local function slab_long(field_name)
+    return function(root)
+        local slab = root.slab
+        if type(slab) ~= 'table' then return nil end
+        return slab[field_name]
+    end
+end
+
 M.Statistics = types.object {
     name = 'Statistics',
-    description = 'Memory and slab counters from box.slab.info(). Fields '
-        .. 'are nullable because the issues scanner (Task 19) is the '
-        .. 'source of truth and may not yet have populated them.',
+    description = 'Memory and slab counters from box.slab.info() plus the '
+        .. 'vshard.storage bucket count when the peer is a storage. '
+        .. 'Every field is nullable: the poller may not have collected '
+        .. 'this peer yet, or the peer is not a vshard storage.',
     fields = {
         arenaUsedRatio = {
             kind = types.float,
@@ -102,6 +115,37 @@ M.Statistics = types.object {
             kind = types.float,
             description = 'box.slab.info().quota_used_ratio as a 0-1 fraction.',
             resolve = function(root) return root.quota_used_ratio end,
+        },
+        arenaUsed = {
+            kind = types.long,
+            description = 'box.slab.info().arena_used in bytes — memory in '
+                .. 'use inside the slab arena (tuples + allocated slabs).',
+            resolve = slab_long('arena_used'),
+        },
+        arenaSize = {
+            kind = types.long,
+            description = 'box.slab.info().arena_size in bytes — total arena '
+                .. 'capacity currently committed.',
+            resolve = slab_long('arena_size'),
+        },
+        quotaUsed = {
+            kind = types.long,
+            description = 'box.slab.info().quota_used in bytes — total '
+                .. 'memtx_memory consumed (arena + housekeeping).',
+            resolve = slab_long('quota_used'),
+        },
+        quotaSize = {
+            kind = types.long,
+            description = 'box.slab.info().quota_size in bytes — configured '
+                .. 'memtx_memory ceiling.',
+            resolve = slab_long('quota_size'),
+        },
+        bucketsCount = {
+            kind = types.long,
+            description = 'vshard.storage.buckets_count(). Null when the '
+                .. 'peer is not a vshard storage (router-only or '
+                .. 'sharding disabled).',
+            resolve = function(root) return root.buckets_count end,
         },
     },
 }
@@ -177,11 +221,14 @@ M.Server = types.object {
         },
         statistics = {
             kind = M.Statistics,
-            description = 'Memory counters from the last probe; populated by Task 19.',
+            description = 'Memory + bucket counters from the last probe; '
+                .. 'populated by the poller.',
             resolve = function(root)
                 if root.arena_used_ratio == nil
                     and root.items_used_ratio == nil
-                    and root.quota_used_ratio == nil then
+                    and root.quota_used_ratio == nil
+                    and root.slab == nil
+                    and root.buckets_count == nil then
                     return nil
                 end
                 return root

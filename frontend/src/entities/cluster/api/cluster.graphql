@@ -82,6 +82,11 @@ fragment ServerCardFields on Server {
     arenaUsedRatio
     itemsUsedRatio
     quotaUsedRatio
+    arenaUsed
+    arenaSize
+    quotaUsed
+    quotaSize
+    bucketsCount
   }
 }
 

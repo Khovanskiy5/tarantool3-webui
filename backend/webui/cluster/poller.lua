@@ -108,6 +108,16 @@ M.PROBE_SRC = [[
     local cfg_ok, cfg = pcall(require, 'config')
     local cfg_info = cfg_ok and safe(function() return cfg:info() end) or nil
     local slab = safe(function() return box.slab.info() end)
+    -- Storages that loaded vshard.storage expose buckets_count().
+    -- Routers and non-vshard instances do not — keep the call guarded
+    -- and let the field be nil when unavailable.
+    local buckets_count = safe(function()
+        local ok, vs = pcall(require, 'vshard.storage')
+        if not ok or type(vs) ~= 'table' or type(vs.buckets_count) ~= 'function' then
+            return nil
+        end
+        return vs.buckets_count()
+    end)
     return {
         alias         = info.name,
         uuid          = info.uuid,
@@ -120,6 +130,7 @@ M.PROBE_SRC = [[
         clock         = safe(function() return require('clock').realtime() end),
         election      = safe(function() return info.election end),
         slab          = slab,
+        buckets_count = buckets_count,
         replication   = map_replication(info.replication),
         replicaset    = safe(function()
             return info.replicaset and {
@@ -249,6 +260,13 @@ local function collect_local_probe()
         clock         = safe_call(function() return require('clock').realtime() end),
         election      = safe_call(function() return info.election end),
         slab          = safe_call(function() return box.slab.info() end),
+        buckets_count = safe_call(function()
+            local ok, vs = pcall(require, 'vshard.storage')
+            if not ok or type(vs) ~= 'table' or type(vs.buckets_count) ~= 'function' then
+                return nil
+            end
+            return vs.buckets_count()
+        end),
         replication   = map_replication(info.replication),
         replicaset    = safe_call(function()
             return info.replicaset and {

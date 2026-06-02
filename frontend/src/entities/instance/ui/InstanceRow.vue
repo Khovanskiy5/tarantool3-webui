@@ -3,11 +3,20 @@ import { computed } from 'vue';
 
 import type { Instance } from '../model/types';
 import { isLeader, reachability, shortUuid } from '../model/selectors';
+import InstanceBuckets from './InstanceBuckets.vue';
+import InstanceMemBar from './InstanceMemBar.vue';
 
 const props = defineProps<{
   instance: Instance;
   isSelf?: boolean;
   leaderAlias?: string | null;
+  /**
+   * Cluster-wide total bucket count for the vshard group this
+   * instance belongs to. Forwarded into the tooltip of the buckets
+   * column so the operator can spot uneven distribution at a glance.
+   * Null when sharding is not configured.
+   */
+  totalBuckets?: number | null;
 }>();
 
 const stateClass = computed(() => {
@@ -38,8 +47,8 @@ const reasonLabel = computed(() => props.instance.boxInfo?.roReason ?? '');
       <span class="webui-instance-row__alias-text">{{ instance.alias }}</span>
       <span
         v-if="isSelf"
+        v-tooltip.top="'This is the instance answering the request'"
         class="webui-instance-row__chip webui-instance-row__chip--self"
-        title="This is the instance answering the request"
         >self</span
       >
       <span
@@ -59,7 +68,7 @@ const reasonLabel = computed(() => props.instance.boxInfo?.roReason ?? '');
       {{ instance.status }}
     </td>
     <td class="webui-instance-row__ro">
-      <span v-if="roLabel" :title="reasonLabel">{{ roLabel }}</span>
+      <span v-if="roLabel" v-tooltip.top="reasonLabel || undefined">{{ roLabel }}</span>
       <span v-else>—</span>
     </td>
     <td class="webui-instance-row__uri">{{ instance.uri ?? '—' }}</td>
@@ -67,8 +76,23 @@ const reasonLabel = computed(() => props.instance.boxInfo?.roReason ?? '');
       {{ instance.boxInfo?.version ?? '—' }}
     </td>
     <td class="webui-instance-row__uptime">{{ uptime }}</td>
+    <td class="webui-instance-row__buckets">
+      <InstanceBuckets
+        :count="instance.statistics?.bucketsCount ?? null"
+        :total="totalBuckets ?? null"
+      />
+    </td>
+    <td class="webui-instance-row__mem">
+      <InstanceMemBar
+        :arena-used-ratio="instance.statistics?.arenaUsedRatio ?? null"
+        :quota-used-ratio="instance.statistics?.quotaUsedRatio ?? null"
+        :items-used-ratio="instance.statistics?.itemsUsedRatio ?? null"
+        :quota-used="instance.statistics?.quotaUsed ?? null"
+        :quota-size="instance.statistics?.quotaSize ?? null"
+      />
+    </td>
     <td class="webui-instance-row__error">
-      <span v-if="instance.lastError" :title="instance.lastError">
+      <span v-if="instance.lastError" v-tooltip.top="instance.lastError">
         {{ instance.lastError }}
       </span>
     </td>

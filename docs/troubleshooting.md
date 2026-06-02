@@ -64,6 +64,78 @@ docker exec webui-etcd etcdctl get /tarantool/webui/config/all --print-value-onl
 
 **Известная причина пропажи.** Старая версия GraphQL-резолвера `setFailoverMode("supervised")` strip'ала `database.mode` со всех инстансов как часть «schema rule» блока, разделявшего поведение с native `election`/`manual`. На диске `supervised` хранится как `failover: off + agent: true`, поэтому schema-rule не применяется — strip был ошибочным. Исправлено в `backend/webui/graphql/resolvers/cluster_ops.lua:1086-1104`.
 
+### Контейнер инстанса в loop'е с `Instance name for X is not set in snapshot`
+
+**Симптомы.** После `docker compose down -v <инстанс>` + `up -d <инстанс>` контейнер не выходит из `Restarting (1)`. В `docker logs` каждые ~5 секунд:
+```
+Instance name for tt-1 is not set in snapshot and UUID is missing in the config.
+Found 21481e47-9097-4529-bc3c-62abe0f2f810 in snapshot.
+```
+UUID при каждой итерации меняется. Остальные инстансы здоровы, login на оставшемся master'е работает.
+
+**Причина.** Гонка в Tarantool 3.x bootstrap-протоколе:
+
+1. Свежий инстанс с пустым томом запускает JOIN от master'а.
+2. Master отдаёт initial snapshot **до** того, как впишет имя нового реплика в свой `_cluster` (см. `relay_initial_join` → `box_register_replica` в `tarantool-3.7.0/src/box/box.cc:5067-5081`).
+3. Инстанс сохраняет полученный snap локально. В header'е snap'а есть его свежесгенерированный `instance_uuid`, но в `_cluster` нет строки для этого uuid → имя в snap'е равно nil.
+4. Validate в `tarantool-3.7.0/src/box/lua/config/configdata.lua:545-551` стреляет:
+   ```lua
+   if saved_names.instance_name == nil and
+      config_names.instance_uuid == nil then
+       error('Instance name for ' .. name .. ' is not set in snapshot...')
+   end
+   ```
+5. Tarantool падает. Docker рестартует. Tom уже не пустой — лежит «обрезанный» snap. Loop.
+
+**Диагностика.**
+```bash
+docker logs --tail 50 webui-tt-1 | grep -E 'Instance name|UUID is missing'
+docker run --rm -v webui_tt-1-data:/data busybox ls /data/var/lib/tt-1
+```
+Если в томе видны `*.snap` файлы — loop активен.
+
+**Действие.**
+
+1. **Остановить инстанс окончательно** (чтобы Docker перестал его поднимать):
+   ```bash
+   docker compose -f docker/docker-compose.yml stop tt-1
+   ```
+2. **Вычистить том вручную** (busybox-однострочник избегает recreate'а):
+   ```bash
+   docker run --rm -v webui_tt-1-data:/data busybox \
+     rm -rf /data/var/lib/tt-1 /data/var/run/tt-1
+   ```
+3. **Прописать `database.instance_uuid`** для проблемного инстанса в etcd. UUID может быть любой валидный — если у инстанса была история (запись в vclock на остальных peer'ах), берите старый UUID, иначе vclock-конфликт на JOIN'е:
+   ```bash
+   docker exec webui-etcd-1 etcdctl get /tarantool/webui/config/all \
+     --print-value-only > /tmp/cfg.yaml
+   # отредактировать /tmp/cfg.yaml — добавить
+   #   tt-1:
+   #     database:
+   #       mode: rw
+   #       instance_uuid: <UUID>
+   #     iproto: ...
+   docker exec -i webui-etcd-1 etcdctl put /tarantool/webui/config/all \
+     < /tmp/cfg.yaml
+   ```
+   Это выключает ветку в `validate` (поле `config_names.instance_uuid` становится non-nil), и Tarantool разрешает первый запуск со «здоровым» snap'ом.
+4. **Запустить инстанс.** Первый цикл может ещё раз упасть с `Duplicate replica name X, already occupied by <uuid>` — это in-memory зомби в `replicaset.hash` на master'е (см. соседний runbook ниже). Docker рестартует контейнер; второй заход проходит, потому что connection guard на master'е уже отпустил старую incoming-connection.
+
+**Связанная проблема: остановленный applier с тем же сообщением.** После того, как новый peer вошёл в кластер, у другого follower'а может остановиться upstream'овый applier:
+```
+status: stopped
+message: 'Duplicate replica name tt-1, already occupied by <uuid>'
+```
+Это тот же зомби, только теперь у `follower_with_zombie` в hash висит старый `replica` struct с тем же uuid/именем. WAL-инсерт `[id, uuid, name]` от master'а отвергается в `on_replace_dd_cluster_insert` (`alter.cc:4883-4889`) ещё до того, как код проверит совпадение по uuid.
+
+**Лечение зомби-applier'а:**
+1. Остановить «новый» инстанс (`docker compose stop tt-1`) — иначе он мгновенно реконнектится и пересоздаёт зомби.
+2. Рестартануть follower'а с зомби (`docker compose restart tt-3`). При старте `replicaset.hash` собирается из чистого `_cluster` на диске → зомби нет.
+3. Дать follower'у догнать репликацию (∼5 секунд) — он применит WAL-инсерт от master'а и впишет нового peer'а в свой `_cluster`.
+4. Запустить «новый» инстанс. Реконнект найдёт уже зарегистрированную строку и не упрётся в name-check.
+
+**Корень.** Это поведение Tarantool 3.x bootstrap, оно не специфично для WebUI. Если фикс на стороне Tarantool пока не доехал, держим `database.instance_uuid` как long-term workaround для каждого инстанса в продакшен-конфиге (генерируется один раз через `uuid.str()` и фиксируется навсегда).
+
 ## Failover
 
 ### Failover не происходит, но лидер мёртв
