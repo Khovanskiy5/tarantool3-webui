@@ -13,8 +13,8 @@
     "back_to_dashboard": "Back to dashboard"
   },
   "app": {
-    "title": "Tarantool WebUI",
-    "subtitle": "Tarantool 3.7 cluster administration",
+    "title": "Tarantool Cluster Manager",
+    "subtitle": "Community Edition",
     "language": "Language",
     "theme": {
       "label": "Theme",

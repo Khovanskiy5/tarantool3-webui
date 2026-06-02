@@ -13,8 +13,8 @@
     "back_to_dashboard": "Вернуться на главную"
   },
   "app": {
-    "title": "Tarantool WebUI",
-    "subtitle": "Управление кластером Tarantool 3.7",
+    "title": "Tarantool Cluster Manager",
+    "subtitle": "Community Edition",
     "language": "Язык",
     "theme": {
       "label": "Тема",

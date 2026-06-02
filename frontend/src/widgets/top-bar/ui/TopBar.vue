@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import SelectButton from 'primevue/selectbutton';
 import Button from 'primevue/button';
+import Tag from 'primevue/tag';
 
 import { SUPPORTED_LOCALES, setLocale, type Locale } from '@/shared/i18n';
 import { useHealth } from '@/shared/lib/health';
@@ -51,18 +52,25 @@ const localeModel = computed<Locale>({
 
 <template>
   <header class="webui-top-bar">
-    <div class="webui-top-bar__left">
+    <!-- Brand is a router-link to the cluster home, matching the
+         "click the logo to go home" convention every operator
+         already expects from admin consoles. -->
+    <router-link to="/" class="webui-top-bar__left" :aria-label="t('app.title')">
       <strong class="webui-top-bar__brand">{{ t('app.title') }}</strong>
       <span class="webui-top-bar__subtitle">{{ t('app.subtitle') }}</span>
-    </div>
+    </router-link>
     <div class="webui-top-bar__right">
       <IssuesBadge />
-      <span class="webui-top-bar__instance">
+      <!-- Instance label + name expressed as a single PrimeVue Tag —
+           same chip pattern the cluster / failover / issues pages use
+           in their headers, so the visual language stays consistent
+           across the whole shell. -->
+      <Tag class="webui-top-bar__instance-tag" icon="pi pi-server" severity="secondary">
         <span class="webui-top-bar__instance-label">
           {{ t('widgets.top_bar.instance_label') }}
         </span>
         <span class="webui-top-bar__instance-name">{{ currentInstance }}</span>
-      </span>
+      </Tag>
       <!-- `allowEmpty="false"` is critical: SelectButton's default
            lets the user click the active option to deselect, which
            would leave the SPA with no locale. -->
@@ -76,13 +84,13 @@ const localeModel = computed<Locale>({
         size="small"
         class="webui-top-bar__locale-switch"
       />
-      <span
+      <Tag
         v-if="session.user"
-        class="webui-top-bar__user"
+        icon="pi pi-user"
+        severity="secondary"
+        :value="session.user.user"
         :title="(session.user.roles ?? []).join(', ')"
-      >
-        <i class="pi pi-user" /> {{ session.user.user }}
-      </span>
+      />
       <Button
         v-if="session.user"
         text
@@ -110,6 +118,13 @@ const localeModel = computed<Locale>({
   display: flex;
   align-items: baseline;
   gap: 0.75rem;
+  /* The whole brand block is a router-link; strip the default link
+     chrome so it reads as a heading until you hover it. */
+  color: inherit;
+  text-decoration: none;
+}
+.webui-top-bar__left:hover .webui-top-bar__brand {
+  color: var(--p-primary-color, var(--webui-accent));
 }
 
 .webui-top-bar__brand {
@@ -128,40 +143,22 @@ const localeModel = computed<Locale>({
   gap: 0.75rem;
 }
 
-.webui-top-bar__instance {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.25rem 0.65rem;
-  border: 1px solid var(--webui-border);
-  border-radius: var(--webui-radius);
-  background: rgba(255, 255, 255, 0.02);
-  line-height: 1.4;
-  white-space: nowrap;
+/* The instance Tag carries two pieces of text — an UPPERCASE label
+   and the monospace instance name. Tag's default slot lets us style
+   them separately while inheriting the chip's chrome (border /
+   background / icon spacing) from the PrimeVue theme. */
+.webui-top-bar__instance-tag {
+  gap: 0.4rem;
 }
-
 .webui-top-bar__instance-label {
   font-size: 0.7rem;
   text-transform: uppercase;
-  color: var(--webui-text-muted);
   letter-spacing: 0.06em;
+  color: var(--p-text-muted-color, var(--webui-text-muted));
 }
-
 .webui-top-bar__instance-name {
   font-weight: 600;
   font-family: var(--webui-font-mono);
-}
-
-.webui-top-bar__user {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.25rem 0.5rem;
-  border-radius: var(--webui-radius);
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid var(--webui-border);
-  font-family: var(--webui-font-mono);
-  font-size: 0.85rem;
 }
 
 /* PrimeVue 4 / Aura paints SelectButton via the design-token system,

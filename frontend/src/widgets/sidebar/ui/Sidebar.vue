@@ -129,15 +129,21 @@ const currentKey = computed(() => {
   font-size: 0.9rem;
 }
 
+/* Active state uses the PrimeVue highlight tokens so it follows the
+   theme picker (dark / light) instead of a hardcoded blue tint. The
+   `--webui-accent` fallback keeps the look when the PrimeVue tokens
+   are not yet wired (storybook, isolated tests). */
 .webui-sidebar__link[aria-current='page'] {
-  background: rgba(78, 168, 222, 0.12);
-  border-left: 3px solid var(--webui-accent);
+  background: var(--p-highlight-background, rgba(78, 168, 222, 0.12));
+  color: var(--p-highlight-color, var(--webui-text));
+  border-left: 3px solid var(--p-primary-color, var(--webui-accent));
   padding-left: calc(1rem - 3px);
   font-weight: 600;
 }
 
 .webui-sidebar__link:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--p-content-hover-background, rgba(255, 255, 255, 0.04));
+  color: var(--p-content-hover-color, var(--webui-text));
   text-decoration: none;
 }
 </style>
