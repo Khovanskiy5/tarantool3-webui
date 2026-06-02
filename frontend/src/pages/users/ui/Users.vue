@@ -54,12 +54,15 @@ onMounted(load);
 
 <template>
   <section class="webui-users">
-    <header><h1>Users</h1></header>
+    <header class="webui-users__head">
+      <h1>Users</h1>
+      <Tag :value="`${users.length} users`" severity="secondary" />
+    </header>
     <Message severity="info" :closable="false">
       User editing goes through the cluster config (<code>credentials.users.*</code>) via two-phase
       commit. The form will be wired once the multi-peer prepare/commit cycle is live.
     </Message>
-    <p v-if="error" class="webui-users__error">{{ error }}</p>
+    <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
     <DataTable :value="users" :loading="loading" data-key="name" size="small" striped-rows>
       <Column field="name" header="User" />
       <Column header="Type">
@@ -68,13 +71,14 @@ onMounted(load);
       <Column header="WebUI roles">
         <template #body="{ data }">
           <span v-if="(data.roles_app ?? []).length === 0" class="webui-users__muted">—</span>
-          <Tag
-            v-for="role in data.roles_app ?? []"
-            :key="role"
-            :value="role"
-            :severity="roleSeverity(role)"
-            class="webui-users__chip"
-          />
+          <span v-else class="webui-users__roles">
+            <Tag
+              v-for="role in data.roles_app ?? []"
+              :key="role"
+              :value="role"
+              :severity="roleSeverity(role)"
+            />
+          </span>
         </template>
       </Column>
     </DataTable>
@@ -88,16 +92,23 @@ onMounted(load);
   flex-direction: column;
   gap: 1rem;
 }
-.webui-users h1 {
+.webui-users__head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.webui-users__head h1 {
   margin: 0;
 }
-.webui-users__error {
-  color: var(--p-message-error-color, #d83535);
-}
-.webui-users__chip {
-  margin-right: 0.35rem;
+/* Wrap multiple role tags in a flex row so their spacing is owned
+   by `gap` instead of a bespoke per-chip margin. */
+.webui-users__roles {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
 }
 .webui-users__muted {
-  color: var(--webui-text-muted);
+  color: var(--p-text-muted-color, var(--webui-text-muted));
 }
 </style>
