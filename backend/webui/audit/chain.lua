@@ -64,7 +64,7 @@ local function encode_sorted(value)
         -- when the writer fed a plain Lua number into the
         -- projection. uuid / decimal / etc fall through to the
         -- string path so they survive in canonical form.
-        local ok_n, n = pcall(ffi.cast, 'int64_t', value)
+        local ok_n = pcall(ffi.cast, 'int64_t', value)
         if ok_n then
             -- json.encode of a int64 cdata writes the digits
             -- without quotes, matching Lua-number encoding.

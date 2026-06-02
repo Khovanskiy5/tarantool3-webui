@@ -15,7 +15,6 @@ import { defineStore } from 'pinia';
 import { ref } from 'vue';
 
 import {
-  CreateReplicasetDocument,
   DemoteInstanceDocument,
   ExpelInstanceDocument,
   PauseFailoverDocument,
@@ -62,9 +61,7 @@ export const useClusterOpsStore = defineStore('cluster-ops', () => {
   async function pauseFailover(ttlSec?: number): Promise<ActionOutcome> {
     pending.value = true;
     try {
-      const res = await client
-        .mutation(PauseFailoverDocument, { ttlSec })
-        .toPromise();
+      const res = await client.mutation(PauseFailoverDocument, { ttlSec }).toPromise();
       if (res.error) return shapeError(res.error, 'pauseFailover failed');
       const r = res.data?.pauseFailover;
       log.info('pauseFailover ok', { message: r?.message });
@@ -112,9 +109,7 @@ export const useClusterOpsStore = defineStore('cluster-ops', () => {
   async function demoteInstance(alias: string): Promise<ActionOutcome> {
     pending.value = true;
     try {
-      const res = await client
-        .mutation(DemoteInstanceDocument, { alias })
-        .toPromise();
+      const res = await client.mutation(DemoteInstanceDocument, { alias }).toPromise();
       if (res.error) return shapeError(res.error, 'demoteInstance failed');
       const r = res.data?.demoteInstance;
       return { ok: true, message: r?.message ?? 'demoted' };
@@ -144,45 +139,10 @@ export const useClusterOpsStore = defineStore('cluster-ops', () => {
     }
   }
 
-  // createReplicaset mirrors the backend's `createReplicaset` alias:
-  // {name, group, instances?, roles?, leader?, failover_priority?,
-  //  weight?, vshard_group?, apply?} encoded as a JSON string. The
-  // returned outcome carries the diff_summary on preview (apply=
-  // false) and the committed etcd revision on apply=true.
-  async function createReplicaset(
-    payload: Record<string, unknown>,
-  ): Promise<ActionOutcome & { diffSummary?: string[] }> {
+  async function expelInstance(alias: string, force = false): Promise<ActionOutcome> {
     pending.value = true;
     try {
-      const input = JSON.stringify(payload);
-      const res = await client
-        .mutation(CreateReplicasetDocument, { input })
-        .toPromise();
-      if (res.error) return shapeError(res.error, 'createReplicaset failed');
-      const r = res.data?.createReplicaset;
-      log.info('createReplicaset ok', {
-        applied: r?.applied,
-        ops: r?.diff_summary?.length,
-      });
-      return {
-        ok: true,
-        message: r?.message ?? 'replicaset ready',
-        diffSummary: r?.diff_summary ?? [],
-      };
-    } finally {
-      pending.value = false;
-    }
-  }
-
-  async function expelInstance(
-    alias: string,
-    force = false,
-  ): Promise<ActionOutcome> {
-    pending.value = true;
-    try {
-      const res = await client
-        .mutation(ExpelInstanceDocument, { alias, force })
-        .toPromise();
+      const res = await client.mutation(ExpelInstanceDocument, { alias, force }).toPromise();
       if (res.error) return shapeError(res.error, 'expelInstance failed');
       const r = res.data?.expelInstance;
       log.warn('expelInstance ok', { alias, message: r?.message });
@@ -233,7 +193,6 @@ export const useClusterOpsStore = defineStore('cluster-ops', () => {
     demoteInstance,
     setInstanceState,
     expelInstance,
-    createReplicaset,
     setFailoverMode,
   };
 });

@@ -18,16 +18,8 @@ mutation ResumeFailover {
   }
 }
 
-mutation PromoteInstance(
-  $alias: String!
-  $ttlSec: Int
-  $forceInconsistency: Boolean
-) {
-  promoteInstance(
-    alias: $alias
-    ttl_sec: $ttlSec
-    force_inconsistency: $forceInconsistency
-  ) {
+mutation PromoteInstance($alias: String!, $ttlSec: Int, $forceInconsistency: Boolean) {
+  promoteInstance(alias: $alias, ttl_sec: $ttlSec, force_inconsistency: $forceInconsistency) {
     ...TopologyEditResultFields
   }
 }
@@ -38,11 +30,7 @@ mutation DemoteInstance($alias: String!) {
   }
 }
 
-mutation SetInstanceState(
-  $alias: String!
-  $enabled: Boolean
-  $electable: Boolean
-) {
+mutation SetInstanceState($alias: String!, $enabled: Boolean, $electable: Boolean) {
   setInstanceState(alias: $alias, enabled: $enabled, electable: $electable) {
     ...TopologyEditResultFields
   }
@@ -50,12 +38,6 @@ mutation SetInstanceState(
 
 mutation ExpelInstance($alias: String!, $force: Boolean) {
   expelInstance(alias: $alias, force: $force) {
-    ...TopologyEditResultFields
-  }
-}
-
-mutation CreateReplicaset($input: String!) {
-  createReplicaset(input: $input) {
     ...TopologyEditResultFields
   }
 }

@@ -97,3 +97,48 @@ files['backend/webui/lifecycle/validate.lua'] = {
 files['backend/webui/notifications/smtp.lua'] = {
     max_cyclomatic_complexity = 40,
 }
+
+-- M.apply is a per-suggestion-type dispatcher. The branch count grows
+-- 1:1 with the suggestion catalog (force_apply, restart_replication,
+-- bootstrap_vshard, edit_topology, …); a registry/table-of-handlers
+-- pattern would only hide the per-type contract that lives in the
+-- adjacent branches.
+files['backend/webui/cluster/suggestions.lua'] = {
+    max_cyclomatic_complexity = 75,
+}
+
+-- apply_server_edit / apply_replicaset_edit walk every editable YAML
+-- field of a server / replicaset and validate + mutate it inline.
+-- The complexity follows the schema surface area, not control-flow
+-- design — splitting per-field helpers would scatter validation
+-- rules and obscure the single-source-of-truth ordering.
+files['backend/webui/cluster_ops/topology_edit.lua'] = {
+    max_cyclomatic_complexity = 65,
+}
+
+-- M.coerce_field converts user input to every supported Tarantool
+-- type (unsigned/integer/number/string/boolean/uuid/decimal/array/map
+-- /any). One linear branch per type is easier to audit than a
+-- per-type helper registry.
+files['backend/webui/data_explorer/types.lua'] = {
+    max_cyclomatic_complexity = 40,
+}
+
+-- mutation_set_failover_mode validates + applies every failover-mode
+-- parameter (mode, leader, synchro_quorum, timeouts, supervised
+-- coordinator) against the current cluster shape. mutation_set_
+-- instance_state mirrors that for per-instance state (mode/labels/
+-- election_mode/zone). Both are gated through 2PC; pulling
+-- helpers out would force callers to duplicate the validation
+-- ordering the schema relies on.
+files['backend/webui/graphql/resolvers/cluster_ops.lua'] = {
+    max_cyclomatic_complexity = 115,
+}
+
+-- M.resolve dispatches on action ∈ {manual, rebootstrap_losing,
+-- force_promote_winner}. Each branch needs its own validation
+-- and audit envelope; the dispatcher keeps the wire contract in
+-- one place.
+files['backend/webui/recovery/split_brain.lua'] = {
+    max_cyclomatic_complexity = 35,
+}

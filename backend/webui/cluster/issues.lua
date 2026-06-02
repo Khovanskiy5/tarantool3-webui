@@ -438,7 +438,7 @@ function M.check_synchro_quorum(snapshot, thresholds, now)
     -- second branch is a future hook for "explicit number that is
     -- ABOVE the floor but the operator likely meant N/2+1". Left
     -- empty intentionally — Cartridge does not warn here either.
-    _ = thresholds
+    local _ = thresholds
     return out
 end
 

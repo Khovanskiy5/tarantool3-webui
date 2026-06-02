@@ -262,7 +262,7 @@ function M.demote(ctx)
             .. ' is not in cluster YAML')
     end
     local mode = classify(ctx.parsed)
-    _ = gname
+    local _ = gname
 
     if mode == 'off' then
         return ctx.apply_edit_topology({
@@ -314,7 +314,7 @@ function M.demote(ctx)
                 -- instance spec the same way setInstanceState does.
             } },
         }, 'cluster.demote')
-        _ = rs
+        local _ = rs
         res.mode = mode
         return res
     end

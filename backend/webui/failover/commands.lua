@@ -144,12 +144,9 @@ function M.list(opts)
     -- The by_ts index is sorted ascending; iterate in reverse so
     -- the most recent commands surface first (typical UI need).
     for _, t in space.index.primary:pairs({}, { iterator = 'REQ' }) do
-        if opts.status ~= nil and t.status ~= opts.status then
-            -- skip
-        elseif opts.command_type ~= nil
-            and t.command_type ~= opts.command_type then
-            -- skip
-        else
+        local skip = (opts.status ~= nil and t.status ~= opts.status)
+            or (opts.command_type ~= nil and t.command_type ~= opts.command_type)
+        if not skip then
             -- params is `any` in the space (Lua table); GraphQL
             -- exposes it as a JSON string so the SPA can pick
             -- through nested shapes without us having to model

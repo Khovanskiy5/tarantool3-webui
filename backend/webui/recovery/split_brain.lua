@@ -26,12 +26,6 @@ local logger   = log_util.with_tag('recovery.split_brain')
 
 local M = {}
 
-local function find_peers_module()
-    local ok, peers = pcall(require, 'webui.cluster.peers')
-    if not ok then return nil end
-    return peers
-end
-
 local function find_rpc_module()
     local ok, rpc = pcall(require, 'webui.cluster.rpc')
     if not ok then return nil end

@@ -272,6 +272,7 @@ function M.query_tuples(root, args)
             error('NOT_FOUND: index ' .. tostring(args.index) .. ' on ' .. space_name)
         end
         -- Trust the hint: cover only matches for `eq` on leading parts.
+        local _
         _, covered = de_filter.pick_index(space, raw_filter)
     else
         idx, covered = de_filter.pick_index(space, raw_filter)

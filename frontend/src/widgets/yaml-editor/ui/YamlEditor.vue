@@ -9,14 +9,17 @@
 import { onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import type * as Monaco from 'monaco-editor';
 
-const props = withDefaults(defineProps<{
-  modelValue: string;
-  readonly?: boolean;
-  height?: string;
-}>(), {
-  readonly: false,
-  height: '60vh',
-});
+const props = withDefaults(
+  defineProps<{
+    modelValue: string;
+    readonly?: boolean;
+    height?: string;
+  }>(),
+  {
+    readonly: false,
+    height: '60vh',
+  },
+);
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: string): void;
@@ -34,9 +37,7 @@ let resizeObs: ResizeObserver | null = null;
 // emits a worker chunk per import. We only need the base
 // editor.worker — YAML doesn't ship language-specific workers.
 const initMonacoEnv = async () => {
-  const EditorWorker = (await import(
-    'monaco-editor/esm/vs/editor/editor.worker?worker'
-  )).default;
+  const EditorWorker = (await import('monaco-editor/esm/vs/editor/editor.worker?worker')).default;
   (self as unknown as { MonacoEnvironment: unknown }).MonacoEnvironment = {
     getWorker: () => new EditorWorker(),
   };
@@ -68,7 +69,10 @@ const mountEditor = async () => {
   });
 
   editor.value.onDidChangeModelContent(() => {
-    if (suppressNextUpdate) { suppressNextUpdate = false; return; }
+    if (suppressNextUpdate) {
+      suppressNextUpdate = false;
+      return;
+    }
     const value = editor.value?.getValue() ?? '';
     emit('update:modelValue', value);
   });
@@ -86,18 +90,26 @@ const mountEditor = async () => {
 // External writes to v-model (e.g. Reload button) must not echo
 // back through the change emitter, otherwise the editor and parent
 // fight over cursor position.
-watch(() => props.modelValue, (next) => {
-  if (editor.value == null) return;
-  if (editor.value.getValue() === next) return;
-  suppressNextUpdate = true;
-  editor.value.setValue(next);
-});
+watch(
+  () => props.modelValue,
+  (next) => {
+    if (editor.value == null) return;
+    if (editor.value.getValue() === next) return;
+    suppressNextUpdate = true;
+    editor.value.setValue(next);
+  },
+);
 
-watch(() => props.readonly, (next) => {
-  editor.value?.updateOptions({ readOnly: next });
-});
+watch(
+  () => props.readonly,
+  (next) => {
+    editor.value?.updateOptions({ readOnly: next });
+  },
+);
 
-onMounted(() => { void mountEditor(); });
+onMounted(() => {
+  void mountEditor();
+});
 
 onBeforeUnmount(() => {
   resizeObs?.disconnect();

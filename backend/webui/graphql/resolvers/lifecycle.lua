@@ -107,7 +107,6 @@ function M.mutation_force_reapply(root, args)
     -- /config-history UI wants: pick a revision in the timeline,
     -- click "force apply", land the rollback + reload as a single
     -- operator action.
-    local rollback_outcome = nil
     if args.revision ~= nil then
         local config_resolver = require('webui.graphql.resolvers.config')
         local ok, res = pcall(config_resolver.mutation_rollback, root, {
@@ -118,7 +117,6 @@ function M.mutation_force_reapply(root, args)
             -- raised something like ROLLBACK_INCOMPATIBLE / REVISION_NOT_FOUND.
             error(tostring(res))
         end
-        rollback_outcome = res
         -- After rollback the fan-out reload already ran on every peer
         -- — additional reload calls are redundant. Return the rollback
         -- outcome shaped to look like a force_reapply result.

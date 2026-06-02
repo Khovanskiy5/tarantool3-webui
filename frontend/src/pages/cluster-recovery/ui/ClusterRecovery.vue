@@ -69,12 +69,26 @@ interface ActionResult {
 const SNAPSHOT_Q = /* GraphQL */ `
   query DrSnapshot {
     recoverySnapshot {
-      self_alias generation recommendation
+      self_alias
+      generation
+      recommendation
       peers {
-        alias uuid replicaset role status ro reachable
-        last_lsn current_term queue_owner reasons
+        alias
+        uuid
+        replicaset
+        role
+        status
+        ro
+        reachable
+        last_lsn
+        current_term
+        queue_owner
+        reasons
       }
-      split_brain_groups { divergent_from members }
+      split_brain_groups {
+        divergent_from
+        members
+      }
     }
   }
 `;
@@ -82,8 +96,14 @@ const SNAPSHOT_Q = /* GraphQL */ `
 const ACTION_M = /* GraphQL */ `
   mutation DrAction($action: String!, $payload: String) {
     recoveryAction(action: $action, payload: $payload) {
-      ok action error
-      results { peer ok msg }
+      ok
+      action
+      error
+      results {
+        peer
+        ok
+        msg
+      }
     }
   }
 `;
@@ -98,8 +118,9 @@ async function refresh() {
   error.value = null;
   try {
     const res = await getClient()
-      .query<{ recoverySnapshot: RecoverySnapshot }>(
-        SNAPSHOT_Q, {}, { requestPolicy: 'network-only' })
+      .query<{
+        recoverySnapshot: RecoverySnapshot;
+      }>(SNAPSHOT_Q, {}, { requestPolicy: 'network-only' })
       .toPromise();
     if (res.error) {
       error.value = res.error.message;
@@ -126,7 +147,9 @@ const peerRoleSeverity = (role: string) => {
 const sbOpen = ref(false);
 const sbWinner = ref<string>('');
 const sbLosers = ref<string[]>([]);
-const sbAction = ref<'rebootstrap_losing' | 'force_promote_winner' | 'manual'>('rebootstrap_losing');
+const sbAction = ref<'rebootstrap_losing' | 'force_promote_winner' | 'manual'>(
+  'rebootstrap_losing',
+);
 const sbConfirm = ref('');
 const sbBusy = ref(false);
 
@@ -137,9 +160,7 @@ const splitBrainPeers = computed(() => {
 
 const healthyPeers = computed(() => {
   if (snapshot.value === null) return [] as PeerEntry[];
-  return snapshot.value.peers.filter(
-    (p) => p.role === 'queue-owner' || p.role === 'follower',
-  );
+  return snapshot.value.peers.filter((p) => p.role === 'queue-owner' || p.role === 'follower');
 });
 
 const unreachablePeers = computed(() => {
@@ -159,8 +180,8 @@ const currentQueueOwner = computed(() => {
 
 function openSplitBrainWizard() {
   sbOpen.value = true;
-  sbWinner.value = healthyPeers.value.find((p) => p.queue_owner)?.alias
-    ?? healthyPeers.value[0]?.alias ?? '';
+  sbWinner.value =
+    healthyPeers.value.find((p) => p.queue_owner)?.alias ?? healthyPeers.value[0]?.alias ?? '';
   sbLosers.value = splitBrainPeers.value.map((p) => p.alias);
   sbAction.value = 'rebootstrap_losing';
   sbConfirm.value = '';
@@ -186,8 +207,8 @@ async function executeSplitBrain() {
     error.value = res.error.message;
     return;
   }
-  lastResult.value = (res.data as { recoveryAction: ActionResult } | undefined)
-    ?.recoveryAction ?? null;
+  lastResult.value =
+    (res.data as { recoveryAction: ActionResult } | undefined)?.recoveryAction ?? null;
   sbOpen.value = false;
   await refresh();
 }
@@ -202,9 +223,7 @@ const ltBusy = ref(false);
 function openTakeoverWizard() {
   ltOpen.value = true;
   // Pick the peer with the highest LSN as the default candidate.
-  const sorted = healthyPeers.value.slice().sort(
-    (a, b) => (b.last_lsn ?? 0) - (a.last_lsn ?? 0),
-  );
+  const sorted = healthyPeers.value.slice().sort((a, b) => (b.last_lsn ?? 0) - (a.last_lsn ?? 0));
   ltTarget.value = sorted[0]?.alias ?? '';
   ltConfirm.value = '';
 }
@@ -225,8 +244,8 @@ async function executeTakeover() {
     error.value = res.error.message;
     return;
   }
-  lastResult.value = (res.data as { recoveryAction: ActionResult } | undefined)
-    ?.recoveryAction ?? null;
+  lastResult.value =
+    (res.data as { recoveryAction: ActionResult } | undefined)?.recoveryAction ?? null;
   ltOpen.value = false;
   await refresh();
 }
@@ -254,10 +273,7 @@ function openOrphanWizard() {
   // surface a high-impact target instead of an empty Select.
   const orphan = (snapshot.value?.peers ?? []).find((p) => p.role === 'orphan');
   const owner = (snapshot.value?.peers ?? []).find((p) => p.queue_owner);
-  orTarget.value = orphan?.alias
-    ?? owner?.alias
-    ?? (snapshot.value?.peers ?? [])[0]?.alias
-    ?? '';
+  orTarget.value = orphan?.alias ?? owner?.alias ?? (snapshot.value?.peers ?? [])[0]?.alias ?? '';
   orAction.value = 'force_reconnect';
   orConfirm.value = '';
 }
@@ -277,9 +293,12 @@ async function executeOrphan() {
     })
     .toPromise();
   orBusy.value = false;
-  if (res.error) { error.value = res.error.message; return; }
-  lastResult.value = (res.data as { recoveryAction: ActionResult } | undefined)
-    ?.recoveryAction ?? null;
+  if (res.error) {
+    error.value = res.error.message;
+    return;
+  }
+  lastResult.value =
+    (res.data as { recoveryAction: ActionResult } | undefined)?.recoveryAction ?? null;
   orOpen.value = false;
   await refresh();
 }
@@ -294,9 +313,10 @@ const qBusy = ref(false);
 
 function openQuorumWizard() {
   qOpen.value = true;
-  qTarget.value = (snapshot.value?.peers ?? [])
-    .find((p) => p.queue_owner)?.alias
-    ?? (snapshot.value?.peers ?? [])[0]?.alias ?? '';
+  qTarget.value =
+    (snapshot.value?.peers ?? []).find((p) => p.queue_owner)?.alias ??
+    (snapshot.value?.peers ?? [])[0]?.alias ??
+    '';
   qWindow.value = 300;
   qAck.value = false;
   qConfirm.value = '';
@@ -318,9 +338,12 @@ async function executeQuorum() {
     })
     .toPromise();
   qBusy.value = false;
-  if (res.error) { error.value = res.error.message; return; }
-  lastResult.value = (res.data as { recoveryAction: ActionResult } | undefined)
-    ?.recoveryAction ?? null;
+  if (res.error) {
+    error.value = res.error.message;
+    return;
+  }
+  lastResult.value =
+    (res.data as { recoveryAction: ActionResult } | undefined)?.recoveryAction ?? null;
   qOpen.value = false;
   await refresh();
 }
@@ -353,12 +376,13 @@ async function openTopologyWizard() {
   // when a fix is suggested.
   const diag = await getClient()
     .mutation(ACTION_M, {
-      action: 'topology_fix_diagnose', payload: null,
+      action: 'topology_fix_diagnose',
+      payload: null,
     })
     .toPromise();
   const arr: TopologyPeer[] = [];
-  const peers = ((diag.data as { recoveryAction: ActionResult } | undefined)
-    ?.recoveryAction?.results) ?? [];
+  const peers =
+    (diag.data as { recoveryAction: ActionResult } | undefined)?.recoveryAction?.results ?? [];
   for (const p of peers) {
     arr.push({
       alias: p.peer,
@@ -393,71 +417,14 @@ async function executeTopology() {
     })
     .toPromise();
   tBusy.value = false;
-  if (res.error) { error.value = res.error.message; return; }
-  lastResult.value = (res.data as { recoveryAction: ActionResult } | undefined)
-    ?.recoveryAction ?? null;
-  tOpen.value = false;
-  await refresh();
-}
-
-// ── PITR (point-in-time recovery) wizard — advisory ───────────────
-const pOpen = ref(false);
-const pTargetLsn = ref<number>(0);
-const pCurrentLsn = ref<number>(0);
-const pCommands = ref<string[]>([]);
-const pCopied = ref(false);
-const pBusy = ref(false);
-
-async function openPitrWizard() {
-  pOpen.value = true;
-  pCommands.value = [];
-  pBusy.value = false;
-  // Default target = current LSN minus a sane delta. For a small
-  // dev cluster (current_lsn=97) `-100` would clamp to 0 and the
-  // backend rejects negatives — pick half-step instead so the
-  // default is always a runnable starting point. The operator
-  // edits it to whatever incident point matters.
-  const owner = (snapshot.value?.peers ?? []).find((p) => p.queue_owner);
-  const cur = owner?.last_lsn ?? 0;
-  pCurrentLsn.value = cur;
-  pTargetLsn.value = cur > 200 ? cur - 100 : Math.max(1, Math.floor(cur / 2));
-}
-
-async function copyPitrCommands() {
-  if (pCommands.value.length === 0) return;
-  try {
-    await navigator.clipboard.writeText(pCommands.value.join('\n'));
-    pCopied.value = true;
-    setTimeout(() => { pCopied.value = false; }, 1500);
-  } catch {
-    pCopied.value = false;
-  }
-}
-
-async function generatePitrPlan() {
-  if (!pTargetLsn.value || pTargetLsn.value < 0) return;
-  pBusy.value = true;
-  const res = await getClient()
-    .mutation(ACTION_M, {
-      action: 'pitr_plan',
-      payload: JSON.stringify({ target_lsn: pTargetLsn.value }),
-    })
-    .toPromise();
-  pBusy.value = false;
   if (res.error) {
     error.value = res.error.message;
-    pCommands.value = [];
     return;
   }
-  const r = (res.data as { recoveryAction: ActionResult } | undefined)
-    ?.recoveryAction;
-  if (r === undefined || !r.ok) {
-    error.value = r?.error ?? 'pitr plan failed';
-    pCommands.value = [];
-    return;
-  }
-  // Each result row carries one command line in `msg`.
-  pCommands.value = r.results.map((x) => x.msg ?? '');
+  lastResult.value =
+    (res.data as { recoveryAction: ActionResult } | undefined)?.recoveryAction ?? null;
+  tOpen.value = false;
+  await refresh();
 }
 
 // ── WAL repair wizard ─────────────────────────────────────────────
@@ -481,19 +448,27 @@ async function openWalRepairWizard() {
     })
     .toPromise();
   wBusy.value = false;
-  if (res.error) { error.value = res.error.message; return; }
-  const r = (res.data as { recoveryAction: ActionResult } | undefined)
-    ?.recoveryAction;
+  if (res.error) {
+    error.value = res.error.message;
+    return;
+  }
+  const r = (res.data as { recoveryAction: ActionResult } | undefined)?.recoveryAction;
   if (r === undefined || !r.ok) return;
   wFiles.value = r.results.map((x) => ({
-    file: x.peer, ok: x.ok, msg: x.msg ?? '',
+    file: x.peer,
+    ok: x.ok,
+    msg: x.msg ?? '',
   }));
 }
 
 async function quarantineWal(row: WalRow) {
   if (row.ok) return;
-  if (!window.confirm(`Quarantine ${row.file}? `
-    + `It will be renamed to ${row.file}.corrupt and skipped on next boot.`)) {
+  if (
+    !window.confirm(
+      `Quarantine ${row.file}? ` +
+        `It will be renamed to ${row.file}.corrupt and skipped on next boot.`,
+    )
+  ) {
     return;
   }
   const res = await getClient()
@@ -502,7 +477,10 @@ async function quarantineWal(row: WalRow) {
       payload: JSON.stringify({ file: row.file }),
     })
     .toPromise();
-  if (res.error) { error.value = res.error.message; return; }
+  if (res.error) {
+    error.value = res.error.message;
+    return;
+  }
   // Refresh the diagnostic so the quarantined file disappears.
   await openWalRepairWizard();
 }
@@ -538,8 +516,8 @@ async function quarantineWal(row: WalRow) {
       class="webui-recovery__cta"
     >
       <strong>Split-brain detected.</strong>
-      {{ splitBrainPeers.length }} peer(s) report stopped replication
-      with split-brain. Run the wizard to choose a winner and recover.
+      {{ splitBrainPeers.length }} peer(s) report stopped replication with split-brain. Run the
+      wizard to choose a winner and recover.
       <Button
         label="Open Split-brain wizard"
         icon="pi pi-shield"
@@ -556,8 +534,8 @@ async function quarantineWal(row: WalRow) {
       class="webui-recovery__cta"
     >
       <strong>No queue owner.</strong>
-      No peer currently owns the synchro queue — synchronous writes
-      are blocked. Pick a new leader manually.
+      No peer currently owns the synchro queue — synchronous writes are blocked. Pick a new leader
+      manually.
       <Button
         label="Open Leader-takeover wizard"
         icon="pi pi-arrow-up-right"
@@ -574,8 +552,8 @@ async function quarantineWal(row: WalRow) {
       class="webui-recovery__cta"
     >
       <strong>Orphan peer.</strong>
-      One or more peers report status = orphan — joined but cannot
-      find a writable leader. Force-reconnect or rebootstrap.
+      One or more peers report status = orphan — joined but cannot find a writable leader.
+      Force-reconnect or rebootstrap.
       <Button
         label="Open Orphan wizard"
         icon="pi pi-link"
@@ -591,9 +569,8 @@ async function quarantineWal(row: WalRow) {
       :closable="false"
     >
       <strong>Cluster degraded.</strong>
-      {{ unreachablePeers.length }} peer(s) unreachable — quorum is
-      still intact, but the cluster can no longer tolerate another
-      failure. Investigate the missing peer(s) before they cause an
+      {{ unreachablePeers.length }} peer(s) unreachable — quorum is still intact, but the cluster
+      can no longer tolerate another failure. Investigate the missing peer(s) before they cause an
       outage.
     </Message>
 
@@ -633,14 +610,6 @@ async function quarantineWal(row: WalRow) {
         severity="warn"
         text
         @click="openTakeoverWizard"
-      />
-      <Button
-        label="PITR plan"
-        icon="pi pi-history"
-        size="small"
-        severity="info"
-        text
-        @click="openPitrWizard"
       />
       <Button
         label="WAL repair"
@@ -685,16 +654,16 @@ async function quarantineWal(row: WalRow) {
     </DataTable>
 
     <section v-if="lastResult" class="webui-recovery__last">
-      <h2>Last action: <code>{{ lastResult.action }}</code></h2>
-      <Message
-        :severity="lastResult.ok ? 'success' : 'error'"
-        :closable="false"
-      >
+      <h2>
+        Last action: <code>{{ lastResult.action }}</code>
+      </h2>
+      <Message :severity="lastResult.ok ? 'success' : 'error'" :closable="false">
         {{ lastResult.ok ? 'completed' : (lastResult.error ?? 'failed') }}
       </Message>
       <ul>
         <li v-for="(r, i) in lastResult.results" :key="i">
-          <strong>{{ r.peer }}</strong>: {{ r.ok ? 'ok' : 'FAILED' }}
+          <strong>{{ r.peer }}</strong
+          >: {{ r.ok ? 'ok' : 'FAILED' }}
           <span v-if="r.msg" class="webui-recovery__muted"> — {{ r.msg }}</span>
         </li>
       </ul>
@@ -712,8 +681,8 @@ async function quarantineWal(row: WalRow) {
           <div class="r-field">
             <label for="sb-winner">Winner</label>
             <Select
-              input-id="sb-winner"
               v-model="sbWinner"
+              input-id="sb-winner"
               :options="peerOptions"
               option-label="label"
               option-value="value"
@@ -722,8 +691,8 @@ async function quarantineWal(row: WalRow) {
           <div class="r-field">
             <label for="sb-losers">Losing peers</label>
             <MultiSelect
-              input-id="sb-losers"
               v-model="sbLosers"
+              input-id="sb-losers"
               :options="peerOptions"
               option-label="label"
               option-value="value"
@@ -732,10 +701,13 @@ async function quarantineWal(row: WalRow) {
           <div class="r-field">
             <label for="sb-strategy">Strategy</label>
             <Select
-              input-id="sb-strategy"
               v-model="sbAction"
+              input-id="sb-strategy"
               :options="[
-                { label: 'Rebootstrap losing peers (clean cold-start)', value: 'rebootstrap_losing' },
+                {
+                  label: 'Rebootstrap losing peers (clean cold-start)',
+                  value: 'rebootstrap_losing',
+                },
                 { label: 'Force-promote winner with quorum=1', value: 'force_promote_winner' },
                 { label: 'Manual (do nothing automatically)', value: 'manual' },
               ]"
@@ -745,17 +717,10 @@ async function quarantineWal(row: WalRow) {
           </div>
           <div class="r-field">
             <label for="sb-confirm">Confirmation phrase</label>
-            <InputText
-              id="sb-confirm"
-              v-model="sbConfirm"
-              :placeholder="sbConfirmExpected"
-            />
-            <Message
-              size="small"
-              severity="warn"
-              variant="simple"
-            >
-              Destructive action. Type <code>{{ sbConfirmExpected }}</code>.
+            <InputText id="sb-confirm" v-model="sbConfirm" :placeholder="sbConfirmExpected" />
+            <Message size="small" severity="warn" variant="simple">
+              Destructive action. Type <code>{{ sbConfirmExpected }}</code
+              >.
             </Message>
           </div>
         </Fluid>
@@ -774,35 +739,22 @@ async function quarantineWal(row: WalRow) {
     </Dialog>
 
     <!-- Orphan wizard -->
-    <Dialog
-      v-model:visible="orOpen"
-      modal
-      header="Orphan resolver"
-      :style="{ width: '32rem' }"
-    >
+    <Dialog v-model:visible="orOpen" modal header="Orphan resolver" :style="{ width: '32rem' }">
       <div class="r-body">
-        <Message
-          v-if="orphanPeers.length === 0"
-          severity="info"
-          :closable="false"
-        >
-          No peers currently report status = orphan. The wizard is
-          still usable as a proactive force-reconnect / rebootstrap
-          for any peer — pick the target manually.
+        <Message v-if="orphanPeers.length === 0" severity="info" :closable="false">
+          No peers currently report status = orphan. The wizard is still usable as a proactive
+          force-reconnect / rebootstrap for any peer — pick the target manually.
         </Message>
-        <Message
-          v-else
-          severity="warn"
-          :closable="false"
-        >
-          Detected orphan peer(s): <strong>{{ orphanPeers.map((p) => p.alias).join(', ') }}</strong>.
+        <Message v-else severity="warn" :closable="false">
+          Detected orphan peer(s): <strong>{{ orphanPeers.map((p) => p.alias).join(', ') }}</strong
+          >.
         </Message>
         <Fluid>
           <div class="r-field">
             <label for="or-target">Target peer</label>
             <Select
-              input-id="or-target"
               v-model="orTarget"
+              input-id="or-target"
               :options="peerOptions"
               option-label="label"
               option-value="value"
@@ -811,8 +763,8 @@ async function quarantineWal(row: WalRow) {
           <div class="r-field">
             <label for="or-strategy">Strategy</label>
             <Select
-              input-id="or-strategy"
               v-model="orAction"
+              input-id="or-strategy"
               :options="[
                 { label: 'Force reconnect (drop + reattach appliers)', value: 'force_reconnect' },
                 { label: 'Rebootstrap (wipe + cold-boot)', value: 'rebootstrap' },
@@ -824,13 +776,10 @@ async function quarantineWal(row: WalRow) {
           </div>
           <div class="r-field">
             <label for="or-confirm">Confirmation phrase</label>
-            <InputText
-              id="or-confirm"
-              v-model="orConfirm"
-              :placeholder="orConfirmExpected"
-            />
+            <InputText id="or-confirm" v-model="orConfirm" :placeholder="orConfirmExpected" />
             <Message size="small" severity="warn" variant="simple">
-              Type <code>{{ orConfirmExpected }}</code>.
+              Type <code>{{ orConfirmExpected }}</code
+              >.
             </Message>
           </div>
         </Fluid>
@@ -858,27 +807,21 @@ async function quarantineWal(row: WalRow) {
       <div class="r-body">
         <Message severity="error" :closable="false">
           <strong>Dangerous.</strong>
-          Flips <code>synchro_quorum</code> to 1 on the target peer
-          for the chosen window. A partition during the window can
-          fork the WAL — fix the underlying quorum problem ASAP
-          and prefer ending the window early via cluster YAML.
+          Flips <code>synchro_quorum</code> to 1 on the target peer for the chosen window. A
+          partition during the window can fork the WAL — fix the underlying quorum problem ASAP and
+          prefer ending the window early via cluster YAML.
         </Message>
-        <Message
-          v-if="unreachablePeers.length === 0"
-          severity="info"
-          :closable="false"
-        >
-          Every peer is currently reachable. The escape hatch is
-          usually applied when one or more peers are unreachable and
-          synchronous writes start blocking. Opening it proactively
-          is fine but you almost certainly want to wait.
+        <Message v-if="unreachablePeers.length === 0" severity="info" :closable="false">
+          Every peer is currently reachable. The escape hatch is usually applied when one or more
+          peers are unreachable and synchronous writes start blocking. Opening it proactively is
+          fine but you almost certainly want to wait.
         </Message>
         <Fluid>
           <div class="r-field">
             <label for="q-target">Target peer</label>
             <Select
-              input-id="q-target"
               v-model="qTarget"
+              input-id="q-target"
               :options="peerOptions"
               option-label="label"
               option-value="value"
@@ -895,8 +838,8 @@ async function quarantineWal(row: WalRow) {
           <div class="r-field">
             <label for="q-window">Window (seconds)</label>
             <InputNumber
-              input-id="q-window"
               v-model="qWindow"
+              input-id="q-window"
               :min="5"
               :max="3600"
               :use-grouping="false"
@@ -911,13 +854,10 @@ async function quarantineWal(row: WalRow) {
           </div>
           <div class="r-field">
             <label for="q-confirm">Confirmation phrase</label>
-            <InputText
-              id="q-confirm"
-              v-model="qConfirm"
-              :placeholder="qConfirmExpected"
-            />
+            <InputText id="q-confirm" v-model="qConfirm" :placeholder="qConfirmExpected" />
             <Message size="small" severity="warn" variant="simple">
-              Type <code>{{ qConfirmExpected }}</code>.
+              Type <code>{{ qConfirmExpected }}</code
+              >.
             </Message>
           </div>
         </Fluid>
@@ -943,20 +883,12 @@ async function quarantineWal(row: WalRow) {
       :style="{ width: '40rem' }"
     >
       <div class="r-body">
-        <Message
-          v-if="!tDiagnosed"
-          severity="info"
-          :closable="false"
-        >
+        <Message v-if="!tDiagnosed" severity="info" :closable="false">
           Diagnosing topology…
         </Message>
-        <Message
-          v-else-if="Object.keys(tFixes).length === 0"
-          severity="success"
-          :closable="false"
-        >
-          No replication topology issues detected. Every declared peer
-          URI matches what the cluster observes. Nothing to fix.
+        <Message v-else-if="Object.keys(tFixes).length === 0" severity="success" :closable="false">
+          No replication topology issues detected. Every declared peer URI matches what the cluster
+          observes. Nothing to fix.
         </Message>
         <table v-else class="r-table">
           <thead>
@@ -968,18 +900,17 @@ async function quarantineWal(row: WalRow) {
           </thead>
           <tbody>
             <tr v-for="p in tPeers" :key="p.alias">
-              <td><code>{{ p.alias }}</code></td>
+              <td>
+                <code>{{ p.alias }}</code>
+              </td>
               <td>{{ p.reachable ? '✓' : '✗' }}</td>
               <td>
                 <Fluid v-if="tFixes[p.alias] !== undefined">
                   <InputText v-model="tFixes[p.alias]" />
                 </Fluid>
-                <Message
-                  v-else
-                  size="small"
-                  severity="secondary"
-                  variant="simple"
-                >no change</Message>
+                <Message v-else size="small" severity="secondary" variant="simple">
+                  no change
+                </Message>
               </td>
             </tr>
           </tbody>
@@ -987,13 +918,10 @@ async function quarantineWal(row: WalRow) {
         <Fluid v-if="tDiagnosed && Object.keys(tFixes).length > 0">
           <div class="r-field">
             <label for="t-confirm">Confirmation phrase</label>
-            <InputText
-              id="t-confirm"
-              v-model="tConfirm"
-              :placeholder="tConfirmExpected"
-            />
+            <InputText id="t-confirm" v-model="tConfirm" :placeholder="tConfirmExpected" />
             <Message size="small" severity="warn" variant="simple">
-              Type <code>{{ tConfirmExpected }}</code>.
+              Type <code>{{ tConfirmExpected }}</code
+              >.
             </Message>
           </div>
         </Fluid>
@@ -1012,87 +940,15 @@ async function quarantineWal(row: WalRow) {
       </template>
     </Dialog>
 
-    <!-- PITR wizard -->
-    <Dialog
-      v-model:visible="pOpen"
-      modal
-      header="Point-in-time recovery (advisory)"
-      :style="{ width: '46rem' }"
-    >
-      <div class="r-body">
-        <Message severity="info" :closable="false">
-          Tarantool 3.x PITR requires an offline restart, which the
-          WebUI cannot drive for itself. This wizard generates the
-          exact host-side commands you run; the recovery happens
-          outside this page.
-        </Message>
-        <Fluid>
-          <div class="r-field">
-            <label for="p-lsn">Target LSN</label>
-            <InputNumber
-              input-id="p-lsn"
-              v-model="pTargetLsn"
-              :min="1"
-              :max="pCurrentLsn || undefined"
-              :use-grouping="false"
-            />
-            <Message
-              v-if="pCurrentLsn > 0"
-              size="small"
-              severity="secondary"
-              variant="simple"
-            >
-              current = {{ pCurrentLsn }}
-            </Message>
-          </div>
-        </Fluid>
-        <div class="r-actions">
-          <Button
-            label="Generate plan"
-            icon="pi pi-history"
-            severity="info"
-            :loading="pBusy"
-            :disabled="!pTargetLsn || pTargetLsn < 1"
-            @click="generatePitrPlan"
-          />
-        </div>
-        <div v-if="pCommands.length > 0" class="r-commands">
-          <div class="r-commands__head">
-            <Message size="small" severity="secondary" variant="simple">
-              Run these commands on the host (one block per peer):
-            </Message>
-            <Button
-              :label="pCopied ? 'Copied!' : 'Copy'"
-              :icon="pCopied ? 'pi pi-check' : 'pi pi-copy'"
-              size="small"
-              text
-              severity="secondary"
-              @click="copyPitrCommands"
-            />
-          </div>
-          <pre class="r-commands__pre">{{ pCommands.join('\n') }}</pre>
-        </div>
-      </div>
-      <template #footer>
-        <Button label="Close" severity="secondary" text @click="pOpen = false" />
-      </template>
-    </Dialog>
-
     <!-- WAL repair wizard -->
-    <Dialog
-      v-model:visible="wOpen"
-      modal
-      header="WAL chain repair"
-      :style="{ width: '46rem' }"
-    >
+    <Dialog v-model:visible="wOpen" modal header="WAL chain repair" :style="{ width: '46rem' }">
       <div class="r-body">
         <Message severity="warn" :closable="false">
-          Lists every .xlog on this instance with an integrity probe.
-          Files marked <strong>BAD</strong> can be quarantined
-          (renamed to <code>.corrupt</code>) so the next boot skips
-          them. After quarantine, restart the instance with
-          <code>force_recovery = true</code> in cluster YAML to
-          let the bootstrap continue past the gap.
+          Lists every .xlog on this instance with an integrity probe. Files marked
+          <strong>BAD</strong> can be quarantined (renamed to <code>.corrupt</code>) so the next
+          boot skips them. After quarantine, restart the instance with
+          <code>force_recovery = true</code> in cluster YAML to let the bootstrap continue past the
+          gap.
         </Message>
         <table class="r-table">
           <thead>
@@ -1100,17 +956,16 @@ async function quarantineWal(row: WalRow) {
               <th>File</th>
               <th>Status</th>
               <th>Detail</th>
-              <th></th>
+              <th />
             </tr>
           </thead>
           <tbody>
             <tr v-for="row in wFiles" :key="row.file">
-              <td><code>{{ row.file }}</code></td>
               <td>
-                <Tag
-                  :severity="row.ok ? 'success' : 'danger'"
-                  :value="row.ok ? 'OK' : 'BAD'"
-                />
+                <code>{{ row.file }}</code>
+              </td>
+              <td>
+                <Tag :severity="row.ok ? 'success' : 'danger'" :value="row.ok ? 'OK' : 'BAD'" />
               </td>
               <td>{{ row.msg }}</td>
               <td>
@@ -1133,32 +988,22 @@ async function quarantineWal(row: WalRow) {
     </Dialog>
 
     <!-- Leader takeover wizard -->
-    <Dialog
-      v-model:visible="ltOpen"
-      modal
-      header="Leader takeover"
-      :style="{ width: '32rem' }"
-    >
+    <Dialog v-model:visible="ltOpen" modal header="Leader takeover" :style="{ width: '32rem' }">
       <div class="r-body">
-        <Message
-          v-if="currentQueueOwner"
-          severity="info"
-          :closable="false"
-        >
-          Current queue owner: <strong>{{ currentQueueOwner }}</strong>.
-          Default candidate has the highest LSN among healthy peers.
+        <Message v-if="currentQueueOwner" severity="info" :closable="false">
+          Current queue owner: <strong>{{ currentQueueOwner }}</strong
+          >. Default candidate has the highest LSN among healthy peers.
         </Message>
         <Message v-else severity="error" :closable="false">
           <strong>No queue owner detected.</strong>
-          Cluster cannot accept synchronous writes — pick a leader and
-          promote it.
+          Cluster cannot accept synchronous writes — pick a leader and promote it.
         </Message>
         <Fluid>
           <div class="r-field">
             <label for="lt-target">New leader</label>
             <Select
-              input-id="lt-target"
               v-model="ltTarget"
+              input-id="lt-target"
               :options="peerOptions"
               option-label="label"
               option-value="value"
@@ -1174,13 +1019,10 @@ async function quarantineWal(row: WalRow) {
           </div>
           <div class="r-field">
             <label for="lt-confirm">Confirmation phrase</label>
-            <InputText
-              id="lt-confirm"
-              v-model="ltConfirm"
-              :placeholder="ltConfirmExpected"
-            />
+            <InputText id="lt-confirm" v-model="ltConfirm" :placeholder="ltConfirmExpected" />
             <Message size="small" severity="warn" variant="simple">
-              Drives <code>box.ctl.promote()</code>. Type <code>{{ ltConfirmExpected }}</code>.
+              Drives <code>box.ctl.promote()</code>. Type <code>{{ ltConfirmExpected }}</code
+              >.
             </Message>
           </div>
         </Fluid>
@@ -1212,14 +1054,18 @@ async function quarantineWal(row: WalRow) {
   justify-content: space-between;
   align-items: center;
 }
-.webui-recovery__head h1 { margin: 0; }
+.webui-recovery__head h1 {
+  margin: 0;
+}
 .webui-recovery__cta :deep(.p-message-text) {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
   flex-wrap: wrap;
 }
-.webui-recovery__grid { min-height: 0; }
+.webui-recovery__grid {
+  min-height: 0;
+}
 .webui-recovery__reasons {
   list-style: none;
   margin: 0;
@@ -1227,9 +1073,17 @@ async function quarantineWal(row: WalRow) {
   font-size: 0.75rem;
   color: var(--webui-text-muted);
 }
-.webui-recovery__last { border-top: 1px solid var(--webui-border); padding-top: 0.5rem; }
-.webui-recovery__last h2 { margin: 0 0 0.5rem 0; font-size: 1rem; }
-.webui-recovery__muted { color: var(--webui-text-muted); }
+.webui-recovery__last {
+  border-top: 1px solid var(--webui-border);
+  padding-top: 0.5rem;
+}
+.webui-recovery__last h2 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1rem;
+}
+.webui-recovery__muted {
+  color: var(--webui-text-muted);
+}
 .webui-recovery__toolbar {
   display: flex;
   gap: 0.5rem;
@@ -1281,7 +1135,10 @@ async function quarantineWal(row: WalRow) {
   gap: 0.5rem;
   font-size: 0.875rem;
 }
-.r-ack label { cursor: pointer; user-select: none; }
+.r-ack label {
+  cursor: pointer;
+  user-select: none;
+}
 
 .r-actions {
   display: flex;
@@ -1306,31 +1163,5 @@ async function quarantineWal(row: WalRow) {
   letter-spacing: 0.03em;
   text-transform: uppercase;
   color: var(--p-text-muted-color, var(--webui-text-muted));
-}
-
-.r-commands {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-.r-commands__head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.5rem;
-}
-.r-commands__pre {
-  background: var(--p-surface-950, #0a0a0a);
-  color: var(--p-text-color, inherit);
-  border: 1px solid var(--p-content-border-color, var(--webui-border));
-  border-radius: var(--p-content-border-radius, 6px);
-  padding: 0.875rem 1rem;
-  font-family: var(--webui-font-mono);
-  font-size: 0.8125rem;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  max-height: 24rem;
-  overflow: auto;
-  margin: 0;
 }
 </style>

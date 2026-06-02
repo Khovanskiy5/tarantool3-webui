@@ -25,29 +25,6 @@ local etcd_client   = require('webui.config_store.client')
 local audit         = require('webui.audit.log')
 local commands      = require('webui.failover.commands')
 
--- Single helper for "audit row + commands journal row" because
--- every cluster mutation needs both. We swallow errors here on
--- purpose: a failed audit write must NOT roll back the operator's
--- action, otherwise transient storage glitches turn into failed
--- mutations the operator already saw confirmed.
-local function audit_and_journal(action, scope, payload, root)
-    pcall(function()
-        audit.record({
-            user       = root and root.user,
-            action     = action,
-            scope      = scope or 'cluster',
-            payload    = payload,
-            request_id = root and root.request_id,
-        })
-    end)
-    pcall(function()
-        commands.record(action, payload, {
-            user        = root and root.user,
-            coordinator = box.info and box.info.name,
-            status      = 'success',
-        })
-    end)
-end
 local rbac          = require('webui.auth.rbac')
 local log_util      = require('webui.log_util')
 local logger        = log_util.with_tag('graphql.cluster_ops')
@@ -123,9 +100,9 @@ local function read_current_yaml()
     -- /opt/webui/etc/cluster.yaml → docker/configs/cluster.yaml).
     local ok_cfg, config_resolver = pcall(require, 'webui.graphql.resolvers.config')
     if ok_cfg and type(config_resolver._read_local_yaml) == 'function' then
-        local yaml, _ = config_resolver._read_local_yaml()
-        if yaml and #yaml > 0 then
-            return yaml, nil, 0
+        local yaml_text = config_resolver._read_local_yaml()
+        if yaml_text and #yaml_text > 0 then
+            return yaml_text, nil, 0
         end
     end
 
@@ -966,10 +943,8 @@ end
 -- Validate operator-supplied params before mutating cluster YAML.
 -- Returns nil on success, error{code, message} on failure.
 local function validate_failover_params(mode, params, instance_count)
-    if mode == 'off' or mode == 'manual' or mode == 'election'
-        or mode == 'supervised' then
-        -- ok
-    else
+    if mode ~= 'off' and mode ~= 'manual' and mode ~= 'election'
+        and mode ~= 'supervised' then
         return { code = 'VALIDATION_ERROR',
             message = 'mode must be off|manual|election|supervised' }
     end
@@ -1129,11 +1104,9 @@ function M.mutation_set_failover_mode(root, args)
                         -- Leave an empty `database` table behind only
                         -- if it still holds OTHER fields; otherwise
                         -- drop the empty husk so the YAML stays clean.
-                        local has_more = false
-                        for _ in pairs(inst.database) do
-                            has_more = true; break
+                        if next(inst.database) == nil then
+                            inst.database = nil
                         end
-                        if not has_more then inst.database = nil end
                     end
                 end
             end
@@ -1612,7 +1585,7 @@ function M.mutation_set_instance_state(root, args)
         -- commit via the same core helper.
         -- (Falling through to a direct edit_topology_core call so
         -- the audit + reload behave consistently across modes.)
-        _ = server_edit
+        local _ = server_edit
         local current_election_mode = parsed.groups[gname].replicasets[rsname]
             .instances[args.alias]
         local current_em

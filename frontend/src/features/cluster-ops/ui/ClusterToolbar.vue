@@ -15,7 +15,6 @@
 import { computed, ref } from 'vue';
 
 import { useClusterOpsStore } from '../model/store';
-import NewReplicasetDialog from './NewReplicasetDialog.vue';
 
 const props = defineProps<{
   /** Epoch seconds when the pause expires, or null when unpaused. */
@@ -29,7 +28,6 @@ const emit = defineEmits<{
 const ops = useClusterOpsStore();
 const ttlInput = ref<number>(60 * 60); // default 1h
 const showTtlForm = ref(false);
-const newRsOpen = ref(false);
 const banner = ref<{ severity: 'ok' | 'err'; text: string } | null>(null);
 
 const expiresInSec = computed<number | null>(() => {
@@ -48,29 +46,21 @@ function formatExpiry(sec: number): string {
 
 async function doPause() {
   const r = await ops.pauseFailover(ttlInput.value);
-  banner.value = r.ok
-    ? { severity: 'ok', text: r.message }
-    : { severity: 'err', text: r.message };
+  banner.value = r.ok ? { severity: 'ok', text: r.message } : { severity: 'err', text: r.message };
   showTtlForm.value = false;
   emit('refresh');
 }
 
 async function doResume() {
   const r = await ops.resumeFailover();
-  banner.value = r.ok
-    ? { severity: 'ok', text: r.message }
-    : { severity: 'err', text: r.message };
+  banner.value = r.ok ? { severity: 'ok', text: r.message } : { severity: 'err', text: r.message };
   emit('refresh');
 }
 </script>
 
 <template>
   <div class="webui-cluster-toolbar">
-    <div
-      v-if="isPaused"
-      class="webui-cluster-toolbar__pause-banner"
-      role="status"
-    >
+    <div v-if="isPaused" class="webui-cluster-toolbar__pause-banner" role="status">
       <span class="webui-cluster-toolbar__pause-icon" aria-hidden="true">⏸</span>
       <span class="webui-cluster-toolbar__pause-label">
         Failover PAUSED — auto-resume in
@@ -95,15 +85,6 @@ async function doResume() {
       >
         Pause failover…
       </button>
-      <button
-        v-if="!showTtlForm"
-        type="button"
-        class="webui-cluster-toolbar__btn"
-        :disabled="ops.pending"
-        @click="newRsOpen = true"
-      >
-        New replicaset…
-      </button>
       <div v-else class="webui-cluster-toolbar__ttl-form">
         <label class="webui-cluster-toolbar__ttl-label">
           TTL (seconds)
@@ -113,7 +94,7 @@ async function doResume() {
             min="60"
             max="86400"
             class="webui-cluster-toolbar__ttl-input"
-          >
+          />
         </label>
         <button
           type="button"
@@ -144,11 +125,6 @@ async function doResume() {
     >
       {{ banner.text }}
     </p>
-    <NewReplicasetDialog
-      :open="newRsOpen"
-      @close="newRsOpen = false"
-      @created="emit('refresh')"
-    />
   </div>
 </template>
 
