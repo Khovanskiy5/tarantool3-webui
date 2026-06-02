@@ -21,6 +21,7 @@ import Tag from 'primevue/tag';
 import Select from 'primevue/select';
 import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
+import Chip from 'primevue/chip';
 
 import { getClient } from '@/shared/api/graphql';
 import TupleForm from './TupleForm.vue';
@@ -649,22 +650,24 @@ watch(includeSystem, () => {
       </div>
 
       <div v-if="filterChips.length > 0" class="webui-dx__chips">
-        <Tag
+        <!-- Chip with `removable` exposes a built-in ✕ button and an
+             `@remove` event, replacing the old "click anywhere on
+             the Tag to drop it" pattern that surprised first-time
+             users (clicking the value text removed the filter). -->
+        <Chip
           v-for="(c, idx) in filterChips"
           :key="idx"
-          class="webui-dx__chip"
-          severity="info"
-          @click="removeFilterChip(idx)"
-        >
-          {{ c.field }} {{ c.op }} {{ c.value }} ✕
-        </Tag>
+          :label="`${c.field} ${c.op} ${c.value}`"
+          removable
+          @remove="removeFilterChip(idx)"
+        />
       </div>
 
       <div v-if="selectedSpace && indexUsed !== null" class="webui-dx__index-hint">
-        index: <strong>{{ indexUsed }}</strong>
-        <span v-if="partialScan" class="webui-dx__warn">partial scan</span>
-        <span v-if="truncated" class="webui-dx__warn">page truncated</span>
-        <span v-if="totalRows !== null">total: {{ totalRows }}</span>
+        <Tag :value="`index: ${indexUsed}`" severity="secondary" />
+        <Tag v-if="partialScan" value="partial scan" severity="warn" />
+        <Tag v-if="truncated" value="page truncated" severity="warn" />
+        <Tag v-if="totalRows !== null" :value="`total: ${totalRows}`" severity="info" />
       </div>
 
       <!-- Tuple grid -->
@@ -774,8 +777,14 @@ watch(includeSystem, () => {
 .webui-dx {
   display: grid;
   grid-template-columns: 280px 1fr;
+  /* Page lives inside `<main class="webui-shell__main">`, which is
+     a column flexbox with `flex: 1`. Taking `flex: 1` here makes
+     the data-explorer fill that available height instead of
+     guessing a `100vh - <topbar>` offset that breaks across
+     viewports / topbar paddings. */
+  flex: 1;
+  min-height: 0;
   height: 100%;
-  min-height: calc(100vh - 4rem);
 }
 .webui-dx__sidebar {
   border-right: 1px solid var(--webui-border);
@@ -893,17 +902,11 @@ watch(includeSystem, () => {
   gap: 0.4rem;
   flex-wrap: wrap;
 }
-.webui-dx__chip {
-  cursor: pointer;
-}
 .webui-dx__index-hint {
   display: flex;
-  gap: 1rem;
-  font-size: 0.8rem;
-  color: var(--webui-text-muted);
-}
-.webui-dx__warn {
-  color: var(--webui-warning);
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  align-items: center;
 }
 .webui-dx__full-scan {
   display: inline-flex;
