@@ -72,6 +72,90 @@ function M.allowed(user_roles, required)
 end
 
 -- ─────────────────────────────────────────────────────────────────────
+-- Pre-bootstrap bypass.
+--
+-- A handful of GraphQL fields MUST be reachable before any admin
+-- user exists — most importantly `bootstrapInitialize` itself, which
+-- is what creates the first admin. Without a bypass the wizard is
+-- a deadlock: mutation gates on admin, admin only appears after
+-- mutation. We detect "etcd has no cluster config" via
+-- `webui.config_store.bootstrap.status` (which already encapsulates
+-- the etcd-vs-file check) and cache the result for 1s so the gate
+-- does not amortise a network round-trip onto every resolver call.
+--
+-- The bypass is intentionally narrow: only the listed fields, only
+-- while `<prefix>/config/all` is absent. As soon as `bootstrapInitialize`
+-- writes a config to etcd, the next `is_pre_bootstrap()` call returns
+-- false and the gate closes back on the normal admin rank check.
+-- ─────────────────────────────────────────────────────────────────────
+
+M.PRE_BOOTSTRAP_FIELDS = {
+    bootstrapInitialize = true,
+}
+
+local PRE_BOOTSTRAP_TTL_SEC = 1
+
+local pre_boot_cache = {
+    value = nil,
+    expires_at = 0,
+}
+
+local function lazy_probe()
+    -- Lazy require to avoid a cycle: rbac is loaded very early,
+    -- bootstrap pulls in lyaml + etcd helpers which we want kept
+    -- off the hot path. pcall keeps the function honest when the
+    -- probes themselves blow up (config:get can raise during reload).
+    local ok_bs, bs = pcall(require, 'webui.config_store.bootstrap')
+    if not ok_bs then return false end
+    local ok_cl, client_mod = pcall(require, 'webui.config_store.client')
+    local etcd = nil
+    if ok_cl and type(client_mod.get_client) == 'function' then
+        local c, _ = pcall(function() return client_mod.get_client() end)
+        if type(c) == 'table' then etcd = c end
+    end
+    local local_yaml = ''
+    local ok_st, st = pcall(bs.status, {
+        etcd_client = etcd,
+        local_yaml  = local_yaml,
+    })
+    if not ok_st or type(st) ~= 'table' then return false end
+    return st.needed == true
+end
+
+function M.is_pre_bootstrap()
+    local now = require('fiber').time()
+    if pre_boot_cache.value ~= nil and now < pre_boot_cache.expires_at then
+        return pre_boot_cache.value
+    end
+    local v = lazy_probe()
+    pre_boot_cache.value = v
+    pre_boot_cache.expires_at = now + PRE_BOOTSTRAP_TTL_SEC
+    return v
+end
+
+function M._invalidate_pre_bootstrap_cache()
+    pre_boot_cache.value = nil
+    pre_boot_cache.expires_at = 0
+end
+
+function M.allowed_for_field(user_roles, field)
+    if field == nil then return false end
+    local required = M.GRAPHQL_FIELD[field] or 'admin'
+    if M.PRE_BOOTSTRAP_FIELDS[field] and M.is_pre_bootstrap() then
+        local ok_lu, lu = pcall(require, 'webui.log_util')
+        if ok_lu then
+            lu.with_tag('rbac').warn('pre_bootstrap_bypass', {
+                field = field,
+                required = required,
+                reason = 'cluster has no config yet — gate bypassed',
+            })
+        end
+        return true
+    end
+    return M.allowed(user_roles, required)
+end
+
+-- ─────────────────────────────────────────────────────────────────────
 -- Route map. Routes not present here are treated as `session`
 -- (login required, no role check). Mutations always require CSRF.
 -- ─────────────────────────────────────────────────────────────────────
