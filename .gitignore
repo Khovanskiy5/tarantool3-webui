@@ -70,6 +70,11 @@ frontend/src/api/generated/
 # graphql-codegen output (client-preset)
 frontend/src/shared/api/__generated/
 
+# Tarantool cluster-config JSON schema, regenerated from a running
+# instance via tools/dump-config-schema.sh and consumed by IDEs
+# (jetbrains JSON Schema mapping in .idea/jsonSchemas.xml).
+docker/configs/cluster.schema.json
+
 # ──────────────────────────────────────────────────────────────
 # Secrets / local env
 # ──────────────────────────────────────────────────────────────
