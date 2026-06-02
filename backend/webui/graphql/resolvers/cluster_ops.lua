@@ -1083,18 +1083,25 @@ function M.mutation_set_failover_mode(root, args)
         end
     end
 
-    -- Schema rule: `database.mode` is mutually exclusive with
-    -- `replication.failover: election | manual | supervised`. The
-    -- moment we flip out of `off`, Tarantool refuses to (re)load
-    -- the cluster YAML if any instance still carries an explicit
-    -- `database.mode`. Strip it cluster-wide here so the commit
-    -- lands cleanly. Flipping back to `off` does NOT re-introduce
-    -- `database.mode: rw` — the operator can do that via
-    -- editTopology / setInstanceState when they actually want a
-    -- per-instance override; the more conservative default is
+    -- Schema rule: native `replication.failover: election | manual`
+    -- is mutually exclusive with per-instance `database.mode`. The
+    -- moment we flip into one of those, Tarantool refuses to
+    -- (re)load the cluster YAML if any instance still carries an
+    -- explicit `database.mode`. Strip it cluster-wide here so the
+    -- commit lands cleanly. Flipping back to `off` does NOT
+    -- re-introduce `database.mode: rw` — the operator can do that
+    -- via editTopology / setInstanceState when they actually want
+    -- a per-instance override; the more conservative default is
     -- "no override" (instance follows replicaset semantics).
-    if args.mode == 'election' or args.mode == 'manual'
-        or args.mode == 'supervised' then
+    --
+    -- The `supervised` mode here is the WebUI alias that the
+    -- branch above rewrites to `failover: off + agent: true`, NOT
+    -- the Tarantool-native value. On disk the cluster stays
+    -- `failover: off`, so the schema rule does not apply and
+    -- stripping `database.mode` would break fresh JOIN — without
+    -- a writable peer in config a new instance hits
+    -- `box_cfg.lua:1107-1118` "No leader to register".
+    if args.mode == 'election' or args.mode == 'manual' then
         for _, group in pairs(new_parsed.groups or {}) do
             for _, rs in pairs(group.replicasets or {}) do
                 for _, inst in pairs(rs.instances or {}) do

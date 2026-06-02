@@ -44,6 +44,26 @@ Runbooks для типовых инцидентов. Для каждого сл�
 2. Убедиться, что `roles_cfg.webui.failover.agent: true` и `replication.failover: off`.
 3. Если ничего не помогает — вручную `box.ctl.promote()` на любом одном инстансе (через REST `/api/eval` под superuser или прямо через `tt console`).
 
+### Новый инстанс падает с `No leader to register`
+
+**Симптомы.** Свежий инстанс (без snap) не выходит из startup; в логе:
+`Startup failure. No leader to register new instance "tt-3". All the instances in replicaset "rs-1" of group "default" are configured to the read-only mode.` Уже работающие пиры здоровы, login работает.
+
+**Причина.** Bootstrap-проверка в `box_cfg.lua` (lines 1107-1118) ищет в YAML хотя бы один peer с `database.mode: rw` — это будущий писатель, который впишет новичка в `_cluster`. По умолчанию в replicaset с >1 instance отсутствие `database.mode` равно RO; если поле пропало у всех — регистрироваться негде, и инстанс exit'ится ещё до подключения к failover-агенту. Live-инстансы переживают пропажу: `has_snap=true` коротко замыкает ту же проверку в `box_cfg.lua:1105`, а runtime `box.cfg.read_only` контролируется failover-агентом через etcd-лизу.
+
+**Диагностика.**
+```bash
+docker exec webui-etcd etcdctl get /tarantool/webui/config/all --print-value-only \
+  | grep -A 2 'database:'
+```
+В выводе должно быть `mode: rw` под каждым инстансом в `groups → default → replicasets → rs-1 → instances`.
+
+**Действие.**
+1. Если `database.mode: rw` пропал — взять текущий конфиг из etcd, дописать `database: { mode: rw }` каждому инстансу, и `etcdctl put` обратно в `/tarantool/webui/config/all`. Tarantool watch'ит ключ и подхватит изменение в течение секунды.
+2. Перезапустить «новый» инстанс — он пройдёт JOIN.
+
+**Известная причина пропажи.** Старая версия GraphQL-резолвера `setFailoverMode("supervised")` strip'ала `database.mode` со всех инстансов как часть «schema rule» блока, разделявшего поведение с native `election`/`manual`. На диске `supervised` хранится как `failover: off + agent: true`, поэтому schema-rule не применяется — strip был ошибочным. Исправлено в `backend/webui/graphql/resolvers/cluster_ops.lua:1086-1104`.
+
 ## Failover
 
 ### Failover не происходит, но лидер мёртв
