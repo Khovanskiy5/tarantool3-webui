@@ -40,10 +40,7 @@ const hidden = computed(() => props.count == null);
         d="M2.5 3.5h11l-1 9.2a1 1 0 0 1-1 .8h-7a1 1 0 0 1-1-.8l-1-9.2Zm1.4 1.2.4 4h8.4l.4-4H3.9Z"
         fill="currentColor"
       />
-      <path
-        d="M5 2.5c0-.6.4-1 1-1h4c.6 0 1 .4 1 1V4h-1V2.5H6V4H5V2.5Z"
-        fill="currentColor"
-      />
+      <path d="M5 2.5c0-.6.4-1 1-1h4c.6 0 1 .4 1 1V4h-1V2.5H6V4H5V2.5Z" fill="currentColor" />
     </svg>
     <span class="webui-buckets__count">{{ formattedCount }}</span>
   </span>

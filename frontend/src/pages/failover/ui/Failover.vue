@@ -426,35 +426,23 @@ onMounted(load);
     <section v-if="liveness !== null" class="webui-failover__sp">
       <header class="webui-failover__sp-head">
         <h2>Liveness reports (etcd)</h2>
-        <Tag
-          v-if="liveness.reporter_enabled"
-          value="this peer reports"
-          severity="success"
-        />
-        <Tag
-          v-else
-          value="this peer does not report"
-          severity="secondary"
-        />
+        <Tag v-if="liveness.reporter_enabled" value="this peer reports" severity="success" />
+        <Tag v-else value="this peer does not report" severity="secondary" />
         <Tag
           v-if="liveness.keepalive_interval !== null"
           :value="`keepalive: ${liveness.keepalive_interval}s`"
           severity="secondary"
         />
-        <Tag
-          :value="`${liveness.entries.length} record(s)`"
-          severity="info"
-        />
+        <Tag :value="`${liveness.entries.length} record(s)`" severity="info" />
       </header>
       <p class="webui-failover__hint">
         Open-source equivalent of Tarantool Enterprise's top-level
         <code>stateboard</code>. Each peer with
-        <code>roles_cfg.webui.state_reporter.enabled: true</code> publishes a
-        JSON snapshot of its <code>box.info</code> to
-        <code>/state/by-name/&lt;alias&gt;</code> in etcd, bound to a lease so the
-        key vanishes on its own when the process dies. A <strong>stale</strong> row
-        means the lease expired without a renewal — usually a crash or a
-        network partition; the iproto poller above will agree shortly.
+        <code>roles_cfg.webui.state_reporter.enabled: true</code> publishes a JSON snapshot of its
+        <code>box.info</code> to <code>/state/by-name/&lt;alias&gt;</code> in etcd, bound to a lease
+        so the key vanishes on its own when the process dies. A <strong>stale</strong> row means the
+        lease expired without a renewal — usually a crash or a network partition; the iproto poller
+        above will agree shortly.
       </p>
       <DataTable
         v-if="liveness.entries.length > 0"
@@ -478,10 +466,7 @@ onMounted(load);
         </Column>
         <Column header="Mode">
           <template #body="{ data }">
-            <Tag
-              :value="data.mode ?? '—'"
-              :severity="data.mode === 'rw' ? 'success' : 'info'"
-            />
+            <Tag :value="data.mode ?? '—'" :severity="data.mode === 'rw' ? 'success' : 'info'" />
           </template>
         </Column>
         <Column header="Status">
@@ -491,9 +476,7 @@ onMounted(load);
         </Column>
         <Column header="RO reason">
           <template #body="{ data }">
-            <code v-if="data.ro_reason" class="webui-failover__mono">{{
-              data.ro_reason
-            }}</code>
+            <code v-if="data.ro_reason" class="webui-failover__mono">{{ data.ro_reason }}</code>
             <span v-else>—</span>
           </template>
         </Column>

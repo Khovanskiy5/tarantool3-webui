@@ -8,6 +8,10 @@
  * `app → pages → widgets → features → entities → shared` and rejects
  * any import that violates that direction or that reaches into a slice
  * without going through its `index.ts` public API.
+ *
+ * Uses the v6 `boundaries/dependencies` rule (replacement for the
+ * deprecated `boundaries/element-types` + `boundaries/no-private`
+ * pair). Selectors are object-form per the v5→v6 migration guide.
  */
 
 import { defineConfigWithVueTs, vueTsConfigs } from '@vue/eslint-config-typescript';
@@ -70,27 +74,61 @@ export default defineConfigWithVueTs(
       ],
     },
     rules: {
-      // FSD layer hierarchy. A higher layer may import any lower layer;
-      // same-layer imports are forbidden (cross-slice coupling), with the
-      // single exception of `shared`, which is allowed to compose itself
-      // because that is the only layer with truly generic primitives.
-      'boundaries/element-types': [
+      // v6 unified rule: replaces both `element-types` (layer hierarchy)
+      // and `no-private` (no deep cross-slice imports). Rules evaluate
+      // with last-write-wins semantics — the encapsulation deny at the
+      // end overrides any prior layer-level allow when an import
+      // reaches into another slice's internals.
+      'boundaries/dependencies': [
         2,
         {
           default: 'disallow',
           rules: [
-            { from: 'app', allow: ['pages', 'widgets', 'features', 'entities', 'shared'] },
-            { from: 'pages', allow: ['widgets', 'features', 'entities', 'shared'] },
-            { from: 'widgets', allow: ['features', 'entities', 'shared'] },
-            { from: 'features', allow: ['entities', 'shared'] },
-            { from: 'entities', allow: ['shared'] },
-            { from: 'shared', allow: ['shared'] },
+            // FSD layer hierarchy. A higher layer may import any lower
+            // layer; same-layer imports are forbidden (cross-slice
+            // coupling), with the single exception of `shared`, which is
+            // allowed to compose itself because that is the only layer
+            // with truly generic primitives.
+            {
+              from: { type: 'app' },
+              allow: {
+                to: { type: ['pages', 'widgets', 'features', 'entities', 'shared'] },
+              },
+            },
+            {
+              from: { type: 'pages' },
+              allow: { to: { type: ['widgets', 'features', 'entities', 'shared'] } },
+            },
+            {
+              from: { type: 'widgets' },
+              allow: { to: { type: ['features', 'entities', 'shared'] } },
+            },
+            { from: { type: 'features' }, allow: { to: { type: ['entities', 'shared'] } } },
+            { from: { type: 'entities' }, allow: { to: { type: 'shared' } } },
+            { from: { type: 'shared' }, allow: { to: { type: 'shared' } } },
+
+            // Encapsulation: imports between slices must go through the
+            // slice index.ts. The legal `relationship.to` values for an
+            // inter-slice import are:
+            //   `internal` — importing the slice's index (the public API)
+            //   `child`    — slice index importing its own descendants
+            //   `sibling`  — same-slice file importing a sibling file
+            // Anything else (cousin / nephew / descendant of an unrelated
+            // slice) means the import reached past `index.ts` into the
+            // private guts of another slice.
+            {
+              from: { type: '*' },
+              disallow: {
+                to: { type: '*' },
+                dependency: { relationship: { to: '!(internal|child|sibling)' } },
+              },
+              message:
+                'Imports between slices must go through the slice index.ts; ' +
+                "reaching into another slice's `model/`, `ui/`, etc. defeats encapsulation.",
+            },
           ],
         },
       ],
-      // Imports must go through the slice index.ts; reaching directly
-      // into `model/`, `ui/` etc. of another slice defeats encapsulation.
-      'boundaries/no-private': [2, { allowUncles: false }],
       // Untyped any is permitted only as a deliberate escape hatch with
       // an explanatory comment; the rule keeps it from spreading silently.
       '@typescript-eslint/no-explicit-any': 'warn',
@@ -122,8 +160,7 @@ export default defineConfigWithVueTs(
   {
     files: ['tools/**/*', 'vite.config.ts', 'vitest.config.ts', '*.cjs', 'eslint.config.js'],
     rules: {
-      'boundaries/element-types': 'off',
-      'boundaries/no-private': 'off',
+      'boundaries/dependencies': 'off',
     },
   },
 
@@ -134,8 +171,7 @@ export default defineConfigWithVueTs(
   {
     files: ['.storybook/**/*', 'src/**/*.stories.ts'],
     rules: {
-      'boundaries/element-types': 'off',
-      'boundaries/no-private': 'off',
+      'boundaries/dependencies': 'off',
     },
   },
 );

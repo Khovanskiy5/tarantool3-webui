@@ -5,6 +5,7 @@ import InputText from 'primevue/inputtext';
 import Password from 'primevue/password';
 import Button from 'primevue/button';
 import Message from 'primevue/message';
+import Fluid from 'primevue/fluid';
 
 import { useLoginStore } from '../model/login';
 
@@ -45,36 +46,44 @@ const submit = async () => {
 
 <template>
   <form class="webui-login-form" @submit.prevent="submit">
-    <h1 class="webui-login-form__title">Sign in</h1>
-    <p class="webui-login-form__subtitle">Tarantool cluster administration</p>
+    <header class="webui-login-form__header">
+      <h1>Sign in</h1>
+      <p>Tarantool cluster administration</p>
+    </header>
 
-    <Message v-if="errorBanner" severity="error" :closable="false">
-      {{ errorBanner }}
-    </Message>
+    <Fluid class="webui-login-form__body">
+      <Message v-if="errorBanner" severity="error" :closable="false">
+        {{ errorBanner }}
+      </Message>
 
-    <label class="webui-login-form__field">
-      <span class="webui-login-form__label">Username</span>
-      <InputText v-model="form.user" autocomplete="username" autofocus required />
-    </label>
+      <div class="r-field">
+        <label for="login-user">Username</label>
+        <InputText id="login-user" v-model="form.user" autocomplete="username" autofocus required />
+      </div>
 
-    <label class="webui-login-form__field">
-      <span class="webui-login-form__label">Password</span>
-      <Password
-        v-model="form.password"
-        :feedback="false"
-        toggle-mask
-        autocomplete="current-password"
-        required
+      <div class="r-field">
+        <label for="login-password">Password</label>
+        <!-- PrimeVue Password wraps a real <input>; `required` and
+             `autocomplete` belong to the inner input, not the wrapper.
+             `inputId` connects the outer <label for=...> to it so
+             clicking the label focuses the field. Fluid handles the
+             100% width — no `:deep(.p-password input)` hacks needed. -->
+        <Password
+          v-model="form.password"
+          input-id="login-password"
+          :feedback="false"
+          toggle-mask
+          :input-props="{ autocomplete: 'current-password', required: true }"
+        />
+      </div>
+
+      <Button
+        type="submit"
+        :loading="store.pending"
+        :disabled="!form.user || !form.password"
+        label="Sign in"
       />
-    </label>
-
-    <Button
-      type="submit"
-      class="webui-login-form__submit"
-      :loading="store.pending"
-      :disabled="!form.user || !form.password"
-      label="Sign in"
-    />
+    </Fluid>
   </form>
 </template>
 
@@ -82,7 +91,7 @@ const submit = async () => {
 .webui-login-form {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 1rem;
   width: 320px;
   padding: 2rem;
   border: 1px solid var(--p-content-border-color, transparent);
@@ -90,46 +99,33 @@ const submit = async () => {
   background: var(--p-content-background, #fff);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
 }
-.webui-login-form__title {
-  margin: 0;
-  font-size: 1.4rem;
-}
-.webui-login-form__subtitle {
-  margin: 0 0 0.5rem;
-  color: var(--p-text-muted-color, #777);
-  font-size: 0.85rem;
-}
-.webui-login-form__field {
+.webui-login-form__header {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
 }
-.webui-login-form__label {
-  font-size: 0.85rem;
+.webui-login-form__header h1 {
+  margin: 0;
+  font-size: 1.4rem;
+}
+.webui-login-form__header p {
+  margin: 0;
   color: var(--p-text-muted-color, #777);
+  font-size: 0.85rem;
 }
-.webui-login-form__submit {
-  margin-top: 0.5rem;
+.webui-login-form__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
 }
-
-/* PrimeVue Password puts input + toggle-icon side-by-side in a flex
- * wrapper, so the input ends short of the wrapper edge and the icon
- * sits on a strip of bare wrapper background. Stretch the input to
- * fill the wrapper and add right-padding so the icon overlays inside. */
-.webui-login-form :deep(.p-password) {
-  display: block;
-  width: 100%;
+.r-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
 }
-.webui-login-form :deep(.p-password input) {
-  width: 100%;
-  padding-inline-end: 2.25rem;
-}
-.webui-login-form :deep(.p-password-toggle-mask-icon) {
-  right: 0.75rem;
-  color: var(--p-text-muted-color, #888);
-  cursor: pointer;
-}
-.webui-login-form :deep(input.p-inputtext) {
-  width: 100%;
+.r-field > label {
+  font-size: 0.88rem;
+  font-weight: 600;
 }
 </style>
