@@ -77,13 +77,16 @@ files['tools/'] = {
     max_cyclomatic_complexity = 60,
 }
 
--- M.start orchestrates the role bootstrap end-to-end (config read,
--- session/audit init, HTTP routes, fiber pool spin-up, graceful
--- shutdown hook). M.validate type-checks every roles_cfg.webui field.
--- Both grow linearly with the role's surface area; splitting them
--- would scatter the boot order / validation rules across helpers
--- and obscure the single linear flow.
-files['backend/webui/init.lua'] = {
+-- lifecycle/start.lua orchestrates the role bootstrap end-to-end
+-- (config read, session/audit init, HTTP routes, fiber pool spin-up,
+-- graceful shutdown hook). lifecycle/validate.lua type-checks every
+-- roles_cfg.webui field. Both grow linearly with the role's surface
+-- area; splitting them further would scatter the boot order /
+-- validation rules across helpers and obscure the single linear flow.
+files['backend/webui/lifecycle/start.lua'] = {
+    max_cyclomatic_complexity = 50,
+}
+files['backend/webui/lifecycle/validate.lua'] = {
     max_cyclomatic_complexity = 45,
 }
 

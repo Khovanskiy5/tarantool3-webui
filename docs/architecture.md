@@ -78,7 +78,18 @@ Runtime и пакетный менеджер — **Bun ≥ 1.1**. Node.js и npm
 
 ## Lifecycle Lua-роли `webui`
 
-Точка входа — `backend/webui/init.lua`. Поддерживает оба интерфейса Tarantool 3.x:
+Точка входа — `backend/webui/init.lua`: тонкий фасад (≤ 40 строк, cap пинится `webui_facade_test.lua`), который только `require`'ит и реэкспортирует пять имён из `backend/webui/lifecycle/`:
+
+| Файл | Что внутри |
+|---|---|
+| `lifecycle/state.lua` | Shared `STATE` table + `status()` + `instance_alias()` + `configure_logging()` |
+| `lifecycle/validate.lua` | Чистая `validate(cfg)` — type-check каждого поля `roles_cfg.webui.*` |
+| `lifecycle/apply.lua` | `apply(cfg)` — диспетчер: `start` или `stop` + `start` |
+| `lifecycle/start.lua` | `start(opts)` — линейная boot-последовательность от storage до HTTP |
+| `lifecycle/stop.lua` | `stop()` — фазы 0–6 graceful shutdown (failover lease → drain → fibers → pool) |
+| `lifecycle/remote_shims.lua` | `install()` — все `webui_*_remote` net.box receivers в `_G` |
+
+Поддерживает оба интерфейса Tarantool 3.x:
 
 | Метод | Назначение |
 |---|---|
