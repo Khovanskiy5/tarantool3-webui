@@ -1032,7 +1032,7 @@ function M.mutation_set_failover_mode(root, args)
     local new_parsed = topology_edit._deep_copy(parsed)
     new_parsed.replication = new_parsed.replication or {}
 
-    -- Special case: `supervised` IS our open-source agent on top of
+    -- Special case: `supervised` IS our community agent on top of
     -- `replication.failover: off`. Translate the operator-friendly
     -- name to (off + agent: true) so the Tarantool 3.x schema
     -- validates cleanly.
@@ -1118,7 +1118,7 @@ function M.mutation_set_failover_mode(root, args)
     -- `replication.failover = election` OR
     -- `replication.failover = off`. Both modes drive leadership
     -- through other channels (raft / per-instance database.mode /
-    -- our OS agent) and reject a contradicting static `leader`.
+    -- our community agent) and reject a contradicting static `leader`.
     -- Strip it the same way we strip `database.mode`.
     if args.mode == 'election' or args.mode == 'off' then
         for _, group in pairs(new_parsed.groups or {}) do

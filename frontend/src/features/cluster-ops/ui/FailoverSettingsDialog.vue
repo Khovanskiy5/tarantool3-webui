@@ -1,30 +1,13 @@
 <script setup lang="ts">
 /**
- * Failover settings modal (Phase 5 Task 5.19).
+ * Failover settings modal.
  *
- * Wraps the backend's `setFailoverMode` mutation behind a per-
- * mode form. The four modes pick mechanically different sets of
- * knobs:
- *
- *   * `off`         — `replication.failover: off`. Operator chooses
- *                     whether the supervised OS agent runs on top
- *                     (agent=true → effectively `supervised`).
- *   * `manual`      — operator sets `replicasets.<rs>.leader` from
- *                     the config editor / cluster page. The mode
- *                     itself only needs synchro tuning.
- *   * `election`    — Tarantool raft. Exposes election_timeout +
- *                     election_fencing_mode in addition to the
- *                     synchro pair.
- *   * `supervised`  — shorthand for `off + agent: true` on the
- *                     backend. Same knobs as `off + agent`, with
- *                     an extra `agent_params` sub-form for
- *                     lease_ttl_sec etc.
- *
- * The shared knobs (synchro_quorum / synchro_timeout) live in
- * every panel. A live N/2+1 warning fires when the operator
- * picks a numeric quorum below the safe floor — the backend
- * rejects it, but flagging early keeps the operator from
- * needing a round-trip to learn that.
+ * Wraps the backend's `setFailoverMode` mutation behind a per-mode
+ * form. Each of the four modes drives leadership through a
+ * different mechanism — the dialog reveals only the knobs that
+ * apply to the selected mode, and gates the Apply button on
+ * client-side validation that mirrors the backend rules. The aim:
+ * the operator cannot send a request that the server will refuse.
  */
 import { computed, nextTick, ref, watch } from 'vue';
 import Dropdown from 'primevue/dropdown';
@@ -58,11 +41,31 @@ type Mode = 'off' | 'manual' | 'election' | 'supervised';
 const VALID_MODES: Mode[] = ['off', 'manual', 'election', 'supervised'];
 
 const MODE_OPTIONS = [
-  { value: 'off', label: 'off' },
-  { value: 'manual', label: 'manual' },
-  { value: 'election', label: 'election (raft)' },
-  { value: 'supervised', label: 'supervised (OS agent)' },
+  { value: 'off', label: 'off — no automatic failover' },
+  { value: 'manual', label: 'manual — static leader in YAML' },
+  { value: 'election', label: 'election — built-in Raft' },
+  { value: 'supervised', label: 'supervised — community agent (CE)' },
 ];
+
+const MODE_BLURB: Record<Mode, string> = {
+  off:
+    'Tarantool failover is disabled. With the community agent enabled below, the agent ' +
+    'drives leadership through etcd; without it, every instance follows its own ' +
+    'database.mode and no automatic promotion happens on failure.',
+  manual:
+    'Leader per replicaset is named statically via replicaset.leader in the cluster ' +
+    'YAML. No automatic failover — switching the leader is a config edit and commit.',
+  election:
+    'Tarantool elects a leader per replicaset using its built-in Raft. ' +
+    'election_timeout controls how long a follower waits before starting a vote; ' +
+    'election_fencing_mode controls what happens if the leader loses quorum.',
+  supervised:
+    'The bundled community agent runs an open-source equivalent of EE supervised: ' +
+    'every peer races for an etcd lease, the winner becomes coordinator and writes ' +
+    'per-replicaset appointments to etcd. Each peer\'s watcher reconciles ' +
+    'box.cfg.read_only by reading those appointments. Lease TTL is the only ' +
+    'frequently tuned knob — lower = faster failover, more etcd load.',
+};
 
 const FENCING_OPTIONS = [
   { value: '', label: '(keep current)' },
@@ -90,20 +93,92 @@ const diffSummary = ref<string[] | null>(null);
 const quorumFloor = computed(() =>
   props.instanceCount > 1 ? Math.floor(props.instanceCount / 2) + 1 : 1,
 );
-const quorumWarning = computed<string | null>(() => {
+
+/**
+ * Per-field validation. Empty value = "do not touch" (the backend
+ * keeps the current cluster setting), so empty is always valid.
+ * The rules mirror `validate_failover_params` in
+ * backend/webui/graphql/resolvers/cluster_ops.lua — a value that
+ * fails here would fail there too, so blocking client-side
+ * removes the round-trip.
+ */
+function validateInteger(v: string, opts: { min?: number; field: string }): string | null {
+  const t = v.trim();
+  if (t === '') return null;
+  if (!/^-?\d+$/.test(t)) return `${opts.field} must be a whole number`;
+  const n = Number(t);
+  if (opts.min !== undefined && n < opts.min) {
+    return `${opts.field} must be ≥ ${opts.min}`;
+  }
+  return null;
+}
+function validatePositiveNumber(v: string, field: string): string | null {
+  const t = v.trim();
+  if (t === '') return null;
+  const n = Number(t);
+  if (Number.isNaN(n) || !Number.isFinite(n) || n <= 0) {
+    return `${field} must be a positive number`;
+  }
+  return null;
+}
+
+// synchro_quorum has its own combined rule: accept either an integer
+// >= N/2+1 OR the literal Tarantool formula `N/2 + 1` (with optional
+// spaces). The backend accepts both shapes too.
+const synchroQuorumError = computed<string | null>(() => {
   const v = synchroQuorum.value.trim();
   if (v === '') return null;
+  if (/^N\s*\/\s*2\s*\+\s*1$/i.test(v)) return null;
+  if (!/^\d+$/.test(v)) {
+    return 'synchro_quorum must be a whole number or the formula `N/2 + 1`';
+  }
   const n = Number(v);
-  if (Number.isNaN(n)) return null;
   if (n < quorumFloor.value) {
     return (
       `synchro_quorum ${n} is below N/2+1 (${quorumFloor.value}) — ` +
-      'two partitions could both reach quorum independently. The ' +
-      'backend will refuse the commit.'
+      'two partitions could both reach quorum independently and split-brain. ' +
+      'Increase the value or use the formula `N/2 + 1`.'
     );
   }
   return null;
 });
+const synchroTimeoutError = computed<string | null>(() =>
+  validatePositiveNumber(synchroTimeout.value, 'synchro_timeout'),
+);
+const electionTimeoutError = computed<string | null>(() => {
+  if (mode.value !== 'election') return null;
+  return validatePositiveNumber(electionTimeout.value, 'election_timeout');
+});
+const leaseTtlError = computed<string | null>(() => {
+  if (mode.value !== 'supervised') return null;
+  return validateInteger(leaseTtlSec.value, { min: 1, field: 'lease_ttl_sec' });
+});
+
+// Mode-level guards that catch combinations the backend will reject
+// or that produce a non-viable cluster (e.g. too few peers for raft).
+const modeError = computed<string | null>(() => {
+  if (mode.value === 'election' && props.instanceCount > 0 && props.instanceCount < 3) {
+    return (
+      `Raft election needs at least 3 voting instances for safety; current cluster has ` +
+      `${props.instanceCount}. Add more peers before switching to election.`
+    );
+  }
+  return null;
+});
+
+const validationErrors = computed<string[]>(() => {
+  return [
+    modeError.value,
+    synchroQuorumError.value,
+    synchroTimeoutError.value,
+    electionTimeoutError.value,
+    leaseTtlError.value,
+  ].filter((s): s is string => s !== null);
+});
+
+const canSubmit = computed(
+  () => !ops.pending && validationErrors.value.length === 0,
+);
 
 watch(
   () => props.open,
@@ -136,48 +211,40 @@ watch(
 );
 
 function buildParams(): Record<string, unknown> | null {
-  // Empty fields are omitted — the backend keeps the current
-  // value for any knob we do not pass.
+  // The reactive validators above already gate the Apply button, so
+  // buildParams trusts the inputs and only shapes them. The defensive
+  // bail-out below covers the corner case where Apply is triggered
+  // before the next tick (e.g. via Enter on a stale form).
+  if (validationErrors.value.length > 0) {
+    banner.value = { severity: 'err', text: validationErrors.value[0] };
+    return null;
+  }
   const params: Record<string, unknown> = {};
   if (synchroQuorum.value.trim() !== '') {
-    const n = Number(synchroQuorum.value);
-    if (Number.isNaN(n)) {
-      banner.value = { severity: 'err', text: 'synchro_quorum must be a number' };
-      return null;
-    }
-    params.synchro_quorum = n;
+    const v = synchroQuorum.value.trim();
+    // Pass through the formula verbatim; numeric values go as numbers.
+    params.synchro_quorum = /^\d+$/.test(v) ? Number(v) : v;
   }
   if (synchroTimeout.value.trim() !== '') {
-    const n = Number(synchroTimeout.value);
-    if (Number.isNaN(n) || n <= 0) {
-      banner.value = { severity: 'err', text: 'synchro_timeout must be a positive number' };
-      return null;
-    }
-    params.synchro_timeout = n;
+    params.synchro_timeout = Number(synchroTimeout.value);
   }
   if (mode.value === 'election') {
     if (electionTimeout.value.trim() !== '') {
-      const n = Number(electionTimeout.value);
-      if (Number.isNaN(n) || n <= 0) {
-        banner.value = { severity: 'err', text: 'election_timeout must be a positive number' };
-        return null;
-      }
-      params.election_timeout = n;
+      params.election_timeout = Number(electionTimeout.value);
     }
     if (electionFencing.value !== '') {
       params.election_fencing_mode = electionFencing.value;
     }
   }
-  if (mode.value === 'off' && agentEnabled.value) {
-    params.agent = true;
+  // The "Enable agent" checkbox lives under `mode: off`. Always pass
+  // the explicit boolean (rather than only on true) so flipping it
+  // off actually disables the agent — otherwise the backend's
+  // default-on rule for mode=off would silently re-enable it.
+  if (mode.value === 'off') {
+    params.agent = agentEnabled.value === true;
   }
   if (mode.value === 'supervised' && leaseTtlSec.value.trim() !== '') {
-    const n = Number(leaseTtlSec.value);
-    if (Number.isNaN(n) || n <= 0) {
-      banner.value = { severity: 'err', text: 'lease_ttl_sec must be a positive number' };
-      return null;
-    }
-    params.agent_params = { lease_ttl_sec: n };
+    params.agent_params = { lease_ttl_sec: Number(leaseTtlSec.value) };
   }
   return params;
 }
@@ -235,8 +302,8 @@ function onCancel() {
         <header class="webui-fo-settings__head">
           <h2 class="webui-fo-settings__title">Failover settings</h2>
           <p class="webui-fo-settings__hint">
-            Routes through <code>setFailoverMode</code>. Empty fields keep the current cluster value
-            untouched.
+            Choose how the cluster decides who is the read-write leader. Empty fields keep the
+            current cluster value untouched.
           </p>
         </header>
         <div class="webui-fo-settings__body">
@@ -250,53 +317,76 @@ function onCancel() {
               class="webui-fo-settings__dropdown"
             />
           </label>
+          <p class="webui-fo-settings__blurb">{{ MODE_BLURB[mode] }}</p>
+          <p v-if="modeError" class="webui-fo-settings__msg webui-fo-settings__msg--err">
+            {{ modeError }}
+          </p>
 
           <fieldset class="webui-fo-settings__group">
-            <legend>Synchro</legend>
+            <legend>Synchronous replication</legend>
             <div class="webui-fo-settings__row">
               <label class="webui-fo-settings__field">
-                synchro_quorum
+                Write quorum <code>synchro_quorum</code>
                 <input
                   v-model="synchroQuorum"
                   type="text"
-                  inputmode="numeric"
+                  inputmode="text"
                   class="webui-fo-settings__input"
-                  :placeholder="`N/2+1=${quorumFloor}`"
+                  :class="{ 'webui-fo-settings__input--err': synchroQuorumError }"
+                  :placeholder="`N/2 + 1  (=${quorumFloor})`"
                 />
+                <small class="webui-fo-settings__field-help">
+                  How many peers must ack a synchronous write before it commits. The safe minimum
+                  is <code>N/2 + 1</code> ({{ quorumFloor }} for this cluster); a lower value
+                  allows two partitions to commit independently (split-brain).
+                </small>
               </label>
               <label class="webui-fo-settings__field">
-                synchro_timeout (sec)
+                Sync timeout <code>synchro_timeout</code> (sec)
                 <input
                   v-model="synchroTimeout"
                   type="number"
                   min="0"
                   step="0.1"
                   class="webui-fo-settings__input"
+                  :class="{ 'webui-fo-settings__input--err': synchroTimeoutError }"
                   placeholder="3"
                 />
+                <small class="webui-fo-settings__field-help">
+                  How long a sync write waits for quorum acks before it fails. Too low → flaky
+                  writes under network jitter; too high → slow failure detection.
+                </small>
               </label>
             </div>
-            <p v-if="quorumWarning" class="webui-fo-settings__msg webui-fo-settings__msg--err">
-              {{ quorumWarning }}
+            <p v-if="synchroQuorumError" class="webui-fo-settings__msg webui-fo-settings__msg--err">
+              {{ synchroQuorumError }}
+            </p>
+            <p v-if="synchroTimeoutError" class="webui-fo-settings__msg webui-fo-settings__msg--err">
+              {{ synchroTimeoutError }}
             </p>
           </fieldset>
 
           <fieldset v-if="mode === 'election'" class="webui-fo-settings__group">
-            <legend>Election (raft)</legend>
+            <legend>Raft election</legend>
             <div class="webui-fo-settings__row">
               <label class="webui-fo-settings__field">
-                election_timeout (sec)
+                Election timeout <code>election_timeout</code> (sec)
                 <input
                   v-model="electionTimeout"
                   type="number"
                   min="0"
                   step="0.1"
                   class="webui-fo-settings__input"
+                  :class="{ 'webui-fo-settings__input--err': electionTimeoutError }"
                   placeholder="5"
                 />
+                <small class="webui-fo-settings__field-help">
+                  How long a follower waits without leader heartbeats before starting a vote.
+                  Lower = faster failover; too low = false elections during transient jitter.
+                </small>
               </label>
               <label class="webui-fo-settings__field">
-                election_fencing_mode
+                Fencing <code>election_fencing_mode</code>
                 <Dropdown
                   v-model="electionFencing"
                   :options="FENCING_OPTIONS"
@@ -304,31 +394,53 @@ function onCancel() {
                   option-value="value"
                   class="webui-fo-settings__dropdown"
                 />
+                <small class="webui-fo-settings__field-help">
+                  What an isolated leader does when it loses quorum. <code>soft</code> demotes
+                  on quorum loss; <code>strict</code> also blocks reads from the isolated peer.
+                </small>
               </label>
             </div>
+            <p v-if="electionTimeoutError" class="webui-fo-settings__msg webui-fo-settings__msg--err">
+              {{ electionTimeoutError }}
+            </p>
           </fieldset>
 
           <fieldset v-if="mode === 'off'" class="webui-fo-settings__group">
-            <legend>Open-source agent</legend>
+            <legend>Community supervised agent</legend>
             <label class="webui-fo-settings__field webui-fo-settings__field--row">
               <input v-model="agentEnabled" type="checkbox" class="webui-fo-settings__checkbox" />
-              Enable supervised agent on top of <code>failover: off</code>
+              Run the community supervised agent on top of <code>failover: off</code>
             </label>
+            <small class="webui-fo-settings__field-help">
+              When enabled, the bundled open-source agent acquires a coordinator lease in etcd
+              and writes per-replicaset leader appointments. When disabled, leadership is
+              controlled only by each instance's <code>database.mode</code> and no automatic
+              promotion happens on failure.
+            </small>
           </fieldset>
 
           <fieldset v-if="mode === 'supervised'" class="webui-fo-settings__group">
             <legend>Agent parameters</legend>
             <label class="webui-fo-settings__field">
-              lease_ttl_sec
+              Lease TTL <code>lease_ttl_sec</code> (sec)
               <input
                 v-model="leaseTtlSec"
                 type="number"
                 min="1"
                 step="1"
                 class="webui-fo-settings__input"
+                :class="{ 'webui-fo-settings__input--err': leaseTtlError }"
                 placeholder="3"
               />
+              <small class="webui-fo-settings__field-help">
+                How long the coordinator's etcd lease lives between keep-alives. Lower = faster
+                detection that the coordinator died (and faster re-election), but more etcd
+                load. Whole seconds, ≥ 1.
+              </small>
             </label>
+            <p v-if="leaseTtlError" class="webui-fo-settings__msg webui-fo-settings__msg--err">
+              {{ leaseTtlError }}
+            </p>
           </fieldset>
 
           <div v-if="diffSummary && diffSummary.length > 0" class="webui-fo-settings__diff">
@@ -356,6 +468,9 @@ function onCancel() {
           </p>
         </div>
         <footer class="webui-fo-settings__foot">
+          <p v-if="validationErrors.length > 0" class="webui-fo-settings__foot-hint">
+            Fix the highlighted fields above to enable Apply.
+          </p>
           <button
             type="button"
             class="webui-fo-settings__btn"
@@ -367,7 +482,8 @@ function onCancel() {
           <button
             type="button"
             class="webui-fo-settings__btn"
-            :disabled="ops.pending"
+            :disabled="!canSubmit"
+            :title="validationErrors[0] ?? ''"
             @click="runPreview"
           >
             Preview
@@ -375,7 +491,8 @@ function onCancel() {
           <button
             type="button"
             class="webui-fo-settings__btn webui-fo-settings__btn--solid"
-            :disabled="ops.pending"
+            :disabled="!canSubmit"
+            :title="validationErrors[0] ?? ''"
             @click="runApply"
           >
             Apply
@@ -498,6 +615,39 @@ function onCancel() {
   outline-offset: -1px;
 }
 
+.webui-fo-settings__input--err {
+  border-color: var(--webui-danger, #d83535);
+}
+
+.webui-fo-settings__input--err:focus {
+  outline-color: var(--webui-danger, #d83535);
+}
+
+.webui-fo-settings__blurb {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--webui-text);
+  background: var(--webui-bg);
+  border: 1px solid var(--webui-border);
+  border-left: 3px solid var(--webui-accent);
+  border-radius: 5px;
+  padding: 0.55rem 0.75rem;
+}
+
+.webui-fo-settings__field-help {
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--webui-text-muted);
+  margin-top: 0.15rem;
+}
+
+.webui-fo-settings__field-help code,
+.webui-fo-settings__blurb code {
+  font-family: var(--webui-font-mono);
+  font-size: 0.75rem;
+}
+
 .webui-fo-settings__dropdown {
   width: 100%;
 }
@@ -554,9 +704,16 @@ function onCancel() {
 .webui-fo-settings__foot {
   padding: 0.85rem 1.25rem;
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 0.5rem;
   border-top: 1px solid var(--webui-border);
+}
+
+.webui-fo-settings__foot-hint {
+  margin: 0 auto 0 0;
+  font-size: 0.78rem;
+  color: var(--webui-danger, #d83535);
 }
 
 .webui-fo-settings__btn {

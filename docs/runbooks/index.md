@@ -7,7 +7,7 @@
 | Runbook | Когда читать |
 |---|---|
 | [promote.md](promote.md) | Сделать конкретный инстанс лидером replicaset (плановая смена primary, балансировка нагрузки). |
-| [failover-mode.md](failover-mode.md) | Переключить кластер между off / manual / election / supervised (наш OS agent). |
+| [failover-mode.md](failover-mode.md) | Переключить кластер между off / manual / election / supervised (community agent). |
 | [new-replicaset.md](new-replicaset.md) | Добавить новый replicaset с одним или несколькими инстансами. |
 | [expel-instance.md](expel-instance.md) | Удалить инстанс из кластера (декомиссия, замена железа). |
 | [rollback-config.md](rollback-config.md) | Откатить cluster YAML на предыдущую ревизию из /history/. |

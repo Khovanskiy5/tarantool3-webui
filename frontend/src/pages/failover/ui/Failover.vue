@@ -211,12 +211,17 @@ onMounted(load);
   <section class="webui-failover">
     <header class="webui-failover__head">
       <h1>Failover</h1>
-      <Tag :value="`mode: ${mode}`" severity="info" />
-      <!-- The `mode` badge tells you only the Raft setting. When
-           the open-source supervised agent is running on top, that
-           is the actual leadership driver — surface a second badge
-           so the page header reflects reality. -->
-      <Tag v-if="agent !== null && agent.enabled" value="agent: on" severity="success" />
+      <!-- `mode` is Tarantool's own setting (replication.failover).
+           When the community agent runs on top of failover: off, it
+           is the actual leadership driver — Tarantool 3.x ships the
+           native supervised agent only in Enterprise Edition, so the
+           project bundles an open-source replacement. -->
+      <Tag :value="`Tarantool mode: ${mode}`" severity="info" />
+      <Tag
+        v-if="agent !== null && agent.enabled"
+        value="Community agent: active"
+        severity="success"
+      />
       <button
         v-if="canEditFailover"
         type="button"
@@ -228,58 +233,93 @@ onMounted(load);
     </header>
     <p v-if="error" class="webui-failover__error">{{ error }}</p>
 
-    <DataTable
-      v-if="mode === 'election' && elections.length > 0"
-      :value="elections"
-      :loading="loading"
-      data-key="instance"
-      size="small"
-      striped-rows
-    >
-      <Column field="instance" header="Instance" />
-      <Column header="State">
-        <template #body="{ data }">
-          <Tag :value="data.state ?? '—'" :severity="sev(data.state)" />
-        </template>
-      </Column>
-      <Column field="term" header="Term" />
-      <Column field="leader_name" header="Leader">
-        <template #body="{ data }">
-          <code class="webui-failover__mono">{{ data.leader_name ?? '—' }}</code>
-        </template>
-      </Column>
-    </DataTable>
-    <p v-else-if="mode !== 'election'" class="webui-failover__hint">
-      Built-in Raft election is disabled (mode is <code>{{ mode }}</code
-      >). Leadership is driven by
-      <span v-if="mode === 'off'"
-        >per-instance <code>database.mode</code> + the agent below (if enabled).</span
-      >
-      <span v-else-if="mode === 'manual'"
-        >the <code>replicaset.leader</code> field in cluster config — change it via the config
-        editor and commit.</span
-      >
-      <span v-else>an external state provider.</span>
+    <p class="webui-failover__lede">
+      <span v-if="mode === 'off' && agent && agent.enabled">
+        Leadership is driven by the <strong>community supervised agent</strong> (below). Tarantool's
+        own failover is disabled.
+      </span>
+      <span v-else-if="mode === 'off'">
+        Tarantool's failover is disabled and the community agent is off. Each replicaset uses
+        per-instance <code>database.mode</code> to decide who is RW — there is no automatic
+        promotion on failure.
+      </span>
+      <span v-else-if="mode === 'manual'">
+        A leader per replicaset is named statically via <code>replicaset.leader</code> in the
+        cluster config. Change it in the config editor and commit; there is no automatic failover.
+      </span>
+      <span v-else-if="mode === 'election'">
+        Tarantool's built-in <strong>Raft</strong> elects a leader per replicaset. The
+        per-instance state is shown below.
+      </span>
+      <span v-else-if="mode === 'supervised'">
+        Tarantool's <strong>native supervised</strong> mode is enabled (Enterprise Edition). An
+        external state provider drives appointments; its endpoints appear in the
+        <em>State provider</em> section.
+      </span>
+      <span v-else>Current Tarantool failover mode: <code>{{ mode }}</code>.</span>
     </p>
+
+    <section v-if="mode === 'election'" class="webui-failover__sp">
+      <header class="webui-failover__sp-head">
+        <h2>Raft election state</h2>
+        <Tag :value="`${elections.length} peer(s)`" severity="secondary" />
+      </header>
+      <p class="webui-failover__hint">
+        One row per instance, snapshotted from <code>box.info.election</code>. The instance whose
+        <strong>State</strong> is <code>leader</code> is the current RW peer. Followers vote
+        within a <em>term</em>; a term bump means a new election just happened.
+      </p>
+      <DataTable
+        v-if="elections.length > 0"
+        :value="elections"
+        :loading="loading"
+        data-key="instance"
+        size="small"
+        striped-rows
+      >
+        <Column field="instance" header="Instance" />
+        <Column header="State">
+          <template #body="{ data }">
+            <Tag :value="data.state ?? '—'" :severity="sev(data.state)" />
+          </template>
+        </Column>
+        <Column field="term" header="Term" />
+        <Column field="leader_name" header="Leader">
+          <template #body="{ data }">
+            <code class="webui-failover__mono">{{ data.leader_name ?? '—' }}</code>
+          </template>
+        </Column>
+      </DataTable>
+      <p v-else class="webui-failover__hint">
+        No election state reported yet — the cluster is still bootstrapping or peers are
+        unreachable.
+      </p>
+    </section>
 
     <section v-if="agent && agent.enabled" class="webui-failover__sp">
       <header class="webui-failover__sp-head">
-        <h2>Open-source supervised agent</h2>
+        <h2>Community supervised agent</h2>
         <Tag
-          :value="`coordinator: ${agent.coordinator ?? '—'}`"
+          :value="agent.is_coordinator ? `coordinator (this peer)` : `coordinator: ${agent.coordinator ?? '—'}`"
           :severity="agent.is_coordinator ? 'success' : 'info'"
         />
-        <Tag v-if="agent.self_alias" :value="`self: ${agent.self_alias}`" severity="secondary" />
+        <Tag v-if="agent.self_alias" :value="`this peer: ${agent.self_alias}`" severity="secondary" />
       </header>
       <p v-if="agent.last_error" class="webui-failover__err">
         {{ agent.last_error }}
       </p>
       <p class="webui-failover__hint">
-        etcd-based lease elects one coordinator. The coordinator probes every peer and writes
-        per-replicaset appointments under
-        <code>/tarantool/webui/failover/replicasets/&lt;rs&gt;/leader</code>; each instance's
-        watcher reconciles <code>box.cfg.read_only</code> via <code>box.ctl.promote/demote</code>.
-        Lease TTL: 10s.
+        Open-source replacement for Tarantool Enterprise's <code>supervised</code> failover.
+        Every peer competes for a <strong>coordinator lease</strong> in etcd (TTL 10 s); the
+        winner probes every instance, picks the best leader per replicaset and writes the
+        appointment back into etcd. Each peer's <strong>watcher</strong> reads its replicaset's
+        appointment and calls <code>box.ctl.promote/demote</code> accordingly.
+      </p>
+      <h3 class="webui-failover__subhead">Appointments written by the coordinator</h3>
+      <p class="webui-failover__hint">
+        Source of truth — read straight from
+        <code>/tarantool/webui/failover/replicasets/&lt;rs&gt;/leader</code> in etcd, so every
+        peer's view here is identical.
       </p>
       <DataTable :value="agent.appointments" data-key="replicaset" size="small" striped-rows>
         <Column field="replicaset" header="Replicaset" />
@@ -297,16 +337,17 @@ onMounted(load);
           <template #body="{ data }">{{ fmtAge(data.ts) }}</template>
         </Column>
       </DataTable>
+      <h3 class="webui-failover__subhead">Watcher (this peer)</h3>
       <p class="webui-failover__hint">
-        Watcher on <code>{{ agent.self_alias ?? '—' }}</code
-        >: replicaset <code>{{ agent.watcher_replicaset ?? '—' }}</code
-        >, last seen leader <code>{{ agent.watcher_last_leader ?? '—' }}</code
-        >, currently
+        On <code>{{ agent.self_alias ?? '—' }}</code> (replicaset
+        <code>{{ agent.watcher_replicaset ?? '—' }}</code>): sees
+        <code>{{ agent.watcher_last_leader ?? '—' }}</code> as the appointed leader. This peer is
+        currently
         <strong>{{
           agent.watcher_current_ro === false
-            ? 'leader (RW)'
+            ? 'leader — read-write (owns the synchro queue)'
             : agent.watcher_current_ro === true
-              ? 'follower (RO)'
+              ? 'follower — read-only'
               : 'unknown'
         }}</strong
         >.
@@ -319,9 +360,10 @@ onMounted(load);
         <Tag :value="`${commands.length} recent`" severity="secondary" />
       </header>
       <p class="webui-failover__hint">
-        Every operator-issued cluster mutation lands here via the
-        <code>_webui_failover_commands</code> replicated sync space. The leader's retention fiber
-        prunes rows older than 30 days.
+        Audit log of every failover-affecting mutation an operator issued through the UI —
+        <code>setFailoverMode</code>, <code>promote</code>, leader handoffs and so on. Stored
+        in the cluster-wide replicated <code>_webui_failover_commands</code> space; the current
+        leader prunes entries older than 30 days.
       </p>
       <DataTable
         :value="commands"
@@ -385,9 +427,15 @@ onMounted(load);
 
     <section v-if="sp && sp.kind !== 'none'" class="webui-failover__sp">
       <header class="webui-failover__sp-head">
-        <h2>State provider</h2>
+        <h2>External state provider</h2>
         <Tag :value="`kind: ${sp.kind}`" severity="info" />
       </header>
+      <p class="webui-failover__hint">
+        Tarantool's native <code>supervised</code> mode (Enterprise Edition) writes appointments
+        through this external state provider. The probe below checks each endpoint via
+        <code>HTTP GET /version</code> — only reachability is verified; lease ownership lives
+        inside the provider and is not exposed here.
+      </p>
       <DataTable :value="sp.endpoints ?? []" data-key="uri" size="small">
         <Column field="uri" header="Endpoint">
           <template #body="{ data }">
@@ -460,6 +508,28 @@ onMounted(load);
   font-family: var(--webui-font-mono);
   font-size: 0.75rem;
   color: var(--p-message-error-color, #d83535);
+}
+.webui-failover__lede {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.4;
+  color: var(--webui-text);
+  background: var(--webui-bg-elevated);
+  border: 1px solid var(--webui-border);
+  border-left: 3px solid var(--webui-accent);
+  border-radius: var(--webui-radius);
+  padding: 0.65rem 0.9rem;
+}
+.webui-failover__lede code {
+  font-family: var(--webui-font-mono);
+  font-size: 0.85rem;
+}
+.webui-failover__subhead {
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--webui-text-muted);
 }
 .webui-failover__hint {
   color: var(--webui-text-muted);
