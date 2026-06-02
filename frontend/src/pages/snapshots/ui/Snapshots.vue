@@ -107,14 +107,13 @@ onMounted(load);
 <template>
   <section class="webui-snapshots">
     <header class="webui-snapshots__head">
-      <div>
+      <div class="webui-snapshots__title-block">
         <h1>Snapshots</h1>
-        <p v-if="dir" class="webui-snapshots__dir">
-          memtx_dir: <code>{{ dir }}</code>
-          <span v-if="walDir && walDir !== dir">
-            · wal_dir: <code>{{ walDir }}</code>
-          </span>
-        </p>
+        <div class="webui-snapshots__title-meta">
+          <Tag :value="`${entries.length} files`" severity="secondary" />
+          <Tag v-if="dir" :value="`memtx_dir: ${dir}`" severity="info" />
+          <Tag v-if="walDir && walDir !== dir" :value="`wal_dir: ${walDir}`" severity="info" />
+        </div>
       </div>
       <Button
         size="small"
@@ -184,9 +183,14 @@ onMounted(load);
 .webui-snapshots__head h1 {
   margin: 0;
 }
-.webui-snapshots__dir {
-  margin: 0.25rem 0 0;
-  color: var(--webui-text-muted);
-  font-size: 0.85rem;
+.webui-snapshots__title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.webui-snapshots__title-meta {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
 }
 </style>
