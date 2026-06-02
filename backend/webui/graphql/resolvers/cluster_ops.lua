@@ -82,7 +82,7 @@ local function read_current_yaml()
     local client, client_err = etcd_client.get_client()
     local etcd_unavailable_reason
     if client ~= nil then
-        local kv, get_err = client:get('config')
+        local kv, get_err = client:read_cluster_config()
         if get_err ~= nil then
             etcd_unavailable_reason = 'etcd read failed: '
                 .. tostring(get_err.message or get_err)

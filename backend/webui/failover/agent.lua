@@ -365,7 +365,7 @@ local function appointment_cycle(client)
     local priority_by_rs = {}
     do
         local ok_yaml, yaml_mod = pcall(require, 'yaml')
-        local kv = ok_yaml and select(1, client:get('config')) or nil
+        local kv = ok_yaml and select(1, client:read_cluster_config()) or nil
         if kv ~= nil and kv.value ~= nil then
             local ok, parsed = pcall(yaml_mod.decode, kv.value)
             if ok and type(parsed) == 'table' then

@@ -221,9 +221,9 @@ function M.commit(prepared_id, opts)
     local payload = entry.yaml
     local result, err
     if opts.expected_revision then
-        result, err = opts.etcd:txn_cas('config', payload, opts.expected_revision)
+        result, err = opts.etcd:cas_cluster_config(payload, opts.expected_revision)
     else
-        result, err = opts.etcd:put('config', payload)
+        result, err = opts.etcd:write_cluster_config(payload)
     end
     if result == nil then return nil, err end
     delete_prepared(prepared_id)

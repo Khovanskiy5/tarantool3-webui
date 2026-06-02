@@ -87,17 +87,30 @@ end)
 
 local function fake_etcd_capture()
     local captured = {}
-    return setmetatable({
-        put = function(self, key, value)
+    local fake
+    fake = {
+        put = function(_, key, value)
             table.insert(captured, { op = 'put', key = key, value = value })
             return { revision = 42 }
         end,
-        txn_cas = function(self, key, value, rev)
+        txn_cas = function(_, key, value, rev)
             table.insert(captured, { op = 'cas', key = key, value = value, rev = rev })
             return { revision = 42 }
         end,
         get = function() return nil end,
-    }, { __index = function() return function() return nil end end }), captured
+        -- Cluster-config helpers added when the storage convention
+        -- moved to the canonical `config/all` key; delegate to the
+        -- low-level put / txn_cas so the capture log stays uniform.
+        write_cluster_config = function(self, value)
+            return fake.put(self, 'config/all', value)
+        end,
+        cas_cluster_config = function(self, value, rev)
+            return fake.txn_cas(self, 'config/all', value, rev)
+        end,
+        read_cluster_config = function() return nil end,
+    }
+    return setmetatable(fake,
+        { __index = function() return function() return nil end end }), captured
 end
 
 g.test_no_flag_skips_reload_fanout = function()

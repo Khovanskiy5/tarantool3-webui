@@ -300,6 +300,41 @@ function M.proto:txn_cas(key, value, expected_revision)
         { expected = expected_revision })
 end
 
+-- ── Cluster config key (Tarantool 3.x convention) ───────────────────
+--
+-- Tarantool's documented contract is that the cluster YAML lives at
+-- `<prefix>/config/all`. Older deployments used `<prefix>/config`.
+-- The native etcd source tries the canonical key first and falls back
+-- to the legacy one (`tarantool-3.7.0/src/box/lua/config/init.lua`
+-- via `internal.config.source.etcd`); the same precedence is
+-- mirrored in `backend/webui/config_source/etcd_source.lua` lines
+-- 237-238. Every WebUI code path that reads or writes the cluster
+-- config goes through the three helpers below so the two-key dance
+-- lives in one place.
+M.CONFIG_KEY_PRIMARY = 'config/all'
+M.CONFIG_KEY_LEGACY  = 'config'
+
+-- Read the cluster YAML. Returns the kv tuple from the canonical key
+-- when present, otherwise tries the legacy key. Returns (nil, nil)
+-- when neither key exists (caller falls back to the file source);
+-- returns (nil, err) only on transport-level failure.
+function M.proto:read_cluster_config()
+    local kv, e = self:get(M.CONFIG_KEY_PRIMARY)
+    if e ~= nil then return nil, e end
+    if kv ~= nil then return kv end
+    return self:get(M.CONFIG_KEY_LEGACY)
+end
+
+-- Plain write to the canonical key.
+function M.proto:write_cluster_config(value)
+    return self:put(M.CONFIG_KEY_PRIMARY, value)
+end
+
+-- CAS write fenced on the canonical key's mod_revision.
+function M.proto:cas_cluster_config(value, expected_revision)
+    return self:txn_cas(M.CONFIG_KEY_PRIMARY, value, expected_revision)
+end
+
 -- ── Lease ────────────────────────────────────────────────────────────
 
 function M.proto:lease_grant(ttl_sec)

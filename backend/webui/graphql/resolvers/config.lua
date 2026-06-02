@@ -70,7 +70,7 @@ function M.query_current(root)
 
     local client, client_err = etcd_client.get_client()
     if client ~= nil then
-        local kv, e = client:get('config')
+        local kv, e = client:read_cluster_config()
         if kv ~= nil and kv.value ~= nil and #kv.value > 0 then
             logger.debug('config read from etcd', {
                 revision = kv.revision, size = #kv.value,
@@ -177,7 +177,7 @@ function M.mutation_prepare(root, args)
     do
         local client = etcd_client.get_client()
         if client ~= nil then
-            local kv = select(1, client:get('config'))
+            local kv = select(1, client:read_cluster_config())
             if kv ~= nil and kv.value ~= nil then current_yaml = kv.value end
         end
         if current_yaml == nil then current_yaml = read_local_yaml() end
@@ -358,7 +358,7 @@ function M.mutation_rollback(root, args)
 
     -- For audit's diff_summary we need before/after; pull current
     -- YAML via the same channel propose uses.
-    local current_kv = select(1, client:get('config'))
+    local current_kv = select(1, client:read_cluster_config())
     local current_yaml = current_kv and current_kv.value or ''
     local diff_result = diff_module.diff_revisions(current_yaml, target_yaml)
     local diff_summary = {}
