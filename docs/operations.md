@@ -160,6 +160,75 @@ roles_cfg.webui.failover.agent: false
 
 Агент откажется стартовать при `replication.failover ≠ off`, поэтому double-leadership на transition исключён.
 
+## State reporter — liveness в etcd
+
+Open-source аналог верхнеуровневого блока `stateboard.*` из Tarantool Enterprise. Каждый инстанс с включённым reporter'ом пишет в etcd небольшой JSON со своим живым `box.info`. Запись привязана к etcd lease, поэтому:
+
+- при штатной остановке (`docker stop`, role-reload) — синхронный `lease_revoke`, ключ исчезает за миллисекунды;
+- при `kill -9` / OOM / сетевом разделе — lease истекает по TTL, ключ удаляется автоматически.
+
+Это дополнительный канал к peer_poller'у: poller ходит по iproto и видит «недоступен» только после таймаута, а отсутствие свежей записи в etcd говорит однозначно — процесс мёртв.
+
+### Включение
+
+```yaml
+roles_cfg:
+  webui:
+    state_reporter:
+      enabled: true
+      renew_interval: 2             # как часто переписывать, сек (default 2)
+      keepalive_interval: 10        # TTL lease, сек (default 10)
+```
+
+`enabled: false` по умолчанию — фича опциональная, как и в Enterprise stateboard.
+
+### Что появляется в etcd
+
+Ключ — `<config-prefix>/state/by-name/<instance_name>`. Значение — JSON:
+
+```json
+{
+  "hostname":  "tt-1.example",
+  "pid":       4242,
+  "alias":     "tt-1",
+  "mode":      "rw",
+  "ro_reason": null,
+  "status":    "running",
+  "ts":        1717372800.123
+}
+```
+
+Поля совпадают с контрактом Tarantool Enterprise stateboard (`tarantool-3.7.0/src/box/lua/config/descriptions.lua:2862`). Единственное отличие — JSON вместо YAML (единообразно с остальными ключами WebUI в etcd: `/failover/coordinator`, `/failover/replicasets/<rs>/leader`).
+
+### Проверка из CLI
+
+```bash
+etcdctl --endpoints=http://etcd:2379 \
+  get --prefix /tarantool/webui/state/by-name/
+```
+
+Если ключ инстанса исчез — инстанс либо корректно остановлен (lease revoke), либо упал больше `keepalive_interval` секунд назад. В обоих случаях peer_poller подтвердит причину.
+
+### Когда стоит включать
+
+- Кластеры, где «упал процесс» vs «iproto залип» — actionable разница для дежурного.
+- Метрики/алерты на основе etcd-watch — дешевле, чем поллинг каждого инстанса.
+- Дополнительный sanity-check для координатора failover-агента (lease истёк ⇒ кандидат не в RW).
+
+Если эти сценарии не нужны — оставь `enabled: false`, лишний writer в etcd на каждом тике не появится.
+
+### В UI
+
+На странице **Failover** появляется секция **Liveness reports (etcd)**: одна строка на каждый ключ в `/state/by-name/`, столбцы `Instance / Freshness / Age / Mode / Status / RO reason / Hostname / PID`. Свежесть классифицируется относительно `keepalive_interval`:
+
+| Метка | Условие | Значение |
+|---|---|---|
+| `fresh`   | age ≤ keepalive_interval | штатно, инстанс пишет вовремя |
+| `lagging` | keepalive_interval < age ≤ 2× | пропустил один renew (etcd flap, GC pause); поллер ещё считает живым |
+| `stale`   | age > 2× keepalive_interval | инстанс не пишет — обычно процесс мёртв, lease вот-вот истечёт |
+
+Тот же data source доступен GraphQL-запросом `clusterLiveness { entries { … } }` (RBAC: viewer) — пригодится для внешних дашбордов и алертов.
+
 ## Каталог HTTP-эндпоинтов
 
 | Метод | Путь                       | RBAC       | Назначение                                        |
@@ -194,6 +263,7 @@ CSRF: cookie `webui_csrf` (не HttpOnly) дублируется в заголо
 | Query     | `schema`            | viewer     | Список спейсов и индексов                     |
 | Query     | `users`             | admin      | Tarantool users + RBAC роли                   |
 | Query     | `failover`          | admin      | Mode + per-server election state              |
+| Query     | `clusterLiveness`   | viewer     | Records published by `state_reporter` (etcd liveness) |
 | Query     | `vshard`            | viewer     | Groups summary (если sharding включён)        |
 | Query     | `bootstrapStatus`   | admin      | Нужен ли initial bootstrap                    |
 | Query     | `bootstrapTemplates`| admin      | Список шаблонов (single / replicaset-3 / vshard-3x3) |

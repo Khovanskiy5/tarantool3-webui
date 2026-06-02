@@ -58,6 +58,18 @@ function M.stop()
         STATE.failover = nil
     end
 
+    -- Phase 0b: revoke the state-reporter lease too, for the same
+    -- reason — synchronous revoke makes the `<prefix>/state/by-name/
+    -- <alias>` key disappear immediately on a graceful stop instead
+    -- of waiting for the keepalive TTL. Observers (UI panels, other
+    -- peers' diagnostics) see this instance go from "rw/ro" to
+    -- "absent" within milliseconds rather than `keepalive_interval`
+    -- seconds.
+    if STATE.state_reporter ~= nil then
+        pcall(function() STATE.state_reporter.stop() end)
+        STATE.state_reporter = nil
+    end
+
     -- Phase 1: flip the drain gate. New HTTP requests get 503 +
     -- Retry-After (Task 3a). /api/health stays open so load
     -- balancers can confirm the `degraded`/`stopping` state.

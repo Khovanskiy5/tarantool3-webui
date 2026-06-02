@@ -12,6 +12,17 @@ roles_cfg:
       watcher_poll_interval_sec: 1
       lease_ttl_sec: 3
       appointment_interval: 1
+    # Liveness reporter: each instance publishes a JSON snapshot of
+    # its box.info to `<prefix>/state/by-name/<alias>` in etcd, bound
+    # to a lease so the key disappears on crash. Surfaced in the
+    # Failover UI as "Liveness reports (etcd)" and via the
+    # `clusterLiveness` GraphQL query. Defaults are tuned for the
+    # 3-second failover budget already used by the agent above
+    # (renew every 1s, declare stale after 3s without a renew).
+    state_reporter:
+      enabled: true
+      renew_interval: 1
+      keepalive_interval: 3
     etcd_writer:
       endpoints:
       - http://etcd:2379

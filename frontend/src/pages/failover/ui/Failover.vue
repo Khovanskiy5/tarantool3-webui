@@ -64,11 +64,29 @@ interface FailoverCommand {
   error_reason: string | null;
 }
 
+interface LivenessEntry {
+  alias: string | null;
+  hostname: string | null;
+  pid: number | null;
+  mode: string | null;
+  ro_reason: string | null;
+  status: string | null;
+  ts: number | null;
+  age_seconds: number | null;
+}
+
+interface LivenessReport {
+  reporter_enabled: boolean;
+  keepalive_interval: number | null;
+  entries: LivenessEntry[];
+}
+
 const mode = ref<string>('');
 const elections = ref<Election[]>([]);
 const sp = ref<SPStatus | null>(null);
 const agent = ref<AgentStatus | null>(null);
 const commands = ref<FailoverCommand[]>([]);
+const liveness = ref<LivenessReport | null>(null);
 const error = ref<string | null>(null);
 const loading = ref(false);
 const settingsOpen = ref(false);
@@ -131,6 +149,20 @@ const FAILOVER_Q = /* GraphQL */ `
         error_reason
       }
     }
+    clusterLiveness {
+      reporter_enabled
+      keepalive_interval
+      entries {
+        alias
+        hostname
+        pid
+        mode
+        ro_reason
+        status
+        ts
+        age_seconds
+      }
+    }
     cluster {
       servers(limit: 50) {
         totalCount
@@ -148,6 +180,7 @@ const load = async () => {
       failoverStateProviderStatus: SPStatus;
       failoverAgentStatus: AgentStatus;
       failoverCommands: { entries: FailoverCommand[] };
+      clusterLiveness: LivenessReport;
       cluster: { servers: { totalCount: number } };
     }>(FAILOVER_Q, {}, { requestPolicy: 'network-only' })
     .toPromise();
@@ -161,6 +194,7 @@ const load = async () => {
   sp.value = res.data?.failoverStateProviderStatus ?? null;
   agent.value = res.data?.failoverAgentStatus ?? null;
   commands.value = res.data?.failoverCommands?.entries ?? [];
+  liveness.value = res.data?.clusterLiveness ?? null;
   instanceCount.value = res.data?.cluster?.servers?.totalCount ?? 0;
   loading.value = false;
 };
@@ -179,6 +213,30 @@ const cmdSev = (status: string) => {
   if (status === 'failed') return 'danger';
   if (status === 'taken') return 'info';
   return 'secondary';
+};
+
+// Liveness freshness vs. the keepalive interval reported by the
+// backend. Anything older than 2x is treated as stale — that gives
+// one missed renew_interval window before raising the alarm.
+const liveSev = (entry: LivenessEntry): 'success' | 'warn' | 'danger' => {
+  if (entry.age_seconds == null) return 'warn';
+  const threshold = liveness.value?.keepalive_interval ?? 10;
+  if (entry.age_seconds > threshold * 2) return 'danger';
+  if (entry.age_seconds > threshold) return 'warn';
+  return 'success';
+};
+const liveLabel = (entry: LivenessEntry): string => {
+  if (entry.age_seconds == null) return 'unknown';
+  const threshold = liveness.value?.keepalive_interval ?? 10;
+  if (entry.age_seconds > threshold * 2) return 'stale';
+  if (entry.age_seconds > threshold) return 'lagging';
+  return 'fresh';
+};
+const fmtAgeShort = (sec: number | null): string => {
+  if (sec == null) return '—';
+  if (sec < 1) return '<1 s';
+  if (sec < 60) return `${sec.toFixed(1)} s`;
+  return `${(sec / 60).toFixed(1)} min`;
 };
 
 // Pretty-print latency only when start + finish are known. Pending /
@@ -362,6 +420,97 @@ onMounted(load);
               : 'unknown'
         }}</strong
         >.
+      </p>
+    </section>
+
+    <section v-if="liveness !== null" class="webui-failover__sp">
+      <header class="webui-failover__sp-head">
+        <h2>Liveness reports (etcd)</h2>
+        <Tag
+          v-if="liveness.reporter_enabled"
+          value="this peer reports"
+          severity="success"
+        />
+        <Tag
+          v-else
+          value="this peer does not report"
+          severity="secondary"
+        />
+        <Tag
+          v-if="liveness.keepalive_interval !== null"
+          :value="`keepalive: ${liveness.keepalive_interval}s`"
+          severity="secondary"
+        />
+        <Tag
+          :value="`${liveness.entries.length} record(s)`"
+          severity="info"
+        />
+      </header>
+      <p class="webui-failover__hint">
+        Open-source equivalent of Tarantool Enterprise's top-level
+        <code>stateboard</code>. Each peer with
+        <code>roles_cfg.webui.state_reporter.enabled: true</code> publishes a
+        JSON snapshot of its <code>box.info</code> to
+        <code>/state/by-name/&lt;alias&gt;</code> in etcd, bound to a lease so the
+        key vanishes on its own when the process dies. A <strong>stale</strong> row
+        means the lease expired without a renewal — usually a crash or a
+        network partition; the iproto poller above will agree shortly.
+      </p>
+      <DataTable
+        v-if="liveness.entries.length > 0"
+        :value="liveness.entries"
+        data-key="alias"
+        size="small"
+        striped-rows
+      >
+        <Column field="alias" header="Instance">
+          <template #body="{ data }">
+            <code class="webui-failover__mono">{{ data.alias ?? '—' }}</code>
+          </template>
+        </Column>
+        <Column header="Freshness">
+          <template #body="{ data }">
+            <Tag :value="liveLabel(data)" :severity="liveSev(data)" />
+          </template>
+        </Column>
+        <Column header="Age">
+          <template #body="{ data }">{{ fmtAgeShort(data.age_seconds) }}</template>
+        </Column>
+        <Column header="Mode">
+          <template #body="{ data }">
+            <Tag
+              :value="data.mode ?? '—'"
+              :severity="data.mode === 'rw' ? 'success' : 'info'"
+            />
+          </template>
+        </Column>
+        <Column header="Status">
+          <template #body="{ data }">
+            <code class="webui-failover__mono">{{ data.status ?? '—' }}</code>
+          </template>
+        </Column>
+        <Column header="RO reason">
+          <template #body="{ data }">
+            <code v-if="data.ro_reason" class="webui-failover__mono">{{
+              data.ro_reason
+            }}</code>
+            <span v-else>—</span>
+          </template>
+        </Column>
+        <Column header="Hostname">
+          <template #body="{ data }">
+            <code class="webui-failover__mono">{{ data.hostname ?? '—' }}</code>
+          </template>
+        </Column>
+        <Column header="PID">
+          <template #body="{ data }">
+            <code class="webui-failover__mono">{{ data.pid ?? '—' }}</code>
+          </template>
+        </Column>
+      </DataTable>
+      <p v-else class="webui-failover__hint">
+        No liveness records in etcd. Enable the reporter on at least one peer:
+        <code>roles_cfg.webui.state_reporter.enabled: true</code>.
       </p>
     </section>
 

@@ -115,6 +115,7 @@ M.GRAPHQL_FIELD = {
     suggestions  = 'viewer',
     metrics      = 'viewer',
     health       = 'viewer',
+    clusterLiveness = 'viewer',
     -- Mutations (operators can propose; only admin/superuser commit)
     proposeConfig = 'operator',
     validateConfig = 'operator',

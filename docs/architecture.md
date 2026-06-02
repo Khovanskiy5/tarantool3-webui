@@ -123,9 +123,10 @@ uninitialized ──start()──▶ starting ──▶ ready
 8. HTTP server
 9. GraphQL server
 10. WebSocket endpoint
-11. failover agent + watcher (если `roles_cfg.webui.failover.agent: true`)
-12. notifications dispatcher (только на лидере)
-13. broadcast `webui.started`
+11. state reporter (если `roles_cfg.webui.state_reporter.enabled: true`)
+12. failover agent + watcher (если `roles_cfg.webui.failover.agent: true`)
+13. notifications dispatcher (только на лидере)
+14. broadcast `webui.started`
 
 `stop()` обходит подсистемы в обратном порядке, drain'я HTTP/WS перед остановкой fiber'ов и пулов.
 
@@ -389,7 +390,7 @@ JSON в одну строку:
 {"ts":"2026-05-30T12:34:56.789012Z","level":"info","tag":"http","instance":"tt-1","msg":"request accepted","request_id":"abc","latency_ms":12}
 ```
 
-Стандартные теги: `init`, `http`, `cluster`, `config`, `auth`, `audit`, `ws`, `graphql`, `etcd`, `metrics`, `fiber`, `migration`, `failover.agent`, `failover.watcher`, `notifications`.
+Стандартные теги: `init`, `http`, `cluster`, `cluster.self_reporter`, `config`, `auth`, `audit`, `ws`, `graphql`, `etcd`, `metrics`, `fiber`, `migration`, `failover.agent`, `failover.watcher`, `notifications`.
 
 Уровень — `roles_cfg.webui.log_level` или env `WEBUI_LOG_LEVEL`, default `debug`. JSON-сериализация в `pcall`; на сбое — degraded-строка с `"_encode_error":true`, никаких throw'ов.
 

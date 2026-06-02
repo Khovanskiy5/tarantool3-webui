@@ -45,6 +45,7 @@ local saved_queries_resolver = require('webui.graphql.resolvers.saved_queries')
 local bootstrap_resolver   = require('webui.graphql.resolvers.bootstrap')
 local webhooks_resolver    = require('webui.graphql.resolvers.webhooks')
 local cluster_ops_resolver = require('webui.graphql.resolvers.cluster_ops')
+local cluster_liveness_resolver = require('webui.graphql.resolvers.cluster_liveness')
 
 local M = {}
 
@@ -277,6 +278,37 @@ local Query = types.object {
                 'Replicated + sync — the row the API just confirmed ' ..
                 'survives an immediate leader crash.',
             resolve = failover_resolver.query_commands,
+        },
+        clusterLiveness = {
+            kind = types.object({
+                name = 'ClusterLivenessReport',
+                fields = {
+                    reporter_enabled = types.boolean.nonNull,
+                    keepalive_interval = types.float,
+                    entries = types.list(types.object({
+                        name = 'ClusterLivenessEntry',
+                        fields = {
+                            alias       = types.string,
+                            hostname    = types.string,
+                            pid         = types.int,
+                            mode        = types.string,
+                            ro_reason   = types.string,
+                            status      = types.string,
+                            ts          = types.float,
+                            age_seconds = types.float,
+                        },
+                    })),
+                },
+            }).nonNull,
+            description = 'Liveness records published by every instance '
+                .. 'with roles_cfg.webui.state_reporter.enabled: true. '
+                .. 'Read straight from `<prefix>/state/by-name/<alias>` '
+                .. 'in etcd. `reporter_enabled` reflects whether THIS '
+                .. 'peer publishes; the entries list may include peers '
+                .. 'configured differently. `age_seconds > '
+                .. 'keepalive_interval * 2` typically indicates a peer '
+                .. 'that crashed or lost its etcd lease.',
+            resolve = cluster_liveness_resolver.query,
         },
         failoverStateProviderStatus = {
             kind = types.object({

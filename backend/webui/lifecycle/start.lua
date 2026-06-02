@@ -39,6 +39,33 @@ local remote_shims       = require('webui.lifecycle.remote_shims')
 
 local logger = log_util.with_tag('init')
 
+-- Bring the state-reporter fiber up or down based on the live
+-- `roles_cfg.webui.state_reporter` block. Extracted from M.start to
+-- keep its cyclomatic complexity below the project luacheck cap.
+-- Re-entrant: handles enabled: true ↔ false transitions on every
+-- config:reload() the same way the failover-agent block does.
+local function reconcile_state_reporter(STATE, opts)
+    local sr_ok, sr_mod = pcall(require, 'webui.cluster.self_reporter')
+    if not sr_ok then return end
+    local sr_cfg = opts.state_reporter or {}
+    local want_sr = sr_cfg.enabled == true
+    if STATE.state_reporter ~= nil and not want_sr then
+        pcall(function() STATE.state_reporter.stop() end)
+        STATE.state_reporter = nil
+        logger.info('state reporter stopped via config reload',
+            { reason = 'roles_cfg.webui.state_reporter.enabled != true' })
+    end
+    if want_sr and STATE.state_reporter == nil then
+        local sr_started, sr_err = sr_mod.start(sr_cfg)
+        if sr_started == true then
+            STATE.state_reporter = sr_mod
+        elseif sr_err ~= nil and sr_err ~= 'disabled' then
+            logger.warn('state reporter not started',
+                { reason = sr_err })
+        end
+    end
+end
+
 local M = {}
 
 function M.start(opts)
@@ -266,6 +293,13 @@ function M.start(opts)
         pcall(notif.start)
         STATE.notifications = notif
     end
+
+    -- Instance state reporter (open-source equivalent of the
+    -- Enterprise top-level `stateboard.*` block). Opt-in via
+    -- `roles_cfg.webui.state_reporter.enabled: true`. Writes a small
+    -- JSON liveness record to `<prefix>/state/by-name/<alias>` bound
+    -- to an etcd lease, so a hard crash drops the key on TTL expiry.
+    reconcile_state_reporter(STATE, opts)
 
     -- Open-source supervised-failover agent + watcher. Opt-in via
     -- `roles_cfg.webui.failover.agent: true`. The wrapper refuses

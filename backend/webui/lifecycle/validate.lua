@@ -14,6 +14,28 @@ local version = require('webui.version')
 
 local M = {}
 
+-- Split out of validate() to keep its cyclomatic complexity below
+-- the project luacheck cap. Returns (true, nil) on success or
+-- (false, message) on rejection. Accepts nil (unset → no-op).
+function M._validate_state_reporter(sr)
+    if sr == nil then return true end
+    if type(sr) ~= 'table' then
+        return false, 'roles_cfg.webui.state_reporter must be a table'
+    end
+    if sr.enabled ~= nil and type(sr.enabled) ~= 'boolean' then
+        return false,
+            'roles_cfg.webui.state_reporter.enabled must be a boolean'
+    end
+    for _, k in ipairs({ 'renew_interval', 'keepalive_interval' }) do
+        if sr[k] ~= nil
+            and (type(sr[k]) ~= 'number' or sr[k] <= 0) then
+            return false, 'roles_cfg.webui.state_reporter.' .. k
+                .. ' must be a positive number'
+        end
+    end
+    return true
+end
+
 function M.validate(cfg)
     checks('?table')
     cfg = cfg or {}
@@ -78,6 +100,8 @@ function M.validate(cfg)
             end
         end
     end
+    local sr_ok, sr_err = M._validate_state_reporter(cfg.state_reporter)
+    if not sr_ok then return nil, sr_err end
     if cfg.failover ~= nil then
         if type(cfg.failover) ~= 'table' then
             return nil, 'roles_cfg.webui.failover must be a table'
