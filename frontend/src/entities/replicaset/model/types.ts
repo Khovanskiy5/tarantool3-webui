@@ -9,8 +9,4 @@ import type { ReplicasetCardFieldsFragment } from '@/shared/api/generated';
 
 export type Replicaset = ReplicasetCardFieldsFragment;
 
-export type ReplicasetRollup =
-  | 'healthy'
-  | 'degraded'
-  | 'unhealthy'
-  | 'unknown';
+export type ReplicasetRollup = 'healthy' | 'degraded' | 'unhealthy' | 'unknown';

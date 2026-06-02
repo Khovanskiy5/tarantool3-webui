@@ -89,23 +89,58 @@ const SPACES_Q = /* GraphQL */ `
   query DxSpaces($sys: Boolean!) {
     spaces(include_system: $sys) {
       spaces {
-        id name engine row_count size_bytes is_sync
-        triggers_count sequence
-        format { name type is_nullable collation }
-        indexes { id name type unique parts }
+        id
+        name
+        engine
+        row_count
+        size_bytes
+        is_sync
+        triggers_count
+        sequence
+        format {
+          name
+          type
+          is_nullable
+          collation
+        }
+        indexes {
+          id
+          name
+          type
+          unique
+          parts
+        }
       }
     }
   }
 `;
 
 const TUPLES_Q = /* GraphQL */ `
-  query DxTuples($space: String!, $filter: [TupleFilterInput!],
-                 $index: String, $limit: Int, $after: String,
-                 $allow_full_scan: Boolean) {
-    tuples(space: $space, filter: $filter, index: $index,
-           limit: $limit, after: $after, allow_full_scan: $allow_full_scan) {
-      items { fields pk_string }
-      next_cursor total partial_scan truncated index_used
+  query DxTuples(
+    $space: String!
+    $filter: [TupleFilterInput!]
+    $index: String
+    $limit: Int
+    $after: String
+    $allow_full_scan: Boolean
+  ) {
+    tuples(
+      space: $space
+      filter: $filter
+      index: $index
+      limit: $limit
+      after: $after
+      allow_full_scan: $allow_full_scan
+    ) {
+      items {
+        fields
+        pk_string
+      }
+      next_cursor
+      total
+      partial_scan
+      truncated
+      index_used
     }
   }
 `;
@@ -113,14 +148,20 @@ const TUPLES_Q = /* GraphQL */ `
 const DELETE_M = /* GraphQL */ `
   mutation DxDelete($space: String!, $key: [Json!]!) {
     tupleDelete(space: $space, key: $key) {
-      ok before
+      ok
+      before
     }
   }
 `;
 
 const DROP_SPACE_M = /* GraphQL */ `
   mutation DxDropSpace($name: String!) {
-    dropSpace(name: $name) { ok name forwarded leader }
+    dropSpace(name: $name) {
+      ok
+      name
+      forwarded
+      leader
+    }
   }
 `;
 
@@ -170,11 +211,9 @@ async function loadSpaces() {
   loadingSpaces.value = true;
   error.value = null;
   const res = await getClient()
-    .query<{ spaces: { spaces: SpaceInfo[] } }>(
-      SPACES_Q,
-      { sys: includeSystem.value },
-      { requestPolicy: 'network-only' },
-    )
+    .query<{
+      spaces: { spaces: SpaceInfo[] };
+    }>(SPACES_Q, { sys: includeSystem.value }, { requestPolicy: 'network-only' })
     .toPromise();
   if (res.error) {
     error.value = res.error.message;
@@ -278,8 +317,8 @@ function coerceFilterValue(c: FilterChip, sp: SpaceInfo): unknown {
   if (t === 'boolean') return c.value === 'true';
   try {
     if (
-      (c.value.startsWith('{') && c.value.endsWith('}'))
-      || (c.value.startsWith('[') && c.value.endsWith(']'))
+      (c.value.startsWith('{') && c.value.endsWith('}')) ||
+      (c.value.startsWith('[') && c.value.endsWith(']'))
     ) {
       return JSON.parse(c.value);
     }
@@ -382,13 +421,9 @@ async function onSpaceFormSaved() {
 
 async function dropSpace(s: SpaceInfo) {
   if (s.name.startsWith('_')) return;
-  const confirmed = window.prompt(
-    `Drop space "${s.name}"? Type the name to confirm:`,
-  );
+  const confirmed = window.prompt(`Drop space "${s.name}"? Type the name to confirm:`);
   if (confirmed !== s.name) return;
-  const res = await getClient()
-    .mutation(DROP_SPACE_M, { name: s.name })
-    .toPromise();
+  const res = await getClient().mutation(DROP_SPACE_M, { name: s.name }).toPromise();
   if (res.error) {
     error.value = res.error.message;
     return;
@@ -525,10 +560,7 @@ watch(includeSystem, () => {
               :value="selectedSpace.is_sync ? 'sync' : 'async'"
               :severity="selectedSpace.is_sync ? 'success' : 'secondary'"
             />
-            <Tag
-              :value="selectedSpace.engine ?? '—'"
-              severity="info"
-            />
+            <Tag :value="selectedSpace.engine ?? '—'" severity="info" />
           </h1>
           <div class="webui-dx__meta">
             <span>id {{ selectedSpace.id }}</span>
@@ -611,10 +643,7 @@ watch(includeSystem, () => {
           @click="addFilterChip"
         />
         <label class="webui-dx__full-scan">
-          <ToggleSwitch
-            v-model="allowFullScan"
-            @update:model-value="loadTuples"
-          />
+          <ToggleSwitch v-model="allowFullScan" @update:model-value="loadTuples" />
           <span>allow full scan</span>
         </label>
       </div>
@@ -653,11 +682,7 @@ watch(includeSystem, () => {
             <code class="webui-dx__pk">{{ data.pk_string }}</code>
           </template>
         </Column>
-        <Column
-          v-for="(f, i) in selectedSpace.format ?? []"
-          :key="f.name"
-          :header="f.name"
-        >
+        <Column v-for="(f, i) in selectedSpace.format ?? []" :key="f.name" :header="f.name">
           <template #body="{ data }">
             <span :class="{ 'webui-dx__null': (data.fields[i] ?? null) === null }">
               {{ renderField(data.fields[i]) }}
@@ -854,22 +879,32 @@ watch(includeSystem, () => {
   gap: 0.5rem;
   flex-wrap: wrap;
 }
-.webui-dx__filter-field { min-width: 12rem; }
-.webui-dx__filter-op { min-width: 5rem; }
-.webui-dx__filter-value { min-width: 12rem; }
+.webui-dx__filter-field {
+  min-width: 12rem;
+}
+.webui-dx__filter-op {
+  min-width: 5rem;
+}
+.webui-dx__filter-value {
+  min-width: 12rem;
+}
 .webui-dx__chips {
   display: flex;
   gap: 0.4rem;
   flex-wrap: wrap;
 }
-.webui-dx__chip { cursor: pointer; }
+.webui-dx__chip {
+  cursor: pointer;
+}
 .webui-dx__index-hint {
   display: flex;
   gap: 1rem;
   font-size: 0.8rem;
   color: var(--webui-text-muted);
 }
-.webui-dx__warn { color: var(--webui-warning); }
+.webui-dx__warn {
+  color: var(--webui-warning);
+}
 .webui-dx__full-scan {
   display: inline-flex;
   align-items: center;
@@ -877,9 +912,18 @@ watch(includeSystem, () => {
   font-size: 0.8rem;
   color: var(--webui-text-muted);
 }
-.webui-dx__pk { font-family: var(--webui-font-mono); font-size: 0.8rem; }
-.webui-dx__null { color: var(--webui-text-muted); font-style: italic; }
-.webui-dx__grid { flex: 1 1 auto; min-height: 0; }
+.webui-dx__pk {
+  font-family: var(--webui-font-mono);
+  font-size: 0.8rem;
+}
+.webui-dx__null {
+  color: var(--webui-text-muted);
+  font-style: italic;
+}
+.webui-dx__grid {
+  flex: 1 1 auto;
+  min-height: 0;
+}
 .webui-dx__pager {
   display: flex;
   align-items: center;
@@ -891,8 +935,17 @@ watch(includeSystem, () => {
   align-items: center;
   gap: 0.4rem;
 }
-.webui-dx__page-size-select :deep(.p-select) { min-width: 5rem; }
-.webui-dx__muted { color: var(--webui-text-muted); }
-.webui-dx__row-actions { display: inline-flex; gap: 0.25rem; }
-.webui-dx__sync-badge { font-size: 0.65rem; }
+.webui-dx__page-size-select :deep(.p-select) {
+  min-width: 5rem;
+}
+.webui-dx__muted {
+  color: var(--webui-text-muted);
+}
+.webui-dx__row-actions {
+  display: inline-flex;
+  gap: 0.25rem;
+}
+.webui-dx__sync-badge {
+  font-size: 0.65rem;
+}
 </style>

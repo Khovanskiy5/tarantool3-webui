@@ -25,7 +25,7 @@ LUACHECK     ?= .rocks/bin/luacheck
 .PHONY: help
 help: ## Show this help.
 	@awk 'BEGIN {FS = ":.*##"; printf "Available targets:\n"} \
-		/^[a-zA-Z_-]+:.*?##/ { printf "  \033[1m%-22s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
+		/^[a-zA-Z0-9_-]+:.*?##/ { printf "  \033[1m%-22s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Local development
@@ -67,6 +67,14 @@ lint-frontend: ## Run ESLint and prettier check on the frontend.
 lint-fix: ## Auto-fix lint issues where possible.
 	cd $(FRONTEND_DIR) && $(BUN) run lint:fix
 
+.PHONY: format-frontend
+format-frontend: ## Check frontend code formatting (prettier).
+	cd $(FRONTEND_DIR) && $(BUN) run format
+
+.PHONY: type-check-frontend
+type-check-frontend: ## Run TypeScript type-check on the frontend (vue-tsc).
+	cd $(FRONTEND_DIR) && $(BUN) run type-check
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Tests
 # ─────────────────────────────────────────────────────────────────────────────
@@ -88,7 +96,13 @@ test-integration: ## Run integration tests (docker-compose based).
 
 .PHONY: test-e2e
 test-e2e: ## Run Playwright end-to-end tests against dev compose.
-	cd $(FRONTEND_DIR) && $(BUN)x playwright test
+	# NODE_OPTIONS suppresses DEP0205: Playwright's TS loader still uses
+	# `module.register()` (deprecated in Node 24+ in favour of
+	# `module.registerHooks()`). The deprecation is internal to
+	# @playwright/test and will be removed when Playwright migrates;
+	# silencing it here keeps CI output clean without hiding our own
+	# deprecation warnings.
+	cd $(FRONTEND_DIR) && NODE_OPTIONS='--disable-warning=DEP0205' $(BUN)x playwright test
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Build
@@ -141,3 +155,11 @@ check-no-tooling-mentions: ## Verify project artefacts do not reference internal
 
 .PHONY: check-all
 check-all: lint check-no-tooling-mentions test ## Run all quick checks before PR.
+
+# Comprehensive sweep: every lint, hygiene check, type check, unit suite,
+# integration suite and the e2e suite. Use this before merging anything
+# substantial. The e2e step calls Playwright against the dev cluster —
+# bring it up first with `make dev`; otherwise Playwright fails with a
+# connection error you'll easily recognise.
+.PHONY: tests
+tests: lint format-frontend type-check-frontend check-no-tooling-mentions test-backend test-frontend test-integration test-e2e ## Run every lint, check, type-check and test (unit + integration + e2e). E2E needs `make dev` running.

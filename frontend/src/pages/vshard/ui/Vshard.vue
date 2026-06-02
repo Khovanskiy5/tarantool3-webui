@@ -17,8 +17,18 @@ interface VshardGroup {
   status: string;
 }
 
-interface CanBootstrap { ok: boolean; group: string; reasons: string[] | null; }
-interface BootstrapResult { ok: boolean; group: string; router: string | null; latency_ms: number | null; message: string | null; }
+interface CanBootstrap {
+  ok: boolean;
+  group: string;
+  reasons: string[] | null;
+}
+interface BootstrapResult {
+  ok: boolean;
+  group: string;
+  router: string | null;
+  latency_ms: number | null;
+  message: string | null;
+}
 
 const groups = ref<VshardGroup[]>([]);
 const knownGroups = ref<string[]>([]);
@@ -32,15 +42,35 @@ const bootInfo = ref<string | null>(null);
 
 const VSHARD_Q = /* GraphQL */ `
   query Vshard($group: String!) {
-    vshard { groups { name total_buckets distribution rebalancer status } }
-    vshardKnownGroups { groups }
-    canBootstrapVshard(group: $group) { ok group reasons }
+    vshard {
+      groups {
+        name
+        total_buckets
+        distribution
+        rebalancer
+        status
+      }
+    }
+    vshardKnownGroups {
+      groups
+    }
+    canBootstrapVshard(group: $group) {
+      ok
+      group
+      reasons
+    }
   }
 `;
 
 const BOOTSTRAP_M = /* GraphQL */ `
   mutation BootstrapVshard($group: String!) {
-    bootstrapVshard(group: $group) { ok group router latency_ms message }
+    bootstrapVshard(group: $group) {
+      ok
+      group
+      router
+      latency_ms
+      message
+    }
   }
 `;
 
@@ -48,12 +78,18 @@ const load = async () => {
   loading.value = true;
   error.value = null;
   bootInfo.value = null;
-  const res = await getClient().query<{
-    vshard: { groups: VshardGroup[] };
-    vshardKnownGroups: { groups: string[] };
-    canBootstrapVshard: CanBootstrap;
-  }>(VSHARD_Q, { group: selectedGroup.value }).toPromise();
-  if (res.error) { error.value = res.error.message; loading.value = false; return; }
+  const res = await getClient()
+    .query<{
+      vshard: { groups: VshardGroup[] };
+      vshardKnownGroups: { groups: string[] };
+      canBootstrapVshard: CanBootstrap;
+    }>(VSHARD_Q, { group: selectedGroup.value })
+    .toPromise();
+  if (res.error) {
+    error.value = res.error.message;
+    loading.value = false;
+    return;
+  }
   groups.value = res.data?.vshard?.groups ?? [];
   knownGroups.value = res.data?.vshardKnownGroups?.groups ?? [];
   canBoot.value = res.data?.canBootstrapVshard ?? null;
@@ -62,12 +98,16 @@ const load = async () => {
 
 const bootstrap = async () => {
   bootstrapping.value = true;
-  bootInfo.value = null; error.value = null;
-  const res = await getClient().mutation<{ bootstrapVshard: BootstrapResult }>(
-    BOOTSTRAP_M, { group: selectedGroup.value },
-  ).toPromise();
+  bootInfo.value = null;
+  error.value = null;
+  const res = await getClient()
+    .mutation<{ bootstrapVshard: BootstrapResult }>(BOOTSTRAP_M, { group: selectedGroup.value })
+    .toPromise();
   bootstrapping.value = false;
-  if (res.error) { error.value = res.error.message; return; }
+  if (res.error) {
+    error.value = res.error.message;
+    return;
+  }
   const r = res.data?.bootstrapVshard;
   if (r?.ok) {
     bootInfo.value = `Bootstrap ok on router ${r.router} (${(r.latency_ms ?? 0).toFixed(1)} ms).`;
@@ -95,9 +135,18 @@ onMounted(load);
     </Message>
 
     <p v-if="error" class="webui-vshard__error">{{ error }}</p>
-    <Message v-if="bootInfo" severity="success" :closable="true" @close="bootInfo = null">{{ bootInfo }}</Message>
+    <Message v-if="bootInfo" severity="success" :closable="true" @close="bootInfo = null">
+      {{ bootInfo }}
+    </Message>
 
-    <DataTable v-if="groups.length > 0" :value="groups" :loading="loading" data-key="name" size="small" striped-rows>
+    <DataTable
+      v-if="groups.length > 0"
+      :value="groups"
+      :loading="loading"
+      data-key="name"
+      size="small"
+      striped-rows
+    >
       <Column field="name" header="Group" />
       <Column field="total_buckets" header="Buckets" />
       <Column header="Distribution">
@@ -116,12 +165,19 @@ onMounted(load);
     <section v-if="knownGroups.length > 0" class="webui-vshard__bootstrap">
       <header class="webui-vshard__bootstrap-head">
         <h2>Bootstrap</h2>
-        <Dropdown v-model="selectedGroup" :options="groupOptions" placeholder="Select group" size="small" @update:model-value="load" />
+        <Dropdown
+          v-model="selectedGroup"
+          :options="groupOptions"
+          placeholder="Select group"
+          size="small"
+          @update:model-value="load"
+        />
       </header>
       <Message v-if="canBoot && !canBoot.ok" severity="warn" :closable="false">
-        Preconditions failed for <code>{{ canBoot.group }}</code>:
+        Preconditions failed for <code>{{ canBoot.group }}</code
+        >:
         <ul>
-          <li v-for="r in (canBoot.reasons ?? [])" :key="r">{{ r }}</li>
+          <li v-for="r in canBoot.reasons ?? []" :key="r">{{ r }}</li>
         </ul>
       </Message>
       <Button
@@ -137,10 +193,34 @@ onMounted(load);
 </template>
 
 <style scoped>
-.webui-vshard { padding: 1rem 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
-.webui-vshard h1 { margin: 0; }
-.webui-vshard h2 { margin: 0; font-size: 1.05rem; }
-.webui-vshard__error { color: var(--p-message-error-color, #d83535); }
-.webui-vshard__bootstrap { background: var(--webui-bg-elevated); border: 1px solid var(--webui-border); border-radius: var(--webui-radius); padding: 1rem; display: flex; flex-direction: column; gap: 0.75rem; }
-.webui-vshard__bootstrap-head { display: flex; align-items: center; gap: 1rem; }
+.webui-vshard {
+  padding: 1rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.webui-vshard h1 {
+  margin: 0;
+}
+.webui-vshard h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+.webui-vshard__error {
+  color: var(--p-message-error-color, #d83535);
+}
+.webui-vshard__bootstrap {
+  background: var(--webui-bg-elevated);
+  border: 1px solid var(--webui-border);
+  border-radius: var(--webui-radius);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.webui-vshard__bootstrap-head {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
 </style>

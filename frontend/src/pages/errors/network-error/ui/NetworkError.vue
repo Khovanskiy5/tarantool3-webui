@@ -32,12 +32,7 @@ onBeforeUnmount(() => {
     <p class="webui-error-page__description">
       {{ t('pages.network_error.description') }}
     </p>
-    <button
-      type="button"
-      class="webui-error-page__action"
-      :disabled="reconnecting"
-      @click="retry"
-    >
+    <button type="button" class="webui-error-page__action" :disabled="reconnecting" @click="retry">
       <span v-if="reconnecting">{{ t('pages.network_error.reconnecting') }}</span>
       <span v-else>{{ t('common.retry') }}</span>
     </button>

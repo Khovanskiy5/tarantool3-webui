@@ -42,14 +42,22 @@ import { restClient, RestApiError } from '@/shared/api/rest/client';
 
 // ── types matching the backend response ───────────────────────────
 
-interface ColumnMeta { name: string; type: string; }
+interface ColumnMeta {
+  name: string;
+  type: string;
+}
 interface SelectResult {
   metadata: ColumnMeta[];
   rows: unknown[][];
   truncated?: boolean;
 }
-interface DmlResult { row_count: number; }
-interface SqlErrorResult { error: string; seqscan_required?: boolean; }
+interface DmlResult {
+  row_count: number;
+}
+interface SqlErrorResult {
+  error: string;
+  seqscan_required?: boolean;
+}
 type StatementResult = SelectResult | DmlResult | SqlErrorResult | { ok: true };
 
 interface SqlResponse {
@@ -118,18 +126,19 @@ const savingNow = ref(false);
 // useful, and these are dialect-stable across deployments.
 const BUILTIN_SNIPPETS: { name: string; sql: string }[] = [
   { name: 'cluster identity', sql: 'SELECT "name", "uuid" FROM "_cluster"' },
-  { name: 'spaces overview',  sql: 'SELECT id, name, engine FROM "_vspace" WHERE name NOT LIKE \'\\_%\' ESCAPE \'\\\'' },
-  { name: 'index list',       sql: 'SELECT id, name, type FROM "_vindex" LIMIT 50' },
-  { name: 'users + roles',    sql: 'SELECT id, name, type FROM "_vuser"' },
+  {
+    name: 'spaces overview',
+    sql: "SELECT id, name, engine FROM \"_vspace\" WHERE name NOT LIKE '\\_%' ESCAPE '\\'",
+  },
+  { name: 'index list', sql: 'SELECT id, name, type FROM "_vindex" LIMIT 50' },
+  { name: 'users + roles', sql: 'SELECT id, name, type FROM "_vuser"' },
   { name: 'session settings', sql: 'SELECT name, value FROM "_session_settings"' },
 ];
 
 // ── Monaco bootstrap (shared bundle with config-editor) ───────────
 
 const initMonacoEnv = async () => {
-  const EditorWorker = (await import(
-    'monaco-editor/esm/vs/editor/editor.worker?worker'
-  )).default;
+  const EditorWorker = (await import('monaco-editor/esm/vs/editor/editor.worker?worker')).default;
   (self as unknown as { MonacoEnvironment: unknown }).MonacoEnvironment = {
     getWorker: () => new EditorWorker(),
   };
@@ -158,10 +167,9 @@ const mountEditor = async () => {
     currentSql.value = monacoEditor.value!.getValue();
   });
 
-  monacoEditor.value.addCommand(
-    monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter,
-    () => { void runQuery(); },
-  );
+  monacoEditor.value.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
+    void runQuery();
+  });
 
   editorLoading.value = false;
 };
@@ -221,27 +229,53 @@ async function runQuery(opts: { seqscanAllowed?: boolean } = {}) {
 
 const SAVED_Q_QUERY = /* GraphQL */ `
   query SqlSavedQueries {
-    savedQueries { items { id name sql owner created_at shared tags } }
+    savedQueries {
+      items {
+        id
+        name
+        sql
+        owner
+        created_at
+        shared
+        tags
+      }
+    }
   }
 `;
 const SAVED_Q_SAVE_M = /* GraphQL */ `
   mutation SqlSaveQuery($name: String!, $sql: String!, $shared: Boolean) {
     saveQuery(name: $name, sql: $sql, shared: $shared) {
-      ok item { id name sql owner created_at shared }
+      ok
+      item {
+        id
+        name
+        sql
+        owner
+        created_at
+        shared
+      }
     }
   }
 `;
 const SAVED_Q_DELETE_M = /* GraphQL */ `
   mutation SqlDeleteSavedQuery($id: Long!) {
-    deleteSavedQuery(id: $id) { ok item { id name owner } }
+    deleteSavedQuery(id: $id) {
+      ok
+      item {
+        id
+        name
+        owner
+      }
+    }
   }
 `;
 
 async function loadSavedQueries() {
   savedQueriesLoading.value = true;
   const res = await getClient()
-    .query<{ savedQueries: { items: SavedQuery[] } }>(
-      SAVED_Q_QUERY, {}, { requestPolicy: 'network-only' })
+    .query<{
+      savedQueries: { items: SavedQuery[] };
+    }>(SAVED_Q_QUERY, {}, { requestPolicy: 'network-only' })
     .toPromise();
   savedQueriesLoading.value = false;
   if (res.error) return;
@@ -275,9 +309,7 @@ async function saveCurrentQuery() {
 
 async function deleteSnippet(s: SavedQuery) {
   if (!window.confirm(`Delete saved query "${s.name}"?`)) return;
-  const res = await getClient()
-    .mutation(SAVED_Q_DELETE_M, { id: s.id })
-    .toPromise();
+  const res = await getClient().mutation(SAVED_Q_DELETE_M, { id: s.id }).toPromise();
   if (res.error) {
     error.value = res.error.message;
     return;
@@ -300,8 +332,9 @@ async function runExplain() {
   if (explainRunning.value) return;
   explainRunning.value = true;
   try {
-    explain.value = await restClient.post<ExplainResponse>(
-      '/api/sql/explain', { statement: currentSql.value });
+    explain.value = await restClient.post<ExplainResponse>('/api/sql/explain', {
+      statement: currentSql.value,
+    });
   } catch (e) {
     if (e instanceof RestApiError) error.value = `${e.code}: ${e.message}`;
     else error.value = (e as Error).message;
@@ -366,8 +399,7 @@ function exportJson(stmt: SelectResult, idx: number) {
 // ── per-statement helpers ─────────────────────────────────────────
 
 function isSelect(r: StatementResult): r is SelectResult {
-  return (r as SelectResult).metadata !== undefined
-    && (r as SelectResult).rows !== undefined;
+  return (r as SelectResult).metadata !== undefined && (r as SelectResult).rows !== undefined;
 }
 
 function isDml(r: StatementResult): r is DmlResult {
@@ -426,7 +458,13 @@ function renderCell(v: unknown): string {
               @click="deleteSnippet(s)"
             />
           </li>
-          <li v-if="!savedQueriesLoading && savedQueries.filter((q) => q.owner === currentUser() && !q.shared).length === 0" class="webui-sql__muted">
+          <li
+            v-if="
+              !savedQueriesLoading &&
+              savedQueries.filter((q) => q.owner === currentUser() && !q.shared).length === 0
+            "
+            class="webui-sql__muted"
+          >
             No private snippets.
           </li>
         </ul>
@@ -455,7 +493,10 @@ function renderCell(v: unknown): string {
               @click="deleteSnippet(s)"
             />
           </li>
-          <li v-if="!savedQueriesLoading && savedQueries.filter((q) => q.shared).length === 0" class="webui-sql__muted">
+          <li
+            v-if="!savedQueriesLoading && savedQueries.filter((q) => q.shared).length === 0"
+            class="webui-sql__muted"
+          >
             No shared snippets.
           </li>
         </ul>
@@ -465,11 +506,7 @@ function renderCell(v: unknown): string {
           <strong>Built-in</strong>
         </header>
         <ul class="webui-sql__list">
-          <li
-            v-for="b in BUILTIN_SNIPPETS"
-            :key="b.name"
-            class="webui-sql__list-item"
-          >
+          <li v-for="b in BUILTIN_SNIPPETS" :key="b.name" class="webui-sql__list-item">
             <span class="webui-sql__list-name" @click="loadIntoEditor(b.sql)">{{ b.name }}</span>
           </li>
         </ul>
@@ -477,166 +514,158 @@ function renderCell(v: unknown): string {
     </aside>
 
     <div class="webui-sql__main">
-    <header class="webui-sql__head">
-      <h1>SQL</h1>
-      <div class="webui-sql__actions">
-        <Button
-          label="Run"
-          icon="pi pi-play"
-          severity="success"
-          size="small"
-          :loading="running"
-          @click="runQuery()"
-        />
-        <Button
-          label="EXPLAIN"
-          icon="pi pi-sitemap"
-          severity="info"
-          size="small"
-          text
-          :loading="explainRunning"
-          @click="runExplain"
-        />
-        <Button
-          label="Save"
-          icon="pi pi-bookmark"
-          severity="secondary"
-          size="small"
-          text
-          @click="openSaveDialog"
-        />
-        <label class="webui-sql__full-scan">
-          <ToggleSwitch v-model="allowFullScan" />
-          <span>allow full scan</span>
-        </label>
-        <span v-if="latency !== null" class="webui-sql__latency">
-          {{ latency.toFixed(1) }} ms
-        </span>
-      </div>
-    </header>
-
-    <div class="webui-sql__editor-wrap">
-      <div ref="editorContainer" class="webui-sql__editor" />
-      <p v-if="editorLoading" class="webui-sql__muted">Loading editor…</p>
-    </div>
-
-    <Message
-      v-if="seqscanRequired"
-      severity="warn"
-      :closable="false"
-      class="webui-sql__banner"
-    >
-      <strong>Sequence scan required.</strong>
-      Tarantool blocks full-scan SELECTs by default
-      (<code>sql_seq_scan = false</code>). Re-run with the toggle
-      enabled for this call only — the session setting is restored
-      after the response.
-      <Button
-        label="Re-run with SEQSCAN"
-        icon="pi pi-refresh"
-        size="small"
-        severity="warn"
-        @click="runQuery({ seqscanAllowed: true })"
-      />
-    </Message>
-
-    <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
-
-    <Tabs v-if="result" v-model:value="activeTab" class="webui-sql__tabs">
-      <TabList>
-        <Tab v-for="(stmt, idx) in result.statements" :key="idx" :value="idx">
-          {{ statementTabLabel(stmt, idx) }}
-        </Tab>
-      </TabList>
-      <TabPanels>
-      <TabPanel
-        v-for="(stmt, idx) in result.statements"
-        :key="idx"
-        :value="idx"
-      >
-        <div v-if="isError(stmt)" class="webui-sql__err">
-          <Message severity="error" :closable="false">{{ stmt.error }}</Message>
+      <header class="webui-sql__head">
+        <h1>SQL</h1>
+        <div class="webui-sql__actions">
+          <Button
+            label="Run"
+            icon="pi pi-play"
+            severity="success"
+            size="small"
+            :loading="running"
+            @click="runQuery()"
+          />
+          <Button
+            label="EXPLAIN"
+            icon="pi pi-sitemap"
+            severity="info"
+            size="small"
+            text
+            :loading="explainRunning"
+            @click="runExplain"
+          />
+          <Button
+            label="Save"
+            icon="pi pi-bookmark"
+            severity="secondary"
+            size="small"
+            text
+            @click="openSaveDialog"
+          />
+          <label class="webui-sql__full-scan">
+            <ToggleSwitch v-model="allowFullScan" />
+            <span>allow full scan</span>
+          </label>
+          <span v-if="latency !== null" class="webui-sql__latency">
+            {{ latency.toFixed(1) }} ms
+          </span>
         </div>
-        <div v-else-if="isSelect(stmt)" class="webui-sql__select">
-          <div class="webui-sql__select-tools">
-            <Tag
-              v-if="stmt.truncated"
-              value="truncated"
-              severity="warn"
-              class="webui-sql__chip"
-            />
-            <Button
-              label="CSV"
-              icon="pi pi-download"
-              text
-              size="small"
-              @click="exportCsv(stmt, idx)"
-            />
-            <Button
-              label="JSON"
-              icon="pi pi-download"
-              text
-              size="small"
-              @click="exportJson(stmt, idx)"
-            />
-          </div>
+      </header>
+
+      <div class="webui-sql__editor-wrap">
+        <div ref="editorContainer" class="webui-sql__editor" />
+        <p v-if="editorLoading" class="webui-sql__muted">Loading editor…</p>
+      </div>
+
+      <Message v-if="seqscanRequired" severity="warn" :closable="false" class="webui-sql__banner">
+        <strong>Sequence scan required.</strong>
+        Tarantool blocks full-scan SELECTs by default (<code>sql_seq_scan = false</code>). Re-run
+        with the toggle enabled for this call only — the session setting is restored after the
+        response.
+        <Button
+          label="Re-run with SEQSCAN"
+          icon="pi pi-refresh"
+          size="small"
+          severity="warn"
+          @click="runQuery({ seqscanAllowed: true })"
+        />
+      </Message>
+
+      <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
+
+      <Tabs v-if="result" v-model:value="activeTab" class="webui-sql__tabs">
+        <TabList>
+          <Tab v-for="(stmt, idx) in result.statements" :key="idx" :value="idx">
+            {{ statementTabLabel(stmt, idx) }}
+          </Tab>
+        </TabList>
+        <TabPanels>
+          <TabPanel v-for="(stmt, idx) in result.statements" :key="idx" :value="idx">
+            <div v-if="isError(stmt)" class="webui-sql__err">
+              <Message severity="error" :closable="false">{{ stmt.error }}</Message>
+            </div>
+            <div v-else-if="isSelect(stmt)" class="webui-sql__select">
+              <div class="webui-sql__select-tools">
+                <Tag
+                  v-if="stmt.truncated"
+                  value="truncated"
+                  severity="warn"
+                  class="webui-sql__chip"
+                />
+                <Button
+                  label="CSV"
+                  icon="pi pi-download"
+                  text
+                  size="small"
+                  @click="exportCsv(stmt, idx)"
+                />
+                <Button
+                  label="JSON"
+                  icon="pi pi-download"
+                  text
+                  size="small"
+                  @click="exportJson(stmt, idx)"
+                />
+              </div>
+              <DataTable
+                :value="
+                  stmt.rows.map((r) =>
+                    Object.fromEntries(stmt.metadata.map((m, i) => [m.name, r[i]])),
+                  )
+                "
+                size="small"
+                striped-rows
+                scrollable
+                scroll-height="400px"
+                :row-hover="true"
+                class="webui-sql__grid"
+              >
+                <Column
+                  v-for="m in stmt.metadata"
+                  :key="m.name"
+                  :field="m.name"
+                  :header="`${m.name} (${m.type})`"
+                >
+                  <template #body="{ data }">
+                    <span :class="{ 'webui-sql__null': (data[m.name] ?? null) === null }">
+                      {{ renderCell(data[m.name]) }}
+                    </span>
+                  </template>
+                </Column>
+                <template #empty>
+                  <span class="webui-sql__muted">No rows.</span>
+                </template>
+              </DataTable>
+            </div>
+            <div v-else-if="isDml(stmt)" class="webui-sql__dml">
+              <strong>{{ stmt.row_count }}</strong> row(s) affected.
+            </div>
+            <div v-else class="webui-sql__muted">OK.</div>
+          </TabPanel>
+        </TabPanels>
+      </Tabs>
+
+      <section v-if="explain" class="webui-sql__plans">
+        <h2>EXPLAIN QUERY PLAN</h2>
+        <div v-for="(p, idx) in explain.plans" :key="idx" class="webui-sql__plan">
+          <header>
+            <code>{{ p.statement }}</code>
+          </header>
+          <Message v-if="p.error" severity="error" :closable="false">{{ p.error }}</Message>
           <DataTable
-            :value="stmt.rows.map((r) => Object.fromEntries(stmt.metadata.map((m, i) => [m.name, r[i]])))"
+            v-else
+            :value="
+              (p.rows ?? []).map((r) =>
+                Object.fromEntries((p.metadata ?? []).map((m, i) => [m.name, r[i]])),
+              )
+            "
             size="small"
             striped-rows
-            scrollable
-            scroll-height="400px"
-            :row-hover="true"
-            class="webui-sql__grid"
           >
-            <Column
-              v-for="m in stmt.metadata"
-              :key="m.name"
-              :field="m.name"
-              :header="`${m.name} (${m.type})`"
-            >
-              <template #body="{ data }">
-                <span :class="{ 'webui-sql__null': (data[m.name] ?? null) === null }">
-                  {{ renderCell(data[m.name]) }}
-                </span>
-              </template>
-            </Column>
-            <template #empty>
-              <span class="webui-sql__muted">No rows.</span>
-            </template>
+            <Column v-for="m in p.metadata ?? []" :key="m.name" :field="m.name" :header="m.name" />
           </DataTable>
         </div>
-        <div v-else-if="isDml(stmt)" class="webui-sql__dml">
-          <strong>{{ stmt.row_count }}</strong> row(s) affected.
-        </div>
-        <div v-else class="webui-sql__muted">OK.</div>
-      </TabPanel>
-      </TabPanels>
-    </Tabs>
-
-    <section v-if="explain" class="webui-sql__plans">
-      <h2>EXPLAIN QUERY PLAN</h2>
-      <div v-for="(p, idx) in explain.plans" :key="idx" class="webui-sql__plan">
-        <header>
-          <code>{{ p.statement }}</code>
-        </header>
-        <Message v-if="p.error" severity="error" :closable="false">{{ p.error }}</Message>
-        <DataTable
-          v-else
-          :value="(p.rows ?? []).map((r) => Object.fromEntries((p.metadata ?? []).map((m, i) => [m.name, r[i]])))"
-          size="small"
-          striped-rows
-        >
-          <Column
-            v-for="m in p.metadata ?? []"
-            :key="m.name"
-            :field="m.name"
-            :header="m.name"
-          />
-        </DataTable>
-      </div>
-    </section>
-
+      </section>
     </div>
 
     <Dialog
@@ -668,7 +697,6 @@ function renderCell(v: unknown): string {
         />
       </template>
     </Dialog>
-
   </section>
 </template>
 
@@ -692,18 +720,49 @@ function renderCell(v: unknown): string {
   align-items: center;
   justify-content: space-between;
 }
-.webui-sql__sidebar-head h2 { margin: 0; font-size: 1rem; }
-.webui-sql__section { display: flex; flex-direction: column; gap: 0.25rem; }
-.webui-sql__section-head { color: var(--webui-text-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
-.webui-sql__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.1rem; }
+.webui-sql__sidebar-head h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+.webui-sql__section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.webui-sql__section-head {
+  color: var(--webui-text-muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.webui-sql__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
 .webui-sql__list-item {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 0.3rem 0.4rem; border-radius: var(--webui-radius);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.3rem 0.4rem;
+  border-radius: var(--webui-radius);
   font-size: 0.85rem;
 }
-.webui-sql__list-item:hover { background: var(--p-content-hover-background, rgba(255,255,255,0.04)); }
-.webui-sql__list-name { cursor: pointer; flex: 1 1 auto; }
-.webui-sql__list-owner { color: var(--webui-text-muted); font-size: 0.7rem; margin-left: 0.3rem; }
+.webui-sql__list-item:hover {
+  background: var(--p-content-hover-background, rgba(255, 255, 255, 0.04));
+}
+.webui-sql__list-name {
+  cursor: pointer;
+  flex: 1 1 auto;
+}
+.webui-sql__list-owner {
+  color: var(--webui-text-muted);
+  font-size: 0.7rem;
+  margin-left: 0.3rem;
+}
 .webui-sql__main {
   padding: 1rem 1.5rem;
   display: flex;
@@ -711,15 +770,30 @@ function renderCell(v: unknown): string {
   gap: 1rem;
   overflow: hidden;
 }
-.webui-sql__save-row { display: grid; grid-template-columns: 6rem 1fr; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
-.webui-sql__save-row label { color: var(--webui-text-muted); font-size: 0.85rem; }
-.webui-sql__inline { display: inline-flex; align-items: center; gap: 0.4rem; }
+.webui-sql__save-row {
+  display: grid;
+  grid-template-columns: 6rem 1fr;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+.webui-sql__save-row label {
+  color: var(--webui-text-muted);
+  font-size: 0.85rem;
+}
+.webui-sql__inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
 .webui-sql__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
-.webui-sql__head h1 { margin: 0; }
+.webui-sql__head h1 {
+  margin: 0;
+}
 .webui-sql__actions {
   display: inline-flex;
   align-items: center;
@@ -758,7 +832,7 @@ function renderCell(v: unknown): string {
 .webui-sql__tabs :deep(.p-tab:hover) {
   color: var(--p-text-color);
 }
-.webui-sql__tabs :deep(.p-tab[data-p-active="true"]) {
+.webui-sql__tabs :deep(.p-tab[data-p-active='true']) {
   color: var(--p-highlight-color);
   border-color: var(--p-highlight-background);
 }
@@ -793,7 +867,10 @@ function renderCell(v: unknown): string {
   gap: 0.5rem;
   margin-bottom: 0.5rem;
 }
-.webui-sql__dml { font-size: 0.95rem; padding: 0.5rem; }
+.webui-sql__dml {
+  font-size: 0.95rem;
+  padding: 0.5rem;
+}
 .webui-sql__plans {
   border-top: 1px solid var(--webui-border);
   padding-top: 0.75rem;
@@ -801,9 +878,21 @@ function renderCell(v: unknown): string {
   flex-direction: column;
   gap: 0.75rem;
 }
-.webui-sql__plan header { margin-bottom: 0.3rem; }
-.webui-sql__plan code { color: var(--webui-text-muted); font-size: 0.8rem; }
-.webui-sql__muted { color: var(--webui-text-muted); }
-.webui-sql__null { color: var(--webui-text-muted); font-style: italic; }
-.webui-sql__chip { font-size: 0.65rem; }
+.webui-sql__plan header {
+  margin-bottom: 0.3rem;
+}
+.webui-sql__plan code {
+  color: var(--webui-text-muted);
+  font-size: 0.8rem;
+}
+.webui-sql__muted {
+  color: var(--webui-text-muted);
+}
+.webui-sql__null {
+  color: var(--webui-text-muted);
+  font-style: italic;
+}
+.webui-sql__chip {
+  font-size: 0.65rem;
+}
 </style>

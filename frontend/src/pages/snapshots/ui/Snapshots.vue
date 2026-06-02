@@ -25,10 +25,13 @@ const error = ref<string | null>(null);
 const info = ref<string | null>(null);
 
 const load = async () => {
-  loading.value = true; error.value = null;
+  loading.value = true;
+  error.value = null;
   try {
     const res = await restClient.get<{
-      dir: string; memtx_dir?: string; wal_dir?: string;
+      dir: string;
+      memtx_dir?: string;
+      wal_dir?: string;
       entries: Entry[];
     }>('/api/snapshots');
     dir.value = res.memtx_dir ?? res.dir;
@@ -36,11 +39,15 @@ const load = async () => {
     entries.value = res.entries ?? [];
   } catch (e) {
     error.value = (e as RestApiError).message;
-  } finally { loading.value = false; }
+  } finally {
+    loading.value = false;
+  }
 };
 
 const take = async () => {
-  taking.value = true; error.value = null; info.value = null;
+  taking.value = true;
+  error.value = null;
+  info.value = null;
   try {
     const res = await restClient.post<{
       ok: boolean;
@@ -52,12 +59,14 @@ const take = async () => {
     const where = `${res.instance}${res.read_only ? ' (RO follower)' : ''}`;
     info.value = res.created
       ? `Snapshot written on ${where} at signature ${res.signature}.`
-      : `Already up to date on ${where}: a snapshot for signature ${res.signature} `
-        + `exists. box.snapshot() is a no-op until a new write advances the vclock.`;
+      : `Already up to date on ${where}: a snapshot for signature ${res.signature} ` +
+        `exists. box.snapshot() is a no-op until a new write advances the vclock.`;
     await load();
   } catch (e) {
     error.value = (e as RestApiError).message;
-  } finally { taking.value = false; }
+  } finally {
+    taking.value = false;
+  }
 };
 
 const fmtSize = (b: number) => {
@@ -87,7 +96,9 @@ const downloadOne = (entry: Entry) => {
   a.style.display = 'none';
   document.body.appendChild(a);
   a.click();
-  setTimeout(() => { document.body.removeChild(a); }, 0);
+  setTimeout(() => {
+    document.body.removeChild(a);
+  }, 0);
 };
 
 onMounted(load);
@@ -105,22 +116,35 @@ onMounted(load);
           </span>
         </p>
       </div>
-      <Button size="small" icon="pi pi-camera" label="Take snapshot" :loading="taking" @click="take" />
+      <Button
+        size="small"
+        icon="pi pi-camera"
+        label="Take snapshot"
+        :loading="taking"
+        @click="take"
+      />
     </header>
-    <Message v-if="info" severity="success" :closable="true" @close="info = null">{{ info }}</Message>
-    <Message v-if="error" severity="error" :closable="true" @close="error = null">{{ error }}</Message>
+    <Message v-if="info" severity="success" :closable="true" @close="info = null">
+      {{ info }}
+    </Message>
+    <Message v-if="error" severity="error" :closable="true" @close="error = null">
+      {{ error }}
+    </Message>
     <DataTable :value="entries" :loading="loading" data-key="path" size="small" striped-rows>
       <Column header="Kind" :style="{ width: '5rem' }">
         <template #body="{ data }">
           <Tag
             :value="data.kind ?? 'snap'"
-            :severity="data.kind === 'xlog' ? 'info'
-              : data.kind === 'vylog' ? 'secondary' : 'success'"
+            :severity="
+              data.kind === 'xlog' ? 'info' : data.kind === 'vylog' ? 'secondary' : 'success'
+            "
           />
         </template>
       </Column>
       <Column field="path" header="File">
-        <template #body="{ data }"><code>{{ data.path }}</code></template>
+        <template #body="{ data }">
+          <code>{{ data.path }}</code>
+        </template>
       </Column>
       <Column header="Size">
         <template #body="{ data }">{{ fmtSize(data.size) }}</template>
@@ -145,8 +169,24 @@ onMounted(load);
 </template>
 
 <style scoped>
-.webui-snapshots { padding: 1rem 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
-.webui-snapshots__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
-.webui-snapshots__head h1 { margin: 0; }
-.webui-snapshots__dir { margin: 0.25rem 0 0; color: var(--webui-text-muted); font-size: 0.85rem; }
+.webui-snapshots {
+  padding: 1rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.webui-snapshots__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.webui-snapshots__head h1 {
+  margin: 0;
+}
+.webui-snapshots__dir {
+  margin: 0.25rem 0 0;
+  color: var(--webui-text-muted);
+  font-size: 0.85rem;
+}
 </style>

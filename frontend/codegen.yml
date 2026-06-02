@@ -51,4 +51,3 @@ generates:
       namingConvention:
         typeNames: keep
         enumValues: keep
-

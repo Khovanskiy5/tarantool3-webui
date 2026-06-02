@@ -93,9 +93,7 @@ const categoryOptions = [
       />
     </fieldset>
 
-    <p v-if="fetching && items.length === 0" class="webui-issues-page__empty">
-      Loading…
-    </p>
+    <p v-if="fetching && items.length === 0" class="webui-issues-page__empty">Loading…</p>
     <p v-else-if="items.length === 0" class="webui-issues-page__empty">
       No issues match the current filter.
     </p>

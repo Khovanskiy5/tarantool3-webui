@@ -36,11 +36,11 @@ const AUDIT_QUERY = /* GraphQL */ `
 `;
 
 export const useAuditStore = defineStore('audit', () => {
-  const entries  = ref<AuditEntry[]>([]);
-  const cursor   = ref<number | null>(null);
-  const hasMore  = ref(false);
-  const pending  = ref(false);
-  const error    = ref<string | null>(null);
+  const entries = ref<AuditEntry[]>([]);
+  const cursor = ref<number | null>(null);
+  const hasMore = ref(false);
+  const pending = ref(false);
+  const error = ref<string | null>(null);
   const currentFilter = ref<AuditFilter>({});
 
   const load = async (

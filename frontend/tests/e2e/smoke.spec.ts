@@ -42,9 +42,9 @@ test.describe('smoke / M0 deployment', () => {
     // bundle booted (if JS failed to mount we'd see the
     // <noscript> banner instead). Once the SPA gains a true
     // landing/marketing screen, swap this back to the TopBar.
-    await expect(
-      page.getByText(/Tarantool (WebUI|cluster administration)/i).first(),
-    ).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/Tarantool (WebUI|cluster administration)/i).first()).toBeVisible({
+      timeout: 15_000,
+    });
   });
 
   test('/api/health returns ready + instance identity', async ({ request }) => {
@@ -70,6 +70,8 @@ test.describe('smoke / M0 deployment', () => {
     });
 
     expect(payload.status, 'browser fetch of /api/health must be 200').toBe(200);
-    expect(payload.body.instance, 'browser sees the same instance identity').toBe(EXPECTED_INSTANCE);
+    expect(payload.body.instance, 'browser sees the same instance identity').toBe(
+      EXPECTED_INSTANCE,
+    );
   });
 });

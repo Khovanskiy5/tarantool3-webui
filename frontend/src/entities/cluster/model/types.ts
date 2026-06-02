@@ -16,17 +16,11 @@ import type {
 } from '@/shared/api/generated';
 
 export type ClusterOverview = NonNullable<ClusterOverviewQuery['cluster']>;
-export type ClusterServersPage = NonNullable<
-  ClusterServersPageQuery['cluster']
->['servers'];
+export type ClusterServersPage = NonNullable<ClusterServersPageQuery['cluster']>['servers'];
 
 export type Server = ServerCardFieldsFragment;
 export type Replicaset = ReplicasetCardFieldsFragment;
 
-export type ReplicasetStatus =
-  | 'healthy'
-  | 'degraded'
-  | 'unhealthy'
-  | 'unknown';
+export type ReplicasetStatus = 'healthy' | 'degraded' | 'unhealthy' | 'unknown';
 
 export type ServerStatus = string;

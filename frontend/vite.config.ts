@@ -27,12 +27,12 @@ export default defineConfig(({ mode }) => ({
 
   resolve: {
     alias: {
-      '@/app':      r('./src/app'),
-      '@/pages':    r('./src/pages'),
-      '@/widgets':  r('./src/widgets'),
+      '@/app': r('./src/app'),
+      '@/pages': r('./src/pages'),
+      '@/widgets': r('./src/widgets'),
       '@/features': r('./src/features'),
       '@/entities': r('./src/entities'),
-      '@/shared':   r('./src/shared'),
+      '@/shared': r('./src/shared'),
     },
   },
 
@@ -63,20 +63,39 @@ export default defineConfig(({ mode }) => ({
     chunkSizeWarningLimit: 4096,
     rollupOptions: {
       output: {
-        // manualChunks groups dependencies into named lazy chunks. The
-        // groups reflect actual co-usage patterns; tweaking them later
-        // requires re-checking the bundle-size budget (see plan,
+        // manualChunks groups dependencies into named lazy chunks. Vite
+        // 8 / Rollup 4 dropped the object form; the function form maps
+        // any module under node_modules/<pkg> to a named chunk. Tweaks
+        // here require re-checking the bundle-size budget (see plan,
         // Performance budgets contract).
-        manualChunks: {
-          'vendor-vue':      ['vue', 'vue-router', 'pinia', 'vue-i18n'],
-          'vendor-urql':     ['@urql/vue', 'graphql'],
-          // primeicons ships only a CSS file, so it is not listed as a
-          // JS chunk; the import in main.ts triggers the CSS pipeline.
-          'vendor-primevue': ['primevue', '@primevue/themes'],
-          'vendor-misc':     ['dayjs', 'ajv'],
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
           // Monaco is gated behind dynamic import in Task 38 so its
           // bundle stays out of the initial app shell.
-          'monaco-editor':   ['monaco-editor'],
+          if (id.includes('/node_modules/monaco-editor/')) return 'monaco-editor';
+          if (
+            id.includes('/node_modules/vue/') ||
+            id.includes('/node_modules/vue-router/') ||
+            id.includes('/node_modules/pinia/') ||
+            id.includes('/node_modules/vue-i18n/') ||
+            id.includes('/node_modules/@vue/')
+          ) {
+            return 'vendor-vue';
+          }
+          if (
+            id.includes('/node_modules/@urql/') ||
+            id.includes('/node_modules/graphql/') ||
+            id.includes('/node_modules/wonka/')
+          ) {
+            return 'vendor-urql';
+          }
+          if (id.includes('/node_modules/primevue/') || id.includes('/node_modules/@primevue/')) {
+            return 'vendor-primevue';
+          }
+          if (id.includes('/node_modules/dayjs/') || id.includes('/node_modules/ajv/')) {
+            return 'vendor-misc';
+          }
+          return undefined;
         },
       },
     },
@@ -89,9 +108,19 @@ export default defineConfig(({ mode }) => ({
     // compose.dev.yml the dev frontend container points at tt-1 by name;
     // local-host development can override the target via env.
     proxy: {
-      '/admin/api': { target: process.env.VITE_BACKEND_URL || 'http://localhost:8081', changeOrigin: true },
-      '/api':       { target: process.env.VITE_BACKEND_URL || 'http://localhost:8081', changeOrigin: true },
-      '/ws':        { target: process.env.VITE_BACKEND_URL || 'http://localhost:8081', changeOrigin: true, ws: true },
+      '/admin/api': {
+        target: process.env.VITE_BACKEND_URL || 'http://localhost:8081',
+        changeOrigin: true,
+      },
+      '/api': {
+        target: process.env.VITE_BACKEND_URL || 'http://localhost:8081',
+        changeOrigin: true,
+      },
+      '/ws': {
+        target: process.env.VITE_BACKEND_URL || 'http://localhost:8081',
+        changeOrigin: true,
+        ws: true,
+      },
     },
   },
 

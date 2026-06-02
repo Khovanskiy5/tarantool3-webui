@@ -193,13 +193,7 @@ const downloadHref = computed(() => {
         :use-grouping="false"
         class="webui-logs__bar-tail"
       />
-      <Button
-        label="Reload"
-        icon="pi pi-refresh"
-        size="small"
-        :loading="loading"
-        @click="load"
-      />
+      <Button label="Reload" icon="pi pi-refresh" size="small" :loading="loading" @click="load" />
       <label class="webui-logs__bar-toggle">
         <ToggleSwitch v-model="liveTail" />
         <span>Live tail</span>
@@ -237,11 +231,7 @@ const downloadHref = computed(() => {
       <div v-if="lines.length === 0 && !loading" class="webui-logs__empty">
         No log lines match the current filter.
       </div>
-      <pre
-        v-for="(ln, idx) in lines"
-        :key="idx"
-        :class="classFor(ln)"
-      >{{ ln.text }}</pre>
+      <pre v-for="(ln, idx) in lines" :key="idx" :class="classFor(ln)">{{ ln.text }}</pre>
     </div>
   </section>
 </template>
@@ -261,7 +251,9 @@ const downloadHref = computed(() => {
   gap: 1rem;
   flex-wrap: wrap;
 }
-.webui-logs__head h1 { margin: 0; }
+.webui-logs__head h1 {
+  margin: 0;
+}
 .webui-logs__meta {
   display: flex;
   gap: 0.5rem;
@@ -274,10 +266,19 @@ const downloadHref = computed(() => {
   align-items: center;
   flex-wrap: wrap;
 }
-.webui-logs__bar-level { min-width: 8rem; }
-.webui-logs__bar-search { min-width: 16rem; flex: 1 1 16rem; }
-.webui-logs__bar-tail { width: 6rem; }
-.webui-logs__bar-interval { width: 5rem; }
+.webui-logs__bar-level {
+  min-width: 8rem;
+}
+.webui-logs__bar-search {
+  min-width: 16rem;
+  flex: 1 1 16rem;
+}
+.webui-logs__bar-tail {
+  width: 6rem;
+}
+.webui-logs__bar-interval {
+  width: 5rem;
+}
 .webui-logs__bar-toggle {
   display: inline-flex;
   align-items: center;
@@ -309,7 +310,13 @@ const downloadHref = computed(() => {
   word-break: break-all;
   color: var(--p-text-color, inherit);
 }
-.webui-logs__line--err   { color: #f87171; }
-.webui-logs__line--warn  { color: #fbbf24; }
-.webui-logs__line--muted { color: var(--p-text-muted-color, #94a3b8); }
+.webui-logs__line--err {
+  color: #f87171;
+}
+.webui-logs__line--warn {
+  color: #fbbf24;
+}
+.webui-logs__line--muted {
+  color: var(--p-text-muted-color, #94a3b8);
+}
 </style>

@@ -1,13 +1,18 @@
 /**
- * Storybook 8 manager UI customization.
+ * Storybook 10 manager UI customization.
  *
  * Sets the sidebar branding so the Storybook chrome reads as the
  * project's component library rather than the generic Storybook
  * defaults. Everything else (toolbar, addon panel) stays default.
+ *
+ * In Storybook 10 the canonical import paths moved from
+ * `@storybook/manager-api` / `@storybook/theming` to subpaths under
+ * the unified `storybook` package; the `@storybook/*` shims still
+ * resolve at runtime but the typed paths are the new ones.
  */
 
-import { addons } from '@storybook/manager-api';
-import { create } from '@storybook/theming';
+import { addons } from 'storybook/manager-api';
+import { create } from 'storybook/theming';
 
 addons.setConfig({
   theme: create({

@@ -14,11 +14,7 @@ import { withThemeByClassName } from '@storybook/addon-themes';
 import PrimeVue from 'primevue/config';
 import Aura from '@primevue/themes/aura';
 import { createPinia } from 'pinia';
-import {
-  createMemoryHistory,
-  createRouter,
-  type RouteRecordRaw,
-} from 'vue-router';
+import { createMemoryHistory, createRouter, type RouteRecordRaw } from 'vue-router';
 
 import { i18n } from '@/shared/i18n';
 

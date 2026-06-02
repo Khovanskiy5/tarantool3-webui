@@ -80,9 +80,7 @@ export const useClusterStore = defineStore('cluster', () => {
 
   const cluster = computed(() => data.value?.cluster ?? null);
   const servers = computed<readonly Server[]>(() => getServers(cluster.value));
-  const replicasets = computed<readonly Replicaset[]>(() =>
-    getReplicasets(cluster.value),
-  );
+  const replicasets = computed<readonly Replicaset[]>(() => getReplicasets(cluster.value));
   const selfAlias = computed<string | null>(() => getSelfAlias(cluster.value));
   const counts = computed(() => countServers(servers.value));
 

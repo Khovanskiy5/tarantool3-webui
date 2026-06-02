@@ -55,11 +55,7 @@ const leader = computed(() => getLeaderAlias(props.replicaset));
       </thead>
       <tbody>
         <template v-for="srv in servers" :key="srv.alias">
-          <InstanceRow
-            :instance="srv"
-            :is-self="srv.alias === selfAlias"
-            :leader-alias="leader"
-          >
+          <InstanceRow :instance="srv" :is-self="srv.alias === selfAlias" :leader-alias="leader">
             <td v-if="showActions" class="webui-rs-card__actions-cell">
               <InstanceActionsMenu
                 :alias="srv.alias"
@@ -83,10 +79,18 @@ const leader = computed(() => getLeaderAlias(props.replicaset));
   border-top-width: 3px;
 }
 
-.webui-rs-card--healthy   { border-top-color: var(--webui-success); }
-.webui-rs-card--degraded  { border-top-color: var(--webui-warning); }
-.webui-rs-card--unhealthy { border-top-color: var(--webui-danger); }
-.webui-rs-card--unknown   { border-top-color: var(--webui-text-muted); }
+.webui-rs-card--healthy {
+  border-top-color: var(--webui-success);
+}
+.webui-rs-card--degraded {
+  border-top-color: var(--webui-warning);
+}
+.webui-rs-card--unhealthy {
+  border-top-color: var(--webui-danger);
+}
+.webui-rs-card--unknown {
+  border-top-color: var(--webui-text-muted);
+}
 
 .webui-rs-card__head {
   display: flex;
@@ -126,10 +130,22 @@ const leader = computed(() => getLeaderAlias(props.replicaset));
   border-radius: 999px;
 }
 
-.webui-rs-card__status--healthy   { background: rgba(63, 185, 80, 0.15);  color: var(--webui-success); }
-.webui-rs-card__status--degraded  { background: rgba(210, 153, 34, 0.18); color: var(--webui-warning); }
-.webui-rs-card__status--unhealthy { background: rgba(248, 81, 73, 0.18);  color: var(--webui-danger); }
-.webui-rs-card__status--unknown   { background: rgba(139, 148, 158, 0.18); color: var(--webui-text-muted); }
+.webui-rs-card__status--healthy {
+  background: rgba(63, 185, 80, 0.15);
+  color: var(--webui-success);
+}
+.webui-rs-card__status--degraded {
+  background: rgba(210, 153, 34, 0.18);
+  color: var(--webui-warning);
+}
+.webui-rs-card__status--unhealthy {
+  background: rgba(248, 81, 73, 0.18);
+  color: var(--webui-danger);
+}
+.webui-rs-card__status--unknown {
+  background: rgba(139, 148, 158, 0.18);
+  color: var(--webui-text-muted);
+}
 
 .webui-rs-card__leader {
   color: var(--webui-text-muted);

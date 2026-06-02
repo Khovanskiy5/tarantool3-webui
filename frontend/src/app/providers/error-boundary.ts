@@ -44,9 +44,7 @@ export const installErrorBoundary = (app: App): void => {
     window.addEventListener('unhandledrejection', (event) => {
       logger.error('unhandled promise rejection', {
         reason:
-          event.reason instanceof Error
-            ? event.reason.message
-            : String(event.reason ?? 'unknown'),
+          event.reason instanceof Error ? event.reason.message : String(event.reason ?? 'unknown'),
       });
     });
   }

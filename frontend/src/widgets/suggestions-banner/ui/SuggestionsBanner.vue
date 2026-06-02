@@ -24,10 +24,11 @@ const lastAction = ref<{
 } | null>(null);
 const busy = ref(false);
 
-const restartReplicationFailed = computed(() =>
-  lastAction.value?.type === 'restart_replication'
-  && !lastAction.value.ok
-  && Boolean(lastAction.value.rebootstrap_for_alias),
+const restartReplicationFailed = computed(
+  () =>
+    lastAction.value?.type === 'restart_replication' &&
+    !lastAction.value.ok &&
+    Boolean(lastAction.value.rebootstrap_for_alias),
 );
 
 async function runForceApply(uuid: string | null | undefined) {
@@ -49,10 +50,7 @@ async function runForceApply(uuid: string | null | undefined) {
   }
 }
 
-async function runRestartReplication(
-  uuid: string | null | undefined,
-  alias: string,
-) {
+async function runRestartReplication(uuid: string | null | undefined, alias: string) {
   if (!uuid || busy.value) return;
   busy.value = true;
   try {
@@ -80,11 +78,11 @@ async function runRestartReplication(
 async function runRebootstrap(alias: string) {
   if (busy.value) return;
   const confirmed = window.confirm(
-    `Re-bootstrap instance "${alias}"?\n\n`
-    + 'This wipes WAL/snap on the target and triggers Docker restart-policy.\n'
-    + 'Replication will catch up fresh from healthy peers (~10–30s downtime\n'
-    + 'for this instance). Refused if the target owns the synchronous queue\n'
-    + '(promote another peer first).',
+    `Re-bootstrap instance "${alias}"?\n\n` +
+      'This wipes WAL/snap on the target and triggers Docker restart-policy.\n' +
+      'Replication will catch up fresh from healthy peers (~10–30s downtime\n' +
+      'for this instance). Refused if the target owns the synchronous queue\n' +
+      '(promote another peer first).',
   );
   if (!confirmed) return;
   busy.value = true;
@@ -161,12 +159,10 @@ async function runRebootstrap(alias: string) {
     -->
     <p v-if="restartReplicationFailed" class="webui-suggestions-banner__followup">
       <strong>Replication did not recover.</strong>
-      Likely split-brain (LSN divergence in the synchronous queue).
-      Manual recovery:
+      Likely split-brain (LSN divergence in the synchronous queue). Manual recovery:
       <button
         type="button"
-        class="webui-suggestions-banner__action
-               webui-suggestions-banner__action--danger"
+        class="webui-suggestions-banner__action webui-suggestions-banner__action--danger"
         :disabled="busy"
         @click="runRebootstrap(lastAction!.rebootstrap_for_alias!)"
       >
@@ -251,8 +247,12 @@ async function runRebootstrap(alias: string) {
   font-size: 0.8rem;
 }
 
-.webui-suggestions-banner__result--ok  { color: var(--webui-success); }
-.webui-suggestions-banner__result--err { color: var(--webui-danger);  }
+.webui-suggestions-banner__result--ok {
+  color: var(--webui-success);
+}
+.webui-suggestions-banner__result--err {
+  color: var(--webui-danger);
+}
 
 .webui-suggestions-banner__followup {
   margin: 0.5rem 0 0;

@@ -81,25 +81,60 @@ const FAILOVER_Q = /* GraphQL */ `
   query Failover {
     failover {
       mode
-      elections { instance state term leader_name }
+      elections {
+        instance
+        state
+        term
+        leader_name
+      }
     }
     failoverStateProviderStatus {
-      kind mode lease_active coordinator
-      endpoints { uri status latency_ms last_error }
+      kind
+      mode
+      lease_active
+      coordinator
+      endpoints {
+        uri
+        status
+        latency_ms
+        last_error
+      }
     }
     failoverAgentStatus {
-      enabled self_alias coordinator is_coordinator lease_id last_error
-      watcher_replicaset watcher_last_leader watcher_current_ro
-      appointments { replicaset leader previous ts }
+      enabled
+      self_alias
+      coordinator
+      is_coordinator
+      lease_id
+      last_error
+      watcher_replicaset
+      watcher_last_leader
+      watcher_current_ro
+      appointments {
+        replicaset
+        leader
+        previous
+        ts
+      }
     }
     failoverCommands(limit: 50) {
       entries {
-        id ts command_type params status user coordinator
-        taken_at completed_at error_reason
+        id
+        ts
+        command_type
+        params
+        status
+        user
+        coordinator
+        taken_at
+        completed_at
+        error_reason
       }
     }
     cluster {
-      servers(limit: 50) { totalCount }
+      servers(limit: 50) {
+        totalCount
+      }
     }
   }
 `;
@@ -107,14 +142,20 @@ const FAILOVER_Q = /* GraphQL */ `
 const load = async () => {
   loading.value = true;
   error.value = null;
-  const res = await getClient().query<{
-    failover: { mode: string; elections: Election[] };
-    failoverStateProviderStatus: SPStatus;
-    failoverAgentStatus: AgentStatus;
-    failoverCommands: { entries: FailoverCommand[] };
-    cluster: { servers: { totalCount: number } };
-  }>(FAILOVER_Q, {}, { requestPolicy: 'network-only' }).toPromise();
-  if (res.error) { error.value = res.error.message; loading.value = false; return; }
+  const res = await getClient()
+    .query<{
+      failover: { mode: string; elections: Election[] };
+      failoverStateProviderStatus: SPStatus;
+      failoverAgentStatus: AgentStatus;
+      failoverCommands: { entries: FailoverCommand[] };
+      cluster: { servers: { totalCount: number } };
+    }>(FAILOVER_Q, {}, { requestPolicy: 'network-only' })
+    .toPromise();
+  if (res.error) {
+    error.value = res.error.message;
+    loading.value = false;
+    return;
+  }
   mode.value = res.data?.failover?.mode ?? 'unknown';
   elections.value = res.data?.failover?.elections ?? [];
   sp.value = res.data?.failoverStateProviderStatus ?? null;
@@ -130,8 +171,9 @@ const fmtAge = (ts: number | null): string => {
   return dt.toISOString().replace('T', ' ').slice(0, 19) + 'Z';
 };
 
-const sev = (state: string | null) => state === 'leader' ? 'success' : state === 'follower' ? 'info' : 'warn';
-const epSev = (status: string) => status === 'ok' ? 'success' : 'danger';
+const sev = (state: string | null) =>
+  state === 'leader' ? 'success' : state === 'follower' ? 'info' : 'warn';
+const epSev = (status: string) => (status === 'ok' ? 'success' : 'danger');
 const cmdSev = (status: string) => {
   if (status === 'success') return 'success';
   if (status === 'failed') return 'danger';
@@ -174,11 +216,7 @@ onMounted(load);
            the open-source supervised agent is running on top, that
            is the actual leadership driver — surface a second badge
            so the page header reflects reality. -->
-      <Tag
-        v-if="agent !== null && agent.enabled"
-        value="agent: on"
-        severity="success"
-      />
+      <Tag v-if="agent !== null && agent.enabled" value="agent: on" severity="success" />
       <button
         v-if="canEditFailover"
         type="button"
@@ -192,8 +230,11 @@ onMounted(load);
 
     <DataTable
       v-if="mode === 'election' && elections.length > 0"
-      :value="elections" :loading="loading"
-      data-key="instance" size="small" striped-rows
+      :value="elections"
+      :loading="loading"
+      data-key="instance"
+      size="small"
+      striped-rows
     >
       <Column field="instance" header="Instance" />
       <Column header="State">
@@ -208,17 +249,16 @@ onMounted(load);
         </template>
       </Column>
     </DataTable>
-    <p
-      v-else-if="mode !== 'election'"
-      class="webui-failover__hint"
-    >
-      Built-in Raft election is disabled (mode is <code>{{ mode }}</code>).
-      Leadership is driven by
-      <span v-if="mode === 'off'">per-instance <code>database.mode</code> +
-        the agent below (if enabled).</span>
-      <span v-else-if="mode === 'manual'">the <code>replicaset.leader</code>
-        field in cluster config — change it via the config editor and
-        commit.</span>
+    <p v-else-if="mode !== 'election'" class="webui-failover__hint">
+      Built-in Raft election is disabled (mode is <code>{{ mode }}</code
+      >). Leadership is driven by
+      <span v-if="mode === 'off'"
+        >per-instance <code>database.mode</code> + the agent below (if enabled).</span
+      >
+      <span v-else-if="mode === 'manual'"
+        >the <code>replicaset.leader</code> field in cluster config — change it via the config
+        editor and commit.</span
+      >
       <span v-else>an external state provider.</span>
     </p>
 
@@ -229,28 +269,19 @@ onMounted(load);
           :value="`coordinator: ${agent.coordinator ?? '—'}`"
           :severity="agent.is_coordinator ? 'success' : 'info'"
         />
-        <Tag
-          v-if="agent.self_alias"
-          :value="`self: ${agent.self_alias}`"
-          severity="secondary"
-        />
+        <Tag v-if="agent.self_alias" :value="`self: ${agent.self_alias}`" severity="secondary" />
       </header>
       <p v-if="agent.last_error" class="webui-failover__err">
         {{ agent.last_error }}
       </p>
       <p class="webui-failover__hint">
-        etcd-based lease elects one coordinator. The coordinator probes
-        every peer and writes per-replicaset appointments under
-        <code>/tarantool/webui/failover/replicasets/&lt;rs&gt;/leader</code>;
-        each instance's watcher reconciles <code>box.cfg.read_only</code>
-        via <code>box.ctl.promote/demote</code>. Lease TTL: 10s.
+        etcd-based lease elects one coordinator. The coordinator probes every peer and writes
+        per-replicaset appointments under
+        <code>/tarantool/webui/failover/replicasets/&lt;rs&gt;/leader</code>; each instance's
+        watcher reconciles <code>box.cfg.read_only</code> via <code>box.ctl.promote/demote</code>.
+        Lease TTL: 10s.
       </p>
-      <DataTable
-        :value="agent.appointments"
-        data-key="replicaset"
-        size="small"
-        striped-rows
-      >
+      <DataTable :value="agent.appointments" data-key="replicaset" size="small" striped-rows>
         <Column field="replicaset" header="Replicaset" />
         <Column header="Appointed leader">
           <template #body="{ data }">
@@ -267,12 +298,18 @@ onMounted(load);
         </Column>
       </DataTable>
       <p class="webui-failover__hint">
-        Watcher on <code>{{ agent.self_alias ?? '—' }}</code>: replicaset
-        <code>{{ agent.watcher_replicaset ?? '—' }}</code>, last seen leader
-        <code>{{ agent.watcher_last_leader ?? '—' }}</code>, currently
-        <strong>{{ agent.watcher_current_ro === false ? 'leader (RW)'
-          : agent.watcher_current_ro === true ? 'follower (RO)'
-            : 'unknown' }}</strong>.
+        Watcher on <code>{{ agent.self_alias ?? '—' }}</code
+        >: replicaset <code>{{ agent.watcher_replicaset ?? '—' }}</code
+        >, last seen leader <code>{{ agent.watcher_last_leader ?? '—' }}</code
+        >, currently
+        <strong>{{
+          agent.watcher_current_ro === false
+            ? 'leader (RW)'
+            : agent.watcher_current_ro === true
+              ? 'follower (RO)'
+              : 'unknown'
+        }}</strong
+        >.
       </p>
     </section>
 
@@ -283,8 +320,8 @@ onMounted(load);
       </header>
       <p class="webui-failover__hint">
         Every operator-issued cluster mutation lands here via the
-        <code>_webui_failover_commands</code> replicated sync space. The
-        leader's retention fiber prunes rows older than 30 days.
+        <code>_webui_failover_commands</code> replicated sync space. The leader's retention fiber
+        prunes rows older than 30 days.
       </p>
       <DataTable
         :value="commands"
@@ -321,13 +358,16 @@ onMounted(load);
               v-if="data.params"
               class="webui-failover__mono webui-failover__params"
               :title="data.params"
-            >{{ data.params }}</code>
+              >{{ data.params }}</code
+            >
             <span v-else>—</span>
           </template>
         </Column>
         <Column header="Error">
           <template #body="{ data }">
-            <code v-if="data.error_reason" class="webui-failover__err">{{ data.error_reason }}</code>
+            <code v-if="data.error_reason" class="webui-failover__err">{{
+              data.error_reason
+            }}</code>
             <span v-else>—</span>
           </template>
         </Column>
@@ -350,7 +390,9 @@ onMounted(load);
       </header>
       <DataTable :value="sp.endpoints ?? []" data-key="uri" size="small">
         <Column field="uri" header="Endpoint">
-          <template #body="{ data }"><code>{{ data.uri }}</code></template>
+          <template #body="{ data }">
+            <code>{{ data.uri }}</code>
+          </template>
         </Column>
         <Column header="Status">
           <template #body="{ data }">
@@ -375,17 +417,58 @@ onMounted(load);
 </template>
 
 <style scoped>
-.webui-failover { padding: 1rem 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
-.webui-failover__head { display: flex; align-items: center; gap: 1rem; }
-.webui-failover__head h1 { margin: 0; }
-.webui-failover__error { color: var(--p-message-error-color, #d83535); }
-.webui-failover__mono { font-family: var(--webui-font-mono); font-size: 0.8rem; }
-.webui-failover__sp { background: var(--webui-bg-elevated); border: 1px solid var(--webui-border); border-radius: var(--webui-radius); padding: 1rem; display: flex; flex-direction: column; gap: 0.75rem; }
-.webui-failover__sp-head { display: flex; align-items: center; gap: 0.75rem; }
-.webui-failover__sp-head h2 { margin: 0; font-size: 1.05rem; }
-.webui-failover__err { font-family: var(--webui-font-mono); font-size: 0.75rem; color: var(--p-message-error-color, #d83535); }
-.webui-failover__hint { color: var(--webui-text-muted); font-size: 0.85rem; margin: 0; }
-.webui-failover__hint code { font-family: var(--webui-font-mono); }
+.webui-failover {
+  padding: 1rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.webui-failover__head {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+.webui-failover__head h1 {
+  margin: 0;
+}
+.webui-failover__error {
+  color: var(--p-message-error-color, #d83535);
+}
+.webui-failover__mono {
+  font-family: var(--webui-font-mono);
+  font-size: 0.8rem;
+}
+.webui-failover__sp {
+  background: var(--webui-bg-elevated);
+  border: 1px solid var(--webui-border);
+  border-radius: var(--webui-radius);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.webui-failover__sp-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.webui-failover__sp-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+.webui-failover__err {
+  font-family: var(--webui-font-mono);
+  font-size: 0.75rem;
+  color: var(--p-message-error-color, #d83535);
+}
+.webui-failover__hint {
+  color: var(--webui-text-muted);
+  font-size: 0.85rem;
+  margin: 0;
+}
+.webui-failover__hint code {
+  font-family: var(--webui-font-mono);
+}
 .webui-failover__btn {
   padding: 0.4rem 0.85rem;
   font-size: 0.88rem;

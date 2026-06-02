@@ -54,9 +54,9 @@ interface EvalResp {
 const seqscanRequired = computed(() => {
   if (lang.value !== 'sql' || !errorMsg.value) return false;
   const s = errorMsg.value.toLowerCase();
-  return s.includes('scanning is not allowed')
-    || s.includes('seqscan')
-    || s.includes('sql_seq_scan');
+  return (
+    s.includes('scanning is not allowed') || s.includes('seqscan') || s.includes('sql_seq_scan')
+  );
 });
 
 const run = async (opts: { seqscanAllowed?: boolean } = {}) => {
@@ -64,13 +64,17 @@ const run = async (opts: { seqscanAllowed?: boolean } = {}) => {
   errorMsg.value = null;
   result.value = null;
   try {
-    const res = await restClient.post<EvalResp>('/api/eval', {
-      code: code.value,
-      lang: lang.value,
-      // Backend honours seqscan_allowed only when lang=sql; safe
-      // to send unconditionally.
-      seqscan_allowed: opts.seqscanAllowed === true || allowFullScan.value,
-    }, { handlers: { onForbidden: () => {} } });
+    const res = await restClient.post<EvalResp>(
+      '/api/eval',
+      {
+        code: code.value,
+        lang: lang.value,
+        // Backend honours seqscan_allowed only when lang=sql; safe
+        // to send unconditionally.
+        seqscan_allowed: opts.seqscanAllowed === true || allowFullScan.value,
+      },
+      { handlers: { onForbidden: () => {} } },
+    );
     latency.value = res.latency_ms;
     instance.value = res.instance ?? null;
     if (res.ok) {
@@ -107,7 +111,8 @@ const onKeydown = (ev: KeyboardEvent) => {
     </header>
     <Message severity="warn" :closable="false">
       Console runs against the local instance with full privileges. Every eval is recorded in
-      <code>_webui_audit</code>. Disabled by default; flip <code>roles_cfg.webui.console_enabled</code> to enable.
+      <code>_webui_audit</code>. Disabled by default; flip
+      <code>roles_cfg.webui.console_enabled</code> to enable.
     </Message>
     <Textarea
       v-model="code"
@@ -131,10 +136,8 @@ const onKeydown = (ev: KeyboardEvent) => {
       class="webui-console__seqscan"
     >
       <strong>Sequence scan required.</strong>
-      Tarantool blocks full-scan SELECTs by default
-      (<code>sql_seq_scan = false</code>). Re-run with the toggle
-      enabled for this call only — the session setting is restored
-      after the response.
+      Tarantool blocks full-scan SELECTs by default (<code>sql_seq_scan = false</code>). Re-run with
+      the toggle enabled for this call only — the session setting is restored after the response.
       <Button
         label="Re-run with SEQSCAN"
         icon="pi pi-refresh"
@@ -143,11 +146,15 @@ const onKeydown = (ev: KeyboardEvent) => {
         @click="run({ seqscanAllowed: true })"
       />
     </Message>
-    <Message v-if="errorMsg && !seqscanRequired" severity="error" :closable="false">{{ errorMsg }}</Message>
+    <Message v-if="errorMsg && !seqscanRequired" severity="error" :closable="false">
+      {{ errorMsg }}
+    </Message>
     <section v-if="result !== null || errorMsg" class="webui-console__output">
       <header class="webui-console__output-head">
         <span>Result</span>
-        <span v-if="instance">instance: <code>{{ instance }}</code></span>
+        <span v-if="instance"
+          >instance: <code>{{ instance }}</code></span
+        >
         <span v-if="latency !== null">latency: {{ latency.toFixed(1) }} ms</span>
       </header>
       <pre>{{ result !== null ? JSON.stringify(result, null, 2) : '' }}</pre>
@@ -156,12 +163,33 @@ const onKeydown = (ev: KeyboardEvent) => {
 </template>
 
 <style scoped>
-.webui-console { padding: 1rem 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
-.webui-console__head { display: flex; align-items: center; justify-content: space-between; }
-.webui-console__head h1 { margin: 0; }
-.webui-console__editor { font-family: var(--webui-font-mono); font-size: 0.9rem; }
-.webui-console__actions { display: flex; align-items: center; gap: 1rem; }
-.webui-console__hint { color: var(--webui-text-muted); font-size: 0.85rem; }
+.webui-console {
+  padding: 1rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.webui-console__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.webui-console__head h1 {
+  margin: 0;
+}
+.webui-console__editor {
+  font-family: var(--webui-font-mono);
+  font-size: 0.9rem;
+}
+.webui-console__actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+.webui-console__hint {
+  color: var(--webui-text-muted);
+  font-size: 0.85rem;
+}
 .webui-console__seqscan :deep(.p-message-text) {
   display: inline-flex;
   align-items: center;
@@ -177,7 +205,24 @@ const onKeydown = (ev: KeyboardEvent) => {
   padding-left: 0.5rem;
   border-left: 1px solid var(--webui-border);
 }
-.webui-console__output { background: var(--webui-bg-elevated); border: 1px solid var(--webui-border); border-radius: var(--webui-radius); padding: 1rem; }
-.webui-console__output-head { display: flex; gap: 1.5rem; color: var(--webui-text-muted); font-size: 0.85rem; padding-bottom: 0.5rem; }
-.webui-console__output pre { font-family: var(--webui-font-mono); font-size: 0.85rem; margin: 0; max-height: 50vh; overflow: auto; }
+.webui-console__output {
+  background: var(--webui-bg-elevated);
+  border: 1px solid var(--webui-border);
+  border-radius: var(--webui-radius);
+  padding: 1rem;
+}
+.webui-console__output-head {
+  display: flex;
+  gap: 1.5rem;
+  color: var(--webui-text-muted);
+  font-size: 0.85rem;
+  padding-bottom: 0.5rem;
+}
+.webui-console__output pre {
+  font-family: var(--webui-font-mono);
+  font-size: 0.85rem;
+  margin: 0;
+  max-height: 50vh;
+  overflow: auto;
+}
 </style>

@@ -46,13 +46,13 @@ import { useSessionStore, type Role } from '@/entities/session';
 // Per-route role gating. Routes not listed inherit `viewer`
 // (the default for any logged-in user).
 const ROUTE_ROLES: Record<string, Role> = {
-  audit:    'admin',
-  users:    'admin',
-  console:  'superuser',
+  audit: 'admin',
+  users: 'admin',
+  console: 'superuser',
   snapshots: 'admin',
-  logs:     'admin',
+  logs: 'admin',
   failover: 'admin',
-  vshard:   'admin',
+  vshard: 'admin',
 };
 
 const routes: RouteRecordRaw[] = [

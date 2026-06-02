@@ -50,21 +50,40 @@ const emit = defineEmits<{
 }>();
 
 const CREATE_M = /* GraphQL */ `
-  mutation DxCreateSpace($name: String!, $engine: String, $is_sync: Boolean,
-                         $format: [FieldFormatInput!], $primary_key: [String!]) {
-    createSpace(name: $name, engine: $engine, is_sync: $is_sync,
-                format: $format, primary_key: $primary_key) {
-      ok name id forwarded leader
+  mutation DxCreateSpace(
+    $name: String!
+    $engine: String
+    $is_sync: Boolean
+    $format: [FieldFormatInput!]
+    $primary_key: [String!]
+  ) {
+    createSpace(
+      name: $name
+      engine: $engine
+      is_sync: $is_sync
+      format: $format
+      primary_key: $primary_key
+    ) {
+      ok
+      name
+      id
+      forwarded
+      leader
     }
   }
 `;
 
 const ALTER_M = /* GraphQL */ `
-  mutation DxAlterSpace($name: String!, $new_name: String,
-                        $is_sync: Boolean, $format: [FieldFormatInput!]) {
-    alterSpace(name: $name, new_name: $new_name, is_sync: $is_sync,
-               format: $format) {
-      ok name id
+  mutation DxAlterSpace(
+    $name: String!
+    $new_name: String
+    $is_sync: Boolean
+    $format: [FieldFormatInput!]
+  ) {
+    alterSpace(name: $name, new_name: $new_name, is_sync: $is_sync, format: $format) {
+      ok
+      name
+      id
     }
   }
 `;
@@ -84,8 +103,18 @@ const submitting = ref(false);
 const error = ref<string | null>(null);
 
 const TYPE_OPTIONS = [
-  'unsigned', 'integer', 'number', 'string', 'boolean',
-  'double', 'decimal', 'uuid', 'map', 'array', 'scalar', 'any',
+  'unsigned',
+  'integer',
+  'number',
+  'string',
+  'boolean',
+  'double',
+  'decimal',
+  'uuid',
+  'map',
+  'array',
+  'scalar',
+  'any',
 ].map((t) => ({ label: t, value: t }));
 
 const ENGINE_OPTIONS = [
@@ -130,9 +159,9 @@ function removeRow(i: number) {
   fields.value.splice(i, 1);
 }
 
-const title = computed(() => (props.mode === 'create'
-  ? 'New space'
-  : `Edit space — ${props.source?.name ?? ''}`));
+const title = computed(() =>
+  props.mode === 'create' ? 'New space' : `Edit space — ${props.source?.name ?? ''}`,
+);
 
 async function submit() {
   submitting.value = true;
@@ -162,9 +191,7 @@ async function submit() {
       })
       .toPromise();
   } else {
-    const renamed = name.value.trim() !== props.source!.name
-      ? name.value.trim()
-      : null;
+    const renamed = name.value.trim() !== props.source!.name ? name.value.trim() : null;
     res = await getClient()
       .mutation(ALTER_M, {
         name: props.source!.name,
@@ -180,10 +207,12 @@ async function submit() {
     return;
   }
   const payload =
-    (res.data as {
-      createSpace?: { ok: boolean };
-      alterSpace?: { ok: boolean };
-    } | undefined) ?? {};
+    (res.data as
+      | {
+          createSpace?: { ok: boolean };
+          alterSpace?: { ok: boolean };
+        }
+      | undefined) ?? {};
   const result = payload.createSpace ?? payload.alterSpace;
   if (result === undefined || result.ok !== true) {
     error.value = 'Mutation rejected by server (no `ok: true`).';
@@ -289,8 +318,13 @@ function close() {
   align-items: center;
   margin-bottom: 0.5rem;
 }
-.sf__row label { color: var(--webui-text-muted); font-size: 0.85rem; }
-.sf__select { min-width: 12rem; }
+.sf__row label {
+  color: var(--webui-text-muted);
+  font-size: 0.85rem;
+}
+.sf__select {
+  min-width: 12rem;
+}
 .sf__inline {
   display: inline-flex;
   align-items: center;
@@ -298,7 +332,9 @@ function close() {
   color: var(--webui-text-muted);
   font-size: 0.85rem;
 }
-.sf__section { margin-top: 1rem; }
+.sf__section {
+  margin-top: 1rem;
+}
 .sf__section-head {
   display: flex;
   justify-content: space-between;
@@ -312,7 +348,13 @@ function close() {
   align-items: center;
   margin-bottom: 0.3rem;
 }
-.sf__field-name :deep(.p-inputtext) { width: 100%; }
-.sf__field-type :deep(.p-select) { width: 100%; }
-.sf__error { margin-bottom: 0.5rem; }
+.sf__field-name :deep(.p-inputtext) {
+  width: 100%;
+}
+.sf__field-type :deep(.p-select) {
+  width: 100%;
+}
+.sf__error {
+  margin-bottom: 0.5rem;
+}
 </style>

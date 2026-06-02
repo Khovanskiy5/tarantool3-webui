@@ -9,8 +9,8 @@ import Message from 'primevue/message';
 import { useLoginStore } from '../model/login';
 
 const router = useRouter();
-const route  = useRoute();
-const store  = useLoginStore();
+const route = useRoute();
+const store = useLoginStore();
 
 const form = reactive({ user: '', password: '' });
 
@@ -54,12 +54,7 @@ const submit = async () => {
 
     <label class="webui-login-form__field">
       <span class="webui-login-form__label">Username</span>
-      <InputText
-        v-model="form.user"
-        autocomplete="username"
-        autofocus
-        required
-      />
+      <InputText v-model="form.user" autocomplete="username" autofocus required />
     </label>
 
     <label class="webui-login-form__field">

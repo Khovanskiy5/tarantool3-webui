@@ -73,15 +73,8 @@ function onCancel() {
 <template>
   <Teleport to="body">
     <div v-if="open" class="webui-destructive-dialog">
-      <div
-        class="webui-destructive-dialog__backdrop"
-        @click="onCancel"
-      />
-      <div
-        class="webui-destructive-dialog__panel"
-        role="dialog"
-        aria-modal="true"
-      >
+      <div class="webui-destructive-dialog__backdrop" @click="onCancel" />
+      <div class="webui-destructive-dialog__panel" role="dialog" aria-modal="true">
         <header class="webui-destructive-dialog__head">
           <h2 class="webui-destructive-dialog__title">{{ title }}</h2>
         </header>
@@ -100,7 +93,7 @@ function onCancel() {
               class="webui-destructive-dialog__input"
               :disabled="pending"
               @keyup.enter="onConfirm"
-            >
+            />
           </label>
         </div>
         <footer class="webui-destructive-dialog__foot">

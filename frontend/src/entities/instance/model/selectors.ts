@@ -16,10 +16,7 @@ export function reachability(instance: Instance): InstanceReachability {
 // have ro=false while the queue belongs to exactly one. The
 // caller passes the replicaset's appointed leader alias so we
 // can compare directly.
-export function isLeader(
-  instance: Instance,
-  leaderAlias: string | null | undefined,
-): boolean {
+export function isLeader(instance: Instance, leaderAlias: string | null | undefined): boolean {
   if (leaderAlias != null) {
     return instance.alias === leaderAlias;
   }

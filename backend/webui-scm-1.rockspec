@@ -22,10 +22,13 @@ description = {
 
 dependencies = {
     'lua >= 5.1',
-    'checks',
-    'errors',
-    'http >= 1.6',
-    'graphql',
+    -- Versions are pinned to exact releases so a `tt rocks install`
+    -- on a fresh machine resolves the same dependency tree the
+    -- Dockerfile (docker/Dockerfile.instance) builds against.
+    -- `checks` ships with Tarantool 3.x core; no external pin needed.
+    'errors == 2.2.1',
+    'http == 1.9.0',
+    'graphql == 0.3.1',
     -- Subsequent tasks pin additional dependencies as their code lands:
     --   Task 10 (compose configs): 'lyaml'
     --   Task 30 (etcd):          'etcd-client'

@@ -25,9 +25,9 @@ const meta: Meta<typeof Sidebar> = {
     docs: {
       description: {
         component:
-          'Primary navigation rail. One entry per top-level admin area. '
-          + 'The active item is derived from the current route segment '
-          + 'so the highlight survives in-app navigation without prop drilling.',
+          'Primary navigation rail. One entry per top-level admin area. ' +
+          'The active item is derived from the current route segment ' +
+          'so the highlight survives in-app navigation without prop drilling.',
       },
     },
   },

@@ -56,19 +56,22 @@ const InputTextStub = {
   name: 'InputText',
   props: ['modelValue', 'disabled'],
   emits: ['update:modelValue'],
-  template: '<input :disabled="disabled" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+  template:
+    '<input :disabled="disabled" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
 };
 const TextareaStub = {
   name: 'Textarea',
   props: ['modelValue', 'disabled'],
   emits: ['update:modelValue'],
-  template: '<textarea :disabled="disabled" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+  template:
+    '<textarea :disabled="disabled" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
 };
 const CheckboxStub = {
   name: 'Checkbox',
   props: ['modelValue', 'binary'],
   emits: ['update:modelValue'],
-  template: '<input type="checkbox" :checked="modelValue" @change="$emit(\'update:modelValue\', $event.target.checked)" />',
+  template:
+    '<input type="checkbox" :checked="modelValue" @change="$emit(\'update:modelValue\', $event.target.checked)" />',
 };
 const MessageStub = { name: 'Message', template: '<div><slot /></div>' };
 

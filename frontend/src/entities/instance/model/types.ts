@@ -9,7 +9,4 @@ import type { ServerCardFieldsFragment } from '@/shared/api/generated';
 
 export type Instance = ServerCardFieldsFragment;
 
-export type InstanceReachability =
-  | 'reachable'
-  | 'unreachable'
-  | 'unknown';
+export type InstanceReachability = 'reachable' | 'unreachable' | 'unknown';

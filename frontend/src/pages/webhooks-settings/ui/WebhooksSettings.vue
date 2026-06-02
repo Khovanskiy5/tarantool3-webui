@@ -23,7 +23,10 @@ interface Webhook {
   last_ok_at: number | null;
 }
 
-interface QueueDepth { queue: number; dead_letter: number; }
+interface QueueDepth {
+  queue: number;
+  dead_letter: number;
+}
 interface DeadLetterEntry {
   id: number;
   failed_at: number;
@@ -45,47 +48,87 @@ const Q_ALL = /* GraphQL */ `
   query Webhooks {
     webhooks {
       webhooks {
-        name type url events enabled has_secret
-        delivered failed retried dead_lettered
-        last_error last_ok_at
+        name
+        type
+        url
+        events
+        enabled
+        has_secret
+        delivered
+        failed
+        retried
+        dead_lettered
+        last_error
+        last_ok_at
       }
     }
-    webhookQueueDepth { queue dead_letter }
+    webhookQueueDepth {
+      queue
+      dead_letter
+    }
     webhookDeadLetter(limit: 50) {
-      entries { id failed_at webhook event_type attempts last_error }
+      entries {
+        id
+        failed_at
+        webhook
+        event_type
+        attempts
+        last_error
+      }
     }
   }
 `;
 const M_TEST = /* GraphQL */ `
   mutation TestWebhook($n: String!) {
-    testWebhook(name: $n) { ok latency_ms error }
+    testWebhook(name: $n) {
+      ok
+      latency_ms
+      error
+    }
   }
 `;
 const M_CLEAR_DLQ = /* GraphQL */ `
-  mutation ClearDLQ { clearDeadLetter { cleared } }
+  mutation ClearDLQ {
+    clearDeadLetter {
+      cleared
+    }
+  }
 `;
 
 const load = async () => {
-  loading.value = true; error.value = null;
-  const res = await getClient().query<{
-    webhooks: { webhooks: Webhook[] };
-    webhookQueueDepth: QueueDepth;
-    webhookDeadLetter: { entries: DeadLetterEntry[] };
-  }>(Q_ALL, {}).toPromise();
+  loading.value = true;
+  error.value = null;
+  const res = await getClient()
+    .query<{
+      webhooks: { webhooks: Webhook[] };
+      webhookQueueDepth: QueueDepth;
+      webhookDeadLetter: { entries: DeadLetterEntry[] };
+    }>(Q_ALL, {})
+    .toPromise();
   loading.value = false;
-  if (res.error) { error.value = res.error.message; return; }
+  if (res.error) {
+    error.value = res.error.message;
+    return;
+  }
   webhooks.value = res.data?.webhooks?.webhooks ?? [];
   depth.value = res.data?.webhookQueueDepth ?? null;
   deadLetter.value = res.data?.webhookDeadLetter?.entries ?? [];
 };
 
 const test = async (name: string) => {
-  testing.value = name; error.value = null; info.value = null;
-  const res = await getClient().mutation<{ testWebhook: { ok: boolean; latency_ms: number | null; error: string | null } }>(
-    M_TEST, { n: name }
-  ).toPromise();
+  testing.value = name;
+  error.value = null;
+  info.value = null;
+  const res = await getClient()
+    .mutation<{
+      testWebhook: { ok: boolean; latency_ms: number | null; error: string | null };
+    }>(M_TEST, { n: name })
+    .toPromise();
   testing.value = null;
-  if (res.error) { error.value = res.error.message; return; }
+  if (res.error) {
+    error.value = res.error.message;
+    return;
+  }
   const r = res.data?.testWebhook;
   if (r?.ok) {
     info.value = `Test delivered to ${name} (${(r.latency_ms ?? 0).toFixed(1)} ms).`;
@@ -96,10 +139,13 @@ const test = async (name: string) => {
 };
 
 const clearDLQ = async () => {
-  const res = await getClient().mutation<{ clearDeadLetter: { cleared: number } }>(
-    M_CLEAR_DLQ, {}
-  ).toPromise();
-  if (res.error) { error.value = res.error.message; return; }
+  const res = await getClient()
+    .mutation<{ clearDeadLetter: { cleared: number } }>(M_CLEAR_DLQ, {})
+    .toPromise();
+  if (res.error) {
+    error.value = res.error.message;
+    return;
+  }
   info.value = `Dead-letter cleared (${res.data?.clearDeadLetter.cleared} rows).`;
   await load();
 };
@@ -123,12 +169,16 @@ onMounted(load);
     </header>
 
     <Message severity="info" :closable="false">
-      Webhook definitions live in <code>roles_cfg.webui.webhooks</code> of the cluster YAML.
-      Edit them via /config-editor; this page is read-only with manual test + dead-letter inspection.
+      Webhook definitions live in <code>roles_cfg.webui.webhooks</code> of the cluster YAML. Edit
+      them via /config-editor; this page is read-only with manual test + dead-letter inspection.
     </Message>
 
-    <Message v-if="error" severity="error" :closable="true" @close="error = null">{{ error }}</Message>
-    <Message v-if="info" severity="success" :closable="true" @close="info = null">{{ info }}</Message>
+    <Message v-if="error" severity="error" :closable="true" @close="error = null">
+      {{ error }}
+    </Message>
+    <Message v-if="info" severity="success" :closable="true" @close="info = null">
+      {{ info }}
+    </Message>
 
     <section v-if="depth" class="webui-webhooks__queue">
       <Tag :value="`queue: ${depth.queue}`" severity="info" />
@@ -137,8 +187,13 @@ onMounted(load);
         :severity="depth.dead_letter > 0 ? 'danger' : 'secondary'"
       />
       <Button
-        v-if="depth.dead_letter > 0" size="small" outlined severity="danger"
-        label="Clear dead-letter" icon="pi pi-trash" @click="clearDLQ"
+        v-if="depth.dead_letter > 0"
+        size="small"
+        outlined
+        severity="danger"
+        label="Clear dead-letter"
+        icon="pi pi-trash"
+        @click="clearDLQ"
       />
     </section>
 
@@ -158,14 +213,20 @@ onMounted(load);
       <Column header="Events">
         <template #body="{ data }">
           <Tag
-            v-for="e in (data.events ?? [])" :key="e" :value="e" severity="secondary"
+            v-for="e in data.events ?? []"
+            :key="e"
+            :value="e"
+            severity="secondary"
             class="webui-webhooks__chip"
           />
         </template>
       </Column>
       <Column header="Enabled">
         <template #body="{ data }">
-          <Tag :value="data.enabled ? 'yes' : 'no'" :severity="data.enabled ? 'success' : 'secondary'" />
+          <Tag
+            :value="data.enabled ? 'yes' : 'no'"
+            :severity="data.enabled ? 'success' : 'secondary'"
+          />
         </template>
       </Column>
       <Column header="Secret">
@@ -184,14 +245,20 @@ onMounted(load);
             <span title="retried">retry {{ data.retried }}</span> ·
             <span title="dead-lettered">dlq {{ data.dead_lettered }}</span>
           </div>
-          <small v-if="data.last_ok_at" class="webui-webhooks__hint">last ok: {{ fmtTime(data.last_ok_at) }}</small>
-          <small v-if="data.last_error" class="webui-webhooks__err">last err: <code>{{ data.last_error }}</code></small>
+          <small v-if="data.last_ok_at" class="webui-webhooks__hint"
+            >last ok: {{ fmtTime(data.last_ok_at) }}</small
+          >
+          <small v-if="data.last_error" class="webui-webhooks__err"
+            >last err: <code>{{ data.last_error }}</code></small
+          >
         </template>
       </Column>
       <Column header="Action">
         <template #body="{ data }">
           <Button
-            size="small" icon="pi pi-send" label="Test"
+            size="small"
+            icon="pi pi-send"
+            label="Test"
             :loading="testing === data.name"
             :disabled="!data.enabled"
             @click="test(data.name)"
@@ -210,27 +277,70 @@ onMounted(load);
           <template #body="{ data }">{{ fmtTime(data.failed_at) }}</template>
         </Column>
         <Column header="Last error">
-          <template #body="{ data }"><code>{{ data.last_error }}</code></template>
+          <template #body="{ data }">
+            <code>{{ data.last_error }}</code>
+          </template>
         </Column>
       </DataTable>
     </section>
 
     <Message v-if="!loading && webhooks.length === 0" severity="info" :closable="false">
-      No webhooks configured. Add entries under <code>roles_cfg.webui.webhooks</code> in the cluster YAML.
+      No webhooks configured. Add entries under <code>roles_cfg.webui.webhooks</code> in the cluster
+      YAML.
     </Message>
   </section>
 </template>
 
 <style scoped>
-.webui-webhooks { padding: 1rem 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
-.webui-webhooks__head { display: flex; align-items: center; justify-content: space-between; }
-.webui-webhooks__head h1 { margin: 0; }
-.webui-webhooks__queue { display: flex; gap: 0.75rem; align-items: center; }
-.webui-webhooks__mono { font-family: var(--webui-font-mono); font-size: 0.78rem; word-break: break-all; }
-.webui-webhooks__chip { margin: 0.1rem 0.25rem 0.1rem 0; }
-.webui-webhooks__stats { font-family: var(--webui-font-mono); font-size: 0.85rem; }
-.webui-webhooks__hint { display: block; color: var(--webui-text-muted); font-size: 0.72rem; }
-.webui-webhooks__err  { display: block; color: var(--p-message-error-color, #d83535); font-size: 0.72rem; }
-.webui-webhooks__dead-letter { background: var(--webui-bg-elevated); border: 1px solid var(--webui-border); border-radius: var(--webui-radius); padding: 1rem; }
-.webui-webhooks__dead-letter h2 { margin: 0 0 0.5rem; font-size: 1.05rem; }
+.webui-webhooks {
+  padding: 1rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.webui-webhooks__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.webui-webhooks__head h1 {
+  margin: 0;
+}
+.webui-webhooks__queue {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+.webui-webhooks__mono {
+  font-family: var(--webui-font-mono);
+  font-size: 0.78rem;
+  word-break: break-all;
+}
+.webui-webhooks__chip {
+  margin: 0.1rem 0.25rem 0.1rem 0;
+}
+.webui-webhooks__stats {
+  font-family: var(--webui-font-mono);
+  font-size: 0.85rem;
+}
+.webui-webhooks__hint {
+  display: block;
+  color: var(--webui-text-muted);
+  font-size: 0.72rem;
+}
+.webui-webhooks__err {
+  display: block;
+  color: var(--p-message-error-color, #d83535);
+  font-size: 0.72rem;
+}
+.webui-webhooks__dead-letter {
+  background: var(--webui-bg-elevated);
+  border: 1px solid var(--webui-border);
+  border-radius: var(--webui-radius);
+  padding: 1rem;
+}
+.webui-webhooks__dead-letter h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
 </style>

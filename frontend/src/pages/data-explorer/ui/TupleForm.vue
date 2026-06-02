@@ -55,7 +55,10 @@ const emit = defineEmits<{
 const INSERT_M = /* GraphQL */ `
   mutation DxInsert($space: String!, $fields: [Json]!) {
     tupleInsert(space: $space, fields: $fields) {
-      ok after forwarded leader
+      ok
+      after
+      forwarded
+      leader
     }
   }
 `;
@@ -63,7 +66,11 @@ const INSERT_M = /* GraphQL */ `
 const REPLACE_M = /* GraphQL */ `
   mutation DxReplace($space: String!, $fields: [Json]!) {
     tupleReplace(space: $space, fields: $fields) {
-      ok before after forwarded leader
+      ok
+      before
+      after
+      forwarded
+      leader
     }
   }
 `;
@@ -109,9 +116,8 @@ function rebuildRows() {
     // whose stored value really is null. In CREATE mode every input
     // starts editable; the operator opts into NULL by toggling the
     // checkbox (only available on nullable fields).
-    const isNullableNullInEdit = !isCreate
-      && f.is_nullable === true
-      && (initial === null || initial === undefined);
+    const isNullableNullInEdit =
+      !isCreate && f.is_nullable === true && (initial === null || initial === undefined);
     return {
       name: f.name,
       type: f.type,
@@ -122,8 +128,8 @@ function rebuildRows() {
   });
 }
 
-const title = computed(
-  () => (props.mode === 'create' ? 'New tuple' : `Edit tuple — ${props.space.name}`),
+const title = computed(() =>
+  props.mode === 'create' ? 'New tuple' : `Edit tuple — ${props.space.name}`,
 );
 
 function parseValue(row: FieldState): unknown {
@@ -155,9 +161,7 @@ async function submit() {
   error.value = null;
   const fields = rows.value.map(parseValue);
   const mutation = props.mode === 'create' ? INSERT_M : REPLACE_M;
-  const res = await getClient()
-    .mutation(mutation, { space: props.space.name, fields })
-    .toPromise();
+  const res = await getClient().mutation(mutation, { space: props.space.name, fields }).toPromise();
   submitting.value = false;
   if (res.error) {
     error.value = res.error.message;
@@ -167,8 +171,8 @@ async function submit() {
   // makes it to .data we surface the message and stay open so the
   // operator can correct the value.
   const payload =
-    (res.data as { tupleInsert?: { ok: boolean }; tupleReplace?: { ok: boolean } } | undefined)
-    ?? {};
+    (res.data as { tupleInsert?: { ok: boolean }; tupleReplace?: { ok: boolean } } | undefined) ??
+    {};
   const result = payload.tupleInsert ?? payload.tupleReplace;
   if (result === undefined || result.ok !== true) {
     error.value = 'Mutation rejected by server (no `ok: true`).';
@@ -208,11 +212,7 @@ function close() {
             rows="2"
             placeholder='{"k": "v"} or [1, 2, 3]'
           />
-          <InputText
-            v-else
-            v-model="r.raw"
-            :disabled="r.is_null"
-          />
+          <InputText v-else v-model="r.raw" :disabled="r.is_null" />
           <label v-if="r.is_nullable" class="dx-tf__null-toggle">
             <Checkbox v-model="r.is_null" binary />
             <span>null</span>
@@ -235,7 +235,11 @@ function close() {
 </template>
 
 <style scoped>
-.dx-tf__rows { display: flex; flex-direction: column; gap: 0.5rem; }
+.dx-tf__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
 .dx-tf__row {
   display: grid;
   grid-template-columns: 10rem 1fr;
@@ -248,10 +252,27 @@ function close() {
   gap: 0.1rem;
   padding-top: 0.3rem;
 }
-.dx-tf__label small { color: var(--webui-text-muted); font-size: 0.7rem; }
-.dx-tf__value { display: flex; align-items: center; gap: 0.5rem; }
+.dx-tf__label small {
+  color: var(--webui-text-muted);
+  font-size: 0.7rem;
+}
+.dx-tf__value {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
 .dx-tf__value :deep(.p-inputtext),
-.dx-tf__value :deep(.p-textarea) { flex: 1 1 auto; }
-.dx-tf__null-toggle { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.75rem; color: var(--webui-text-muted); }
-.dx-tf__error { margin-bottom: 0.5rem; }
+.dx-tf__value :deep(.p-textarea) {
+  flex: 1 1 auto;
+}
+.dx-tf__null-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--webui-text-muted);
+}
+.dx-tf__error {
+  margin-bottom: 0.5rem;
+}
 </style>

@@ -95,15 +95,16 @@ export const useIssueStore = defineStore('issues', () => {
     unsubMsg();
   });
 
-  const items = computed<readonly Issue[]>(
-    () => list.value?.issues.items ?? [],
-  );
+  const items = computed<readonly Issue[]>(() => list.value?.issues.items ?? []);
   const total = computed<number>(() => list.value?.issues.totalCount ?? 0);
-  const summary = computed(() => summaryData.value?.issuesSummary ?? {
-    warning: 0,
-    critical: 0,
-    total: 0,
-  });
+  const summary = computed(
+    () =>
+      summaryData.value?.issuesSummary ?? {
+        warning: 0,
+        critical: 0,
+        total: 0,
+      },
+  );
 
   function setFilters(patch: Partial<IssueFilters>) {
     filters.value = { ...filters.value, ...patch };

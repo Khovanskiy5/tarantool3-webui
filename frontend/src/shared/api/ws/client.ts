@@ -18,12 +18,7 @@ import { withTag } from '@/shared/lib/log';
 
 const log = withTag('ws');
 
-export type WsConnectionState =
-  | 'idle'
-  | 'connecting'
-  | 'open'
-  | 'closed'
-  | 'reconnecting';
+export type WsConnectionState = 'idle' | 'connecting' | 'open' | 'closed' | 'reconnecting';
 
 export interface WsMessage {
   type: 'initial' | 'snapshot' | string;
@@ -157,10 +152,7 @@ class WsClient {
   private scheduleReconnect() {
     if (this.destroyed) return;
     this.attempt += 1;
-    const delay = Math.min(
-      INITIAL_BACKOFF_MS * 2 ** Math.min(this.attempt - 1, 6),
-      MAX_BACKOFF_MS,
-    );
+    const delay = Math.min(INITIAL_BACKOFF_MS * 2 ** Math.min(this.attempt - 1, 6), MAX_BACKOFF_MS);
     this.setState('reconnecting');
     log.warn('ws scheduling reconnect', { attempt: this.attempt, delay_ms: delay });
     this.reconnectTimer = setTimeout(() => {

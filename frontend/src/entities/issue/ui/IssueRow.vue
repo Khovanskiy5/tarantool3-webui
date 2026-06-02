@@ -5,9 +5,7 @@ import type { Issue } from '../model/types';
 
 const props = defineProps<{ issue: Issue }>();
 
-const severityClass = computed(
-  () => `webui-issue-row--${props.issue.severity.toLowerCase()}`,
-);
+const severityClass = computed(() => `webui-issue-row--${props.issue.severity.toLowerCase()}`);
 const categoryLabel = computed(() => props.issue.category.toLowerCase());
 const scopeLabel = computed(() => props.issue.scope.toLowerCase());
 const severityLabel = computed(() => props.issue.severity.toLowerCase());
@@ -23,9 +21,7 @@ const target = computed(() => {
     <div class="webui-issue-row__badge">
       <i
         :class="
-          issue.severity === 'CRITICAL'
-            ? 'pi pi-exclamation-circle'
-            : 'pi pi-exclamation-triangle'
+          issue.severity === 'CRITICAL' ? 'pi pi-exclamation-circle' : 'pi pi-exclamation-triangle'
         "
       />
       <span class="webui-issue-row__severity">{{ severityLabel }}</span>

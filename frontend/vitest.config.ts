@@ -8,12 +8,12 @@ export default defineConfig({
   plugins: [vue()],
   resolve: {
     alias: {
-      '@/app':      r('./src/app'),
-      '@/pages':    r('./src/pages'),
-      '@/widgets':  r('./src/widgets'),
+      '@/app': r('./src/app'),
+      '@/pages': r('./src/pages'),
+      '@/widgets': r('./src/widgets'),
       '@/features': r('./src/features'),
       '@/entities': r('./src/entities'),
-      '@/shared':   r('./src/shared'),
+      '@/shared': r('./src/shared'),
     },
   },
   test: {

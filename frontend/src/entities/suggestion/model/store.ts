@@ -55,29 +55,24 @@ export const useSuggestionStore = defineStore('suggestions', () => {
     unsubMsg();
   });
 
-  const data = computed<SuggestionsOverview | null>(
-    () => queryData.value?.suggestions ?? null,
-  );
+  const data = computed<SuggestionsOverview | null>(() => queryData.value?.suggestions ?? null);
   const total = computed<number>(() => {
     const d = data.value;
     if (!d) return 0;
     return (
-      d.forceApply.length
-      + d.restartReplication.length
-      + d.refreshVshard.length
-      + d.disableServer.length
-      + d.refineUri.length
-      + d.restartFailover.length
-      + d.bootstrapVshard.length
+      d.forceApply.length +
+      d.restartReplication.length +
+      d.refreshVshard.length +
+      d.disableServer.length +
+      d.refineUri.length +
+      d.restartFailover.length +
+      d.bootstrapVshard.length
     );
   });
 
   async function applyForceApply(instanceUuids: string[]) {
-    const result = await client
-      .mutation(ApplyForceApplyDocument, { instanceUuids })
-      .toPromise();
-    const payload = (result.data as ApplyForceApplyMutation | undefined)
-      ?.applyForceApply ?? null;
+    const result = await client.mutation(ApplyForceApplyDocument, { instanceUuids }).toPromise();
+    const payload = (result.data as ApplyForceApplyMutation | undefined)?.applyForceApply ?? null;
     log.info('apply force_apply', {
       ok: payload?.ok ?? false,
       unknown: payload?.unknown?.length ?? 0,
@@ -90,8 +85,8 @@ export const useSuggestionStore = defineStore('suggestions', () => {
     const result = await client
       .mutation(ApplyRestartReplicationDocument, { instanceUuids })
       .toPromise();
-    const payload = (result.data as ApplyRestartReplicationMutation | undefined)
-      ?.applyRestartReplication ?? null;
+    const payload =
+      (result.data as ApplyRestartReplicationMutation | undefined)?.applyRestartReplication ?? null;
     log.info('apply restart_replication', {
       ok: payload?.ok ?? false,
       unknown: payload?.unknown?.length ?? 0,
@@ -107,17 +102,16 @@ export const useSuggestionStore = defineStore('suggestions', () => {
   // surface them inline (FORBIDDEN when the target owns the queue,
   // NOT_FOUND when the alias is unknown, etc).
   async function rebootstrapInstance(alias: string) {
-    const result = await client
-      .mutation(RebootstrapInstanceDocument, { alias })
-      .toPromise();
+    const result = await client.mutation(RebootstrapInstanceDocument, { alias }).toPromise();
     if (result.error) {
       log.warn('rebootstrap failed', { alias, err: result.error.message });
       return { ok: false, alias, message: result.error.message };
     }
-    const payload = (result.data as RebootstrapInstanceMutation | undefined)
-      ?.rebootstrapInstance ?? null;
+    const payload =
+      (result.data as RebootstrapInstanceMutation | undefined)?.rebootstrapInstance ?? null;
     log.info('rebootstrap dispatched', {
-      alias, ok: payload?.ok ?? false,
+      alias,
+      ok: payload?.ok ?? false,
     });
     void refresh();
     return payload ?? { ok: false, alias, message: 'unknown' };

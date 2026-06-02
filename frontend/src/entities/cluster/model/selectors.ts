@@ -9,18 +9,15 @@
 
 import type { ClusterOverview, Replicaset, Server } from './types';
 
-export function getSelfAlias(cluster: ClusterOverview | null | undefined):
-  string | null {
+export function getSelfAlias(cluster: ClusterOverview | null | undefined): string | null {
   return cluster?.self?.alias ?? null;
 }
 
-export function getServers(cluster: ClusterOverview | null | undefined):
-  readonly Server[] {
+export function getServers(cluster: ClusterOverview | null | undefined): readonly Server[] {
   return cluster?.servers.items ?? [];
 }
 
-export function getReplicasets(cluster: ClusterOverview | null | undefined):
-  readonly Replicaset[] {
+export function getReplicasets(cluster: ClusterOverview | null | undefined): readonly Replicaset[] {
   return cluster?.replicasets ?? [];
 }
 
@@ -46,10 +43,7 @@ export function countServers(servers: readonly Server[]): ServerCounts {
   };
 }
 
-export function findServerByAlias(
-  servers: readonly Server[],
-  alias: string,
-): Server | null {
+export function findServerByAlias(servers: readonly Server[], alias: string): Server | null {
   return servers.find((s) => s.alias === alias) ?? null;
 }
 

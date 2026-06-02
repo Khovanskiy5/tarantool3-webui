@@ -1,4 +1,3 @@
-/* eslint-disable */
 //
 // Public barrel for the GraphQL types and operations emitted by
 // graphql-codegen. The actual artefacts live under

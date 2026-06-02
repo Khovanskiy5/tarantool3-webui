@@ -20,27 +20,21 @@ const variant = computed<'critical' | 'warning' | 'idle'>(() => {
     :class="['webui-issues-badge', `webui-issues-badge--${variant}`]"
     :aria-label="`${summary.total} issues`"
   >
-    <i
-      v-if="summary.critical > 0"
-      class="pi pi-exclamation-circle"
-      aria-hidden="true"
-    />
-    <i
-      v-else-if="summary.warning > 0"
-      class="pi pi-exclamation-triangle"
-      aria-hidden="true"
-    />
+    <i v-if="summary.critical > 0" class="pi pi-exclamation-circle" aria-hidden="true" />
+    <i v-else-if="summary.warning > 0" class="pi pi-exclamation-triangle" aria-hidden="true" />
     <i v-else class="pi pi-check-circle" aria-hidden="true" />
     <span class="webui-issues-badge__counts">
       <template v-if="summary.total > 0">
         <span
           v-if="summary.critical > 0"
           class="webui-issues-badge__chip webui-issues-badge__chip--critical"
-        >{{ summary.critical }}</span>
+          >{{ summary.critical }}</span
+        >
         <span
           v-if="summary.warning > 0"
           class="webui-issues-badge__chip webui-issues-badge__chip--warning"
-        >{{ summary.warning }}</span>
+          >{{ summary.warning }}</span
+        >
       </template>
       <span v-else class="webui-issues-badge__ok">OK</span>
     </span>
@@ -67,9 +61,15 @@ const variant = computed<'critical' | 'warning' | 'idle'>(() => {
   border-color: var(--webui-accent);
 }
 
-.webui-issues-badge--idle    { color: var(--webui-text-muted); }
-.webui-issues-badge--warning { color: var(--webui-warning);  }
-.webui-issues-badge--critical { color: var(--webui-danger);  }
+.webui-issues-badge--idle {
+  color: var(--webui-text-muted);
+}
+.webui-issues-badge--warning {
+  color: var(--webui-warning);
+}
+.webui-issues-badge--critical {
+  color: var(--webui-danger);
+}
 
 .webui-issues-badge__counts {
   display: inline-flex;

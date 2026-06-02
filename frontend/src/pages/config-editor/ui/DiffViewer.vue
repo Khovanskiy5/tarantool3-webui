@@ -35,9 +35,7 @@ const initMonacoEnv = async () => {
   // Same env shim as YamlEditor.vue — the worker module is shared
   // between the two via Monaco's MonacoEnvironment global, so the
   // diff editor doesn't ship a second worker chunk.
-  const EditorWorker = (await import(
-    'monaco-editor/esm/vs/editor/editor.worker?worker'
-  )).default;
+  const EditorWorker = (await import('monaco-editor/esm/vs/editor/editor.worker?worker')).default;
   (self as unknown as { MonacoEnvironment: unknown }).MonacoEnvironment = {
     getWorker: () => new EditorWorker(),
   };
@@ -87,14 +85,17 @@ const dispose = () => {
 
 // Re-mount on every open transition. Cheaper than juggling models —
 // the diff dialog is opened on user click, not on poll.
-watch(() => props.open, async (open) => {
-  if (open) {
-    await nextTick();
-    await mount();
-  } else {
-    dispose();
-  }
-});
+watch(
+  () => props.open,
+  async (open) => {
+    if (open) {
+      await nextTick();
+      await mount();
+    } else {
+      dispose();
+    }
+  },
+);
 
 onBeforeUnmount(dispose);
 

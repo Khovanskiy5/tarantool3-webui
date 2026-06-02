@@ -40,11 +40,13 @@ const reasonLabel = computed(() => props.instance.boxInfo?.roReason ?? '');
         v-if="isSelf"
         class="webui-instance-row__chip webui-instance-row__chip--self"
         title="This is the instance answering the request"
-      >self</span>
+        >self</span
+      >
       <span
         v-if="isLeader(instance, leaderAlias)"
         class="webui-instance-row__chip webui-instance-row__chip--leader"
-      >leader</span>
+        >leader</span
+      >
     </td>
     <td class="webui-instance-row__uuid">{{ shortUuid(instance.uuid) }}</td>
     <td class="webui-instance-row__status">

@@ -89,9 +89,9 @@ COPY backend/webui-scm-1.rockspec /opt/webui/webui-scm-1.rockspec
 # tt CLI installs into ./.rocks by default, and Tarantool's package.path
 # already includes that location when running from WORKDIR.
 # checks ships with Tarantool 3.x core, no separate install required.
-RUN tt rocks install http 1.6.0 \
- && tt rocks install graphql \
- && tt rocks install errors
+RUN tt rocks install http 1.9.0 \
+ && tt rocks install graphql 0.3.1 \
+ && tt rocks install errors 2.2.1
 
 # Copy the production SPA from stage 1 and pack it into a Lua module.
 # embed-assets reads from <source-dir> and writes to <output-file>; the

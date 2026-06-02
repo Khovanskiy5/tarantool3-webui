@@ -39,8 +39,22 @@ const ButtonStub = {
 };
 
 const baseRevisions = [
-  { revision: 12, ts: 1717000000, user: 'admin_dev', hash: 'abcdef0123456789', size: 1024, action: 'commit' },
-  { revision: 11, ts: 1716999000, user: 'operator_dev', hash: 'fedcba9876543210', size: 1000, action: 'commit' },
+  {
+    revision: 12,
+    ts: 1717000000,
+    user: 'admin_dev',
+    hash: 'abcdef0123456789',
+    size: 1024,
+    action: 'commit',
+  },
+  {
+    revision: 11,
+    ts: 1716999000,
+    user: 'operator_dev',
+    hash: 'fedcba9876543210',
+    size: 1000,
+    action: 'commit',
+  },
   { revision: 10, ts: 1716998000, user: null, hash: null, size: null, action: 'rollback' },
 ];
 
@@ -127,9 +141,7 @@ describe('HistoryPanel', () => {
     const wrapper = mountPanel(99); // not in list — every row's View must be enabled
     await flushPromises();
 
-    const viewButtons = wrapper
-      .findAll('button')
-      .filter((b) => b.text() === 'View');
+    const viewButtons = wrapper.findAll('button').filter((b) => b.text() === 'View');
     await viewButtons[0].trigger('click'); // first row = revision 12
 
     expect(wrapper.emitted('select-revision')).toBeTruthy();
@@ -151,9 +163,7 @@ describe('HistoryPanel', () => {
     await flushPromises();
 
     const rows = wrapper.findAll('.webui-history__row');
-    const oldestRowButtons = rows[2]
-      .findAll('button')
-      .filter((b) => b.text() === 'Diff vs prev');
+    const oldestRowButtons = rows[2].findAll('button').filter((b) => b.text() === 'Diff vs prev');
     expect(oldestRowButtons[0].attributes('disabled')).toBeDefined();
   });
 
@@ -162,9 +172,7 @@ describe('HistoryPanel', () => {
     await flushPromises();
 
     const rows = wrapper.findAll('.webui-history__row');
-    const rollbackOnActive = rows[0]
-      .findAll('button')
-      .filter((b) => b.text() === 'Rollback')[0];
+    const rollbackOnActive = rows[0].findAll('button').filter((b) => b.text() === 'Rollback')[0];
     expect(rollbackOnActive.attributes('disabled')).toBeDefined();
   });
 

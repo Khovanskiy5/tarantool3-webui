@@ -43,7 +43,14 @@ const emit = defineEmits<{
 const Q_HISTORY = /* GraphQL */ `
   query CfgHistory($limit: Int) {
     configHistory(limit: $limit) {
-      revisions { revision ts user hash size action }
+      revisions {
+        revision
+        ts
+        user
+        hash
+        size
+        action
+      }
       oldest_available_revision
       more
     }
@@ -62,9 +69,13 @@ const loadHistory = async () => {
   loading.value = true;
   error.value = null;
   const res = await getClient()
-    .query<{ configHistory: HistoryPage }>(Q_HISTORY, { limit: 50 }, {
-      requestPolicy: 'network-only',
-    })
+    .query<{ configHistory: HistoryPage }>(
+      Q_HISTORY,
+      { limit: 50 },
+      {
+        requestPolicy: 'network-only',
+      },
+    )
     .toPromise();
   if (res.error) {
     error.value = res.error.message;
@@ -81,9 +92,12 @@ const loadHistory = async () => {
 
 // Re-fetch when the parent commits a new revision; the parent passes
 // currentRevision so we react to commits/rollbacks transparently.
-watch(() => props.currentRevision, (next, prev) => {
-  if (next !== prev) void loadHistory();
-});
+watch(
+  () => props.currentRevision,
+  (next, prev) => {
+    if (next !== prev) void loadHistory();
+  },
+);
 
 onMounted(loadHistory);
 
@@ -154,7 +168,9 @@ const hasMore = computed(() => page.value.more);
         <div class="webui-history__meta">
           <span v-if="rev.user" class="webui-history__user">{{ rev.user }}</span>
           <span v-if="rev.action" class="webui-history__action">{{ rev.action }}</span>
-          <span v-if="rev.size != null" class="webui-history__size">{{ formatSize(rev.size) }}</span>
+          <span v-if="rev.size != null" class="webui-history__size">{{
+            formatSize(rev.size)
+          }}</span>
           <code v-if="rev.hash" class="webui-history__hash" :title="rev.hash">
             {{ rev.hash.slice(0, 8) }}
           </code>

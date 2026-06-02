@@ -58,16 +58,16 @@ type Mode = 'off' | 'manual' | 'election' | 'supervised';
 const VALID_MODES: Mode[] = ['off', 'manual', 'election', 'supervised'];
 
 const MODE_OPTIONS = [
-  { value: 'off',        label: 'off' },
-  { value: 'manual',     label: 'manual' },
-  { value: 'election',   label: 'election (raft)' },
+  { value: 'off', label: 'off' },
+  { value: 'manual', label: 'manual' },
+  { value: 'election', label: 'election (raft)' },
   { value: 'supervised', label: 'supervised (OS agent)' },
 ];
 
 const FENCING_OPTIONS = [
-  { value: '',       label: '(keep current)' },
-  { value: 'off',    label: 'off' },
-  { value: 'soft',   label: 'soft' },
+  { value: '', label: '(keep current)' },
+  { value: 'off', label: 'off' },
+  { value: 'soft', label: 'soft' },
   { value: 'strict', label: 'strict' },
 ];
 
@@ -96,9 +96,11 @@ const quorumWarning = computed<string | null>(() => {
   const n = Number(v);
   if (Number.isNaN(n)) return null;
   if (n < quorumFloor.value) {
-    return `synchro_quorum ${n} is below N/2+1 (${quorumFloor.value}) — `
-      + 'two partitions could both reach quorum independently. The '
-      + 'backend will refuse the commit.';
+    return (
+      `synchro_quorum ${n} is below N/2+1 (${quorumFloor.value}) — ` +
+      'two partitions could both reach quorum independently. The ' +
+      'backend will refuse the commit.'
+    );
   }
   return null;
 });
@@ -120,8 +122,7 @@ watch(
       // so an operator with `mode=off + agent=true` saw the
       // checkbox unchecked and could accidentally disable the
       // agent on Apply.
-      agentEnabled.value = props.initialAgentEnabled === true
-        || m === 'supervised';
+      agentEnabled.value = props.initialAgentEnabled === true || m === 'supervised';
       synchroQuorum.value = '';
       synchroTimeout.value = '';
       electionTimeout.value = '';
@@ -230,16 +231,12 @@ function onCancel() {
   <Teleport to="body">
     <div v-if="open" class="webui-fo-settings">
       <div class="webui-fo-settings__backdrop" @click="onCancel" />
-      <div
-        class="webui-fo-settings__panel"
-        role="dialog"
-        aria-modal="true"
-      >
+      <div class="webui-fo-settings__panel" role="dialog" aria-modal="true">
         <header class="webui-fo-settings__head">
           <h2 class="webui-fo-settings__title">Failover settings</h2>
           <p class="webui-fo-settings__hint">
-            Routes through <code>setFailoverMode</code>. Empty fields keep
-            the current cluster value untouched.
+            Routes through <code>setFailoverMode</code>. Empty fields keep the current cluster value
+            untouched.
           </p>
         </header>
         <div class="webui-fo-settings__body">
@@ -265,7 +262,7 @@ function onCancel() {
                   inputmode="numeric"
                   class="webui-fo-settings__input"
                   :placeholder="`N/2+1=${quorumFloor}`"
-                >
+                />
               </label>
               <label class="webui-fo-settings__field">
                 synchro_timeout (sec)
@@ -276,13 +273,10 @@ function onCancel() {
                   step="0.1"
                   class="webui-fo-settings__input"
                   placeholder="3"
-                >
+                />
               </label>
             </div>
-            <p
-              v-if="quorumWarning"
-              class="webui-fo-settings__msg webui-fo-settings__msg--err"
-            >
+            <p v-if="quorumWarning" class="webui-fo-settings__msg webui-fo-settings__msg--err">
               {{ quorumWarning }}
             </p>
           </fieldset>
@@ -299,7 +293,7 @@ function onCancel() {
                   step="0.1"
                   class="webui-fo-settings__input"
                   placeholder="5"
-                >
+                />
               </label>
               <label class="webui-fo-settings__field">
                 election_fencing_mode
@@ -317,11 +311,7 @@ function onCancel() {
           <fieldset v-if="mode === 'off'" class="webui-fo-settings__group">
             <legend>Open-source agent</legend>
             <label class="webui-fo-settings__field webui-fo-settings__field--row">
-              <input
-                v-model="agentEnabled"
-                type="checkbox"
-                class="webui-fo-settings__checkbox"
-              >
+              <input v-model="agentEnabled" type="checkbox" class="webui-fo-settings__checkbox" />
               Enable supervised agent on top of <code>failover: off</code>
             </label>
           </fieldset>
@@ -337,15 +327,14 @@ function onCancel() {
                 step="1"
                 class="webui-fo-settings__input"
                 placeholder="3"
-              >
+              />
             </label>
           </fieldset>
 
-          <div
-            v-if="diffSummary && diffSummary.length > 0"
-            class="webui-fo-settings__diff"
-          >
-            <strong>Diff ({{ diffSummary.length }} op{{ diffSummary.length === 1 ? '' : 's' }}):</strong>
+          <div v-if="diffSummary && diffSummary.length > 0" class="webui-fo-settings__diff">
+            <strong
+              >Diff ({{ diffSummary.length }} op{{ diffSummary.length === 1 ? '' : 's' }}):</strong
+            >
             <ul>
               <li v-for="(op, idx) in diffSummary" :key="idx">
                 <code>{{ op }}</code>

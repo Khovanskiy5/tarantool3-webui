@@ -26,10 +26,10 @@ const meta: Meta<typeof TopBar> = {
     docs: {
       description: {
         component:
-          'Top application bar with brand, current instance indicator '
-          + 'and locale switcher. Renders identically against either '
-          + 'locale; the instance label falls back to a "no instance" '
-          + 'string until the cluster entity store lands.',
+          'Top application bar with brand, current instance indicator ' +
+          'and locale switcher. Renders identically against either ' +
+          'locale; the instance label falls back to a "no instance" ' +
+          'string until the cluster entity store lands.',
       },
     },
   },
@@ -77,7 +77,8 @@ export const English: Story = {
   parameters: {
     docs: {
       description: {
-        story: 'Same component, English locale. Verifies that all i18n keys resolve in both locales.',
+        story:
+          'Same component, English locale. Verifies that all i18n keys resolve in both locales.',
       },
     },
   },

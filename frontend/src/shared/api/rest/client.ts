@@ -171,10 +171,18 @@ export class RestClient {
   get<T = unknown>(path: string, opts: Omit<RestRequestOptions, 'method' | 'body'> = {}) {
     return this.request<T>(path, { ...opts, method: 'GET' });
   }
-  post<T = unknown>(path: string, body?: unknown, opts: Omit<RestRequestOptions, 'method' | 'body'> = {}) {
+  post<T = unknown>(
+    path: string,
+    body?: unknown,
+    opts: Omit<RestRequestOptions, 'method' | 'body'> = {},
+  ) {
     return this.request<T>(path, { ...opts, method: 'POST', body });
   }
-  put<T = unknown>(path: string, body?: unknown, opts: Omit<RestRequestOptions, 'method' | 'body'> = {}) {
+  put<T = unknown>(
+    path: string,
+    body?: unknown,
+    opts: Omit<RestRequestOptions, 'method' | 'body'> = {},
+  ) {
     return this.request<T>(path, { ...opts, method: 'PUT', body });
   }
   delete<T = unknown>(path: string, opts: Omit<RestRequestOptions, 'method' | 'body'> = {}) {

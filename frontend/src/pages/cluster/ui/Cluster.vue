@@ -11,8 +11,7 @@ import { ClusterTopology } from '@/widgets/cluster-topology';
 import { SuggestionsBanner } from '@/widgets/suggestions-banner';
 
 const store = useClusterStore();
-const { servers, replicasets, selfAlias, counts, fetching, error, wsState } =
-  storeToRefs(store);
+const { servers, replicasets, selfAlias, counts, fetching, error, wsState } = storeToRefs(store);
 
 // Operator-toolkit affordances only for admin+. Viewers / operators
 // keep the read-only topology view they had before.
@@ -28,7 +27,9 @@ const pausedUntil = ref<number | null>(null);
 async function refreshPauseStatus() {
   const client = getClient();
   const res = await client
-    .query<{ failoverAgentStatus: { paused_until: number | null } }>(
+    .query<{
+      failoverAgentStatus: { paused_until: number | null };
+    }>(
       'query AgentPause { failoverAgentStatus { paused_until } }',
       {},
       { requestPolicy: 'network-only' },
@@ -54,11 +55,15 @@ onScopeDispose(() => unsubMsg());
     <header class="webui-cluster-page__head">
       <h1 class="webui-cluster-page__title">Cluster</h1>
       <div class="webui-cluster-page__stats">
-        <span><strong>{{ counts.total }}</strong> servers</span>
         <span
-          :class="counts.unreachable > 0 ? 'webui-cluster-page__stat--err' : ''"
-        ><strong>{{ counts.reachable }}</strong> reachable</span>
-        <span><strong>{{ counts.leaders }}</strong> leaders</span>
+          ><strong>{{ counts.total }}</strong> servers</span
+        >
+        <span :class="counts.unreachable > 0 ? 'webui-cluster-page__stat--err' : ''"
+          ><strong>{{ counts.reachable }}</strong> reachable</span
+        >
+        <span
+          ><strong>{{ counts.leaders }}</strong> leaders</span
+        >
       </div>
       <div class="webui-cluster-page__live">
         <span
@@ -73,18 +78,12 @@ onScopeDispose(() => unsubMsg());
 
     <SuggestionsBanner />
 
-    <ClusterToolbar
-      v-if="showActions"
-      :paused-until="pausedUntil"
-      @refresh="refreshPauseStatus"
-    />
+    <ClusterToolbar v-if="showActions" :paused-until="pausedUntil" @refresh="refreshPauseStatus" />
 
     <p v-if="error" class="webui-cluster-page__error">
       {{ error.message }}
     </p>
-    <p v-else-if="fetching && servers.length === 0" class="webui-cluster-page__loading">
-      Loading…
-    </p>
+    <p v-else-if="fetching && servers.length === 0" class="webui-cluster-page__loading">Loading…</p>
     <ClusterTopology
       v-else
       :replicasets="replicasets"

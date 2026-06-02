@@ -113,9 +113,11 @@ async function onExpelConfirm() {
       :open="expelOpen"
       title="Expel instance"
       :description="
-        'Removes ' + alias + ' from cluster YAML and deletes its row in ' +
-          '_cluster on every reachable peer. Data on the expelled host stays ' +
-          'in place — rebalance vshard buckets manually before decommissioning.'
+        'Removes ' +
+        alias +
+        ' from cluster YAML and deletes its row in ' +
+        '_cluster on every reachable peer. Data on the expelled host stays ' +
+        'in place — rebalance vshard buckets manually before decommissioning.'
       "
       :expected="alias"
       :prompt="`Type the instance alias (${alias}) to confirm:`"

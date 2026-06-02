@@ -76,7 +76,11 @@ const localeModel = computed<Locale>({
         size="small"
         class="webui-top-bar__locale-switch"
       />
-      <span v-if="session.user" class="webui-top-bar__user" :title="(session.user.roles ?? []).join(', ')">
+      <span
+        v-if="session.user"
+        class="webui-top-bar__user"
+        :title="(session.user.roles ?? []).join(', ')"
+      >
         <i class="pi pi-user" /> {{ session.user.user }}
       </span>
       <Button

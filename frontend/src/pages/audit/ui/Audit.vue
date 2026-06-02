@@ -46,32 +46,36 @@ const filter = reactive({
 // a single chip. The audit page only ever has one preset active at a
 // time so the operator can keep typing into the user / scope fields
 // without losing the family selection.
-type ActionPreset =
-  | { label: string; exact: string }
-  | { label: string; prefix: string };
+type ActionPreset = { label: string; exact: string } | { label: string; prefix: string };
 
 const actionPresets: ActionPreset[] = [
-  { label: 'Cluster ops',       prefix: 'cluster.' },
-  { label: 'Config rollback',   exact:  'config.rollback' },
-  { label: 'Config commit',     exact:  'config.commit' },
-  { label: 'Login',             exact:  'auth.login' },
-  { label: 'Login failed',      exact:  'auth.login_failed' },
-  { label: 'Logout',            exact:  'auth.logout' },
-  { label: 'RBAC denied',       exact:  'rbac.denied' },
-  { label: 'Console (Lua)',     exact:  'eval.lua' },
-  { label: 'Console (SQL)',     exact:  'eval.sql' },
+  { label: 'Cluster ops', prefix: 'cluster.' },
+  { label: 'Config rollback', exact: 'config.rollback' },
+  { label: 'Config commit', exact: 'config.commit' },
+  { label: 'Login', exact: 'auth.login' },
+  { label: 'Login failed', exact: 'auth.login_failed' },
+  { label: 'Logout', exact: 'auth.logout' },
+  { label: 'RBAC denied', exact: 'rbac.denied' },
+  { label: 'Console (Lua)', exact: 'eval.lua' },
+  { label: 'Console (SQL)', exact: 'eval.sql' },
 ];
 
 const buildFilter = () => ({
-  user:          filter.user.trim()          || undefined,
-  action:        filter.action.trim()        || undefined,
+  user: filter.user.trim() || undefined,
+  action: filter.action.trim() || undefined,
   action_prefix: filter.action_prefix.trim() || undefined,
-  scope:         filter.scope.trim()         || undefined,
+  scope: filter.scope.trim() || undefined,
 });
 
-const apply = () => { store.load(buildFilter()); };
-const loadMore = () => { store.load(buildFilter(), { append: true }); };
-const exportNow = () => { downloadExportedAudit(buildFilter()); };
+const apply = () => {
+  store.load(buildFilter());
+};
+const loadMore = () => {
+  store.load(buildFilter(), { append: true });
+};
+const exportNow = () => {
+  downloadExportedAudit(buildFilter());
+};
 const resetFilters = () => {
   filter.user = '';
   filter.action = '';
@@ -106,7 +110,13 @@ import { ref } from 'vue';
 const VERIFY_Q = /* GraphQL */ `
   query AuditChainVerify {
     verifyAuditChain {
-      ok scanned seals broken_at expected_hash actual_hash reason
+      ok
+      scanned
+      seals
+      broken_at
+      expected_hash
+      actual_hash
+      reason
     }
   }
 `;
@@ -118,12 +128,15 @@ async function verifyChain() {
   verifying.value = true;
   try {
     const res = await getClient()
-      .query<{ verifyAuditChain: ChainVerifyResult }>(
-        VERIFY_Q, {}, { requestPolicy: 'network-only' })
+      .query<{
+        verifyAuditChain: ChainVerifyResult;
+      }>(VERIFY_Q, {}, { requestPolicy: 'network-only' })
       .toPromise();
     if (res.error) {
       verifyResult.value = {
-        ok: false, scanned: 0, seals: 0,
+        ok: false,
+        scanned: 0,
+        seals: 0,
         reason: res.error.message,
       };
       return;
@@ -134,7 +147,9 @@ async function verifyChain() {
   }
 }
 
-onMounted(() => { store.load({}); });
+onMounted(() => {
+  store.load({});
+});
 </script>
 
 <template>
@@ -145,9 +160,11 @@ onMounted(() => { store.load({}); });
         <Tag
           v-if="verifyResult"
           :severity="verifyResult.ok ? 'success' : 'danger'"
-          :value="verifyResult.ok
-            ? `chain OK — ${verifyResult.scanned} rows, ${verifyResult.seals} seal(s)`
-            : `chain BROKEN — ${verifyResult.reason ?? 'see broken_at'}`"
+          :value="
+            verifyResult.ok
+              ? `chain OK — ${verifyResult.scanned} rows, ${verifyResult.seals} seal(s)`
+              : `chain BROKEN — ${verifyResult.reason ?? 'see broken_at'}`
+          "
           class="webui-audit__chain-badge"
         />
         <Button
@@ -159,12 +176,7 @@ onMounted(() => { store.load({}); });
           :loading="verifying"
           @click="verifyChain"
         />
-        <Button
-          size="small"
-          icon="pi pi-download"
-          label="Export JSON"
-          @click="exportNow"
-        />
+        <Button size="small" icon="pi pi-download" label="Export JSON" @click="exportNow" />
       </div>
     </header>
 
@@ -178,8 +190,8 @@ onMounted(() => { store.load({}); });
           'webui-audit__preset',
           {
             'webui-audit__preset--active':
-              ('exact' in preset && filter.action === preset.exact)
-              || ('prefix' in preset && filter.action_prefix === preset.prefix),
+              ('exact' in preset && filter.action === preset.exact) ||
+              ('prefix' in preset && filter.action_prefix === preset.prefix),
           },
         ]"
         :title="
@@ -233,20 +245,23 @@ onMounted(() => { store.load({}); });
     </DataTable>
 
     <div class="webui-audit__footer">
-      <Button
-        v-if="hasMore"
-        size="small"
-        text
-        label="Load more"
-        @click="loadMore"
-      />
+      <Button v-if="hasMore" size="small" text label="Load more" @click="loadMore" />
     </div>
   </section>
 </template>
 
 <style scoped>
-.webui-audit { padding: 1rem 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
-.webui-audit__head { display: flex; justify-content: space-between; align-items: center; }
+.webui-audit {
+  padding: 1rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.webui-audit__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
 .webui-audit__presets {
   display: flex;
   flex-wrap: wrap;
@@ -289,9 +304,22 @@ onMounted(() => { store.load({}); });
   border-color: var(--webui-danger, #c0392b);
   color: var(--webui-danger, #c0392b);
 }
-.webui-audit__filters { display: flex; gap: 0.5rem; }
-.webui-audit__error { color: var(--p-message-error-color, #d83535); }
-.webui-audit__payload { font-family: var(--webui-font-mono); font-size: 0.8rem; }
-.webui-audit__muted { color: var(--webui-text-muted); }
-.webui-audit__footer { display: flex; justify-content: center; }
+.webui-audit__filters {
+  display: flex;
+  gap: 0.5rem;
+}
+.webui-audit__error {
+  color: var(--p-message-error-color, #d83535);
+}
+.webui-audit__payload {
+  font-family: var(--webui-font-mono);
+  font-size: 0.8rem;
+}
+.webui-audit__muted {
+  color: var(--webui-text-muted);
+}
+.webui-audit__footer {
+  display: flex;
+  justify-content: center;
+}
 </style>

@@ -7,8 +7,20 @@ import Tag from 'primevue/tag';
 
 import { getClient } from '@/shared/api/graphql';
 
-interface IndexInfo { id: number; name: string; type: string | null; unique: boolean | null; parts: string[] | null; }
-interface SpaceInfo { id: number; name: string; engine: string | null; row_count: number | null; indexes: IndexInfo[] | null; }
+interface IndexInfo {
+  id: number;
+  name: string;
+  type: string | null;
+  unique: boolean | null;
+  parts: string[] | null;
+}
+interface SpaceInfo {
+  id: number;
+  name: string;
+  engine: string | null;
+  row_count: number | null;
+  indexes: IndexInfo[] | null;
+}
 
 const spaces = ref<SpaceInfo[]>([]);
 const loading = ref(false);
@@ -19,15 +31,34 @@ const expanded = ref<Record<string, boolean>>({});
 const Q = /* GraphQL */ `
   query Spaces($sys: Boolean!) {
     spaces(include_system: $sys) {
-      spaces { id name engine row_count indexes { id name type unique parts } }
+      spaces {
+        id
+        name
+        engine
+        row_count
+        indexes {
+          id
+          name
+          type
+          unique
+          parts
+        }
+      }
     }
   }
 `;
 
 const load = async () => {
-  loading.value = true; error.value = null;
-  const res = await getClient().query<{ spaces: { spaces: SpaceInfo[] } }>(Q, { sys: includeSystem.value }).toPromise();
-  if (res.error) { error.value = res.error.message; loading.value = false; return; }
+  loading.value = true;
+  error.value = null;
+  const res = await getClient()
+    .query<{ spaces: { spaces: SpaceInfo[] } }>(Q, { sys: includeSystem.value })
+    .toPromise();
+  if (res.error) {
+    error.value = res.error.message;
+    loading.value = false;
+    return;
+  }
   spaces.value = res.data?.spaces?.spaces ?? [];
   loading.value = false;
 };
@@ -86,9 +117,28 @@ onMounted(load);
 </template>
 
 <style scoped>
-.webui-schema { padding: 1rem 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
-.webui-schema__head { display: flex; align-items: center; justify-content: space-between; }
-.webui-schema__head h1 { margin: 0; }
-.webui-schema__toggle { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: var(--webui-text-muted); }
-.webui-schema__error { color: var(--p-message-error-color, #d83535); }
+.webui-schema {
+  padding: 1rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.webui-schema__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.webui-schema__head h1 {
+  margin: 0;
+}
+.webui-schema__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--webui-text-muted);
+}
+.webui-schema__error {
+  color: var(--p-message-error-color, #d83535);
+}
 </style>

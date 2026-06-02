@@ -33,8 +33,7 @@ const LEVEL_ORDER: Record<Level, number> = { debug: 1, info: 2, warn: 3, error: 
 const DEFAULT_TAG = 'general';
 const VALID_LEVELS = new Set<Level>(['debug', 'info', 'warn', 'error']);
 
-const isLevel = (v: unknown): v is Level =>
-  typeof v === 'string' && VALID_LEVELS.has(v as Level);
+const isLevel = (v: unknown): v is Level => typeof v === 'string' && VALID_LEVELS.has(v as Level);
 
 const resolveDefaultLevel = (): Level => {
   const fromEnv = import.meta.env.VITE_LOG_LEVEL;
@@ -57,12 +56,10 @@ const consoleSink: Sink = (entry) => {
       .filter(([k]) => !['ts', 'level', 'tag', 'msg'].includes(k))
       .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
       .join(' ');
-    // eslint-disable-next-line no-console
     console[entry.level === 'debug' ? 'log' : entry.level](
       `[${entry.tag}] ${entry.msg}${tail ? ' ' + tail : ''}`,
     );
   } else {
-    // eslint-disable-next-line no-console
     console[entry.level === 'debug' ? 'log' : entry.level](JSON.stringify(entry));
   }
 };

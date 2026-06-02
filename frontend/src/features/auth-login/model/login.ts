@@ -30,22 +30,16 @@ export const useLoginStore = defineStore('auth-login', () => {
   const pending = ref(false);
   const error = ref<LoginError | null>(null);
 
-  const submit = async (
-    payload: { user: string; password: string },
-  ): Promise<boolean> => {
+  const submit = async (payload: { user: string; password: string }): Promise<boolean> => {
     pending.value = true;
     error.value = null;
     try {
-      const res = await restClient.post<SessionUser>(
-        '/api/auth/login',
-        payload,
-        {
-          handlers: {
-            onUnauthorized: () => {},
-            onForbidden: () => {},
-          },
+      const res = await restClient.post<SessionUser>('/api/auth/login', payload, {
+        handlers: {
+          onUnauthorized: () => {},
+          onForbidden: () => {},
         },
-      );
+      });
       // Login response shape matches /me sans `roles`; we still
       // re-probe /me so the session.roles array comes from the
       // canonical source.

@@ -15,11 +15,7 @@ const goHome = () => router.push('/');
     <p class="webui-error-page__description">
       {{ t('pages.not_found.description') }}
     </p>
-    <button
-      type="button"
-      class="webui-error-page__action"
-      @click="goHome"
-    >
+    <button type="button" class="webui-error-page__action" @click="goHome">
       {{ t('common.back_to_dashboard') }}
     </button>
   </section>
