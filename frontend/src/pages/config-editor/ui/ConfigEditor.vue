@@ -2,6 +2,7 @@
 import { onMounted, ref, computed } from 'vue';
 import Button from 'primevue/button';
 import Message from 'primevue/message';
+import Tag from 'primevue/tag';
 
 import { getClient } from '@/shared/api/graphql';
 import { DestructiveActionDialog } from '@/shared/ui/destructive-action-dialog';
@@ -47,6 +48,7 @@ const validating = ref(false);
 const preparing = ref(false);
 const committing = ref(false);
 const rollingBack = ref(false);
+const rollbackTarget = ref<number | null>(null);
 const forceApplying = ref(false);
 const forceApplyTarget = ref<number | null>(null);
 const error = ref<string | null>(null);
@@ -391,17 +393,21 @@ const fetchPreviousRevisionYaml = async (rev: number): Promise<string | null> =>
   return await fetchRevisionYaml(prev);
 };
 
-const onRequestRollback = async (rev: number) => {
-  // Confirmation guard — rollback is destructive (changes cluster
-  // state on every peer). Native confirm() keeps the page free of
-  // dialog framework deps; the dedicated DestructiveActionDialog
-  // pattern lands in Phase 5 (Task 5.16).
-  const ok = window.confirm(
-    `Roll the cluster config back to revision #${rev}? ` +
-      'This will create a new commit and fan-out config:reload to every peer.',
-  );
-  if (!ok) return;
-
+// Rollback is destructive — gated behind the shared
+// DestructiveActionDialog, same pattern as force-apply below. The
+// dialog forces the operator to type the revision number verbatim
+// before Confirm enables, which kills the misclick failure mode the
+// previous `window.confirm` had.
+const onRequestRollback = (rev: number) => {
+  rollbackTarget.value = rev;
+};
+const cancelRollback = () => {
+  if (rollingBack.value) return;
+  rollbackTarget.value = null;
+};
+const confirmRollback = async () => {
+  const rev = rollbackTarget.value;
+  if (rev == null) return;
   rollingBack.value = true;
   error.value = null;
   info.value = null;
@@ -410,20 +416,20 @@ const onRequestRollback = async (rev: number) => {
     .toPromise();
   if (res.error) {
     error.value = res.error.message;
-    rollingBack.value = false;
-    return;
-  }
-  const r = res.data?.rollbackConfig;
-  if (r?.applied) {
-    info.value = r.message ?? `Rolled back to #${rev}. New revision ${r.revision}.`;
-    preparedId.value = null;
-    diff.value = [];
-    await load();
-    historyPanelRef.value?.refresh();
   } else {
-    error.value = r?.message ?? 'rollback not applied';
+    const r = res.data?.rollbackConfig;
+    if (r?.applied) {
+      info.value = r.message ?? `Rolled back to #${rev}. New revision ${r.revision}.`;
+      preparedId.value = null;
+      diff.value = [];
+      await load();
+      historyPanelRef.value?.refresh();
+    } else {
+      error.value = r?.message ?? 'rollback not applied';
+    }
   }
   rollingBack.value = false;
+  rollbackTarget.value = null;
 };
 
 // Force apply revision N (Task 5.17). Composes through the
@@ -482,11 +488,12 @@ onMounted(load);
 <template>
   <section class="webui-cfg">
     <header class="webui-cfg__head">
-      <div>
+      <div class="webui-cfg__title-block">
         <h1>Configuration editor</h1>
-        <p class="webui-cfg__sub">
-          source: <code>{{ source || '—' }}</code> · revision: <code>{{ revision ?? 0 }}</code>
-        </p>
+        <div class="webui-cfg__title-meta">
+          <Tag :value="`source: ${source || '—'}`" severity="secondary" />
+          <Tag :value="`revision: ${revision ?? 0}`" severity="info" />
+        </div>
       </div>
       <div class="webui-cfg__buttons">
         <Button outlined icon="pi pi-download" size="small" label="Download" @click="download" />
@@ -501,80 +508,15 @@ onMounted(load);
       </div>
     </header>
 
+    <!-- The split is just editor + history so both columns share the
+         same row height. Actions / messages / validation /
+         diff sections sit *below* the split (full width) so the
+         History panel can stay flush with the editor's bottom edge
+         rather than stretching past it to cover those rows. -->
     <div class="webui-cfg__split">
-      <div class="webui-cfg__main">
-        <YamlEditor v-model="yaml" height="60vh" />
-
-        <div class="webui-cfg__actions">
-          <Button
-            icon="pi pi-check"
-            size="small"
-            label="Validate"
-            :loading="validating"
-            @click="validate"
-          />
-          <Button
-            icon="pi pi-eye"
-            size="small"
-            label="Preview diff"
-            :loading="preparing"
-            @click="preview"
-          />
-          <Button
-            v-if="hasPrepared"
-            severity="success"
-            icon="pi pi-cloud-upload"
-            size="small"
-            label="Apply"
-            :loading="committing"
-            @click="apply"
-          />
-          <Button
-            v-if="hasPrepared"
-            severity="secondary"
-            outlined
-            icon="pi pi-times"
-            size="small"
-            label="Discard prepared"
-            @click="abort"
-          />
-        </div>
-
-        <Message v-if="info" severity="info" :closable="true" @close="info = null">
-          {{ info }}
-        </Message>
-        <Message v-if="error" severity="error" :closable="true" @close="error = null">
-          {{ error }}
-        </Message>
-        <Message v-if="rollingBack" severity="warn" :closable="false">
-          Rolling back to selected revision…
-        </Message>
-
-        <section v-if="validationIssues.length > 0" class="webui-cfg__issues">
-          <h2>Validation issues</h2>
-          <ul>
-            <li v-for="(it, idx) in validationIssues" :key="idx">
-              <code>{{ it.path }}</code
-              >: {{ it.message }}
-            </li>
-          </ul>
-        </section>
-
-        <section v-if="diff.length > 0" class="webui-cfg__diff">
-          <h2>Diff ({{ diff.length }} ops)</h2>
-          <ul>
-            <li v-for="(op, idx) in diff" :key="idx" :class="`webui-cfg__diff-${op.op}`">
-              <span class="webui-cfg__diff-tag">{{ op.op }}</span>
-              <code>{{ op.path }}</code>
-              <span v-if="op.from !== undefined && op.from !== null">
-                from <code>{{ op.from }}</code></span
-              >
-              <span v-if="op.to !== undefined && op.to !== null">
-                to <code>{{ op.to }}</code></span
-              >
-            </li>
-          </ul>
-        </section>
+      <!-- Editor stretches to fill the row height the grid gives it. -->
+      <div class="webui-cfg__editor-slot">
+        <YamlEditor v-model="yaml" height="100%" />
       </div>
 
       <HistoryPanel
@@ -588,6 +530,93 @@ onMounted(load);
       />
     </div>
 
+    <div class="webui-cfg__actions">
+      <Button
+        icon="pi pi-check"
+        size="small"
+        label="Validate"
+        :loading="validating"
+        @click="validate"
+      />
+      <Button
+        icon="pi pi-eye"
+        size="small"
+        label="Preview diff"
+        :loading="preparing"
+        @click="preview"
+      />
+      <Button
+        v-if="hasPrepared"
+        severity="success"
+        icon="pi pi-cloud-upload"
+        size="small"
+        label="Apply"
+        :loading="committing"
+        @click="apply"
+      />
+      <Button
+        v-if="hasPrepared"
+        severity="secondary"
+        outlined
+        icon="pi pi-times"
+        size="small"
+        label="Discard prepared"
+        @click="abort"
+      />
+    </div>
+
+    <Message v-if="info" severity="info" :closable="true" @close="info = null">
+      {{ info }}
+    </Message>
+    <Message v-if="error" severity="error" :closable="true" @close="error = null">
+      {{ error }}
+    </Message>
+    <Message v-if="rollingBack" severity="warn" :closable="false">
+      Rolling back to selected revision…
+    </Message>
+
+    <section v-if="validationIssues.length > 0" class="webui-cfg__issues">
+      <h2>Validation issues</h2>
+      <ul>
+        <li v-for="(it, idx) in validationIssues" :key="idx">
+          <code>{{ it.path }}</code
+          >: {{ it.message }}
+        </li>
+      </ul>
+    </section>
+
+    <section v-if="diff.length > 0" class="webui-cfg__diff">
+      <h2>Diff ({{ diff.length }} ops)</h2>
+      <ul>
+        <li v-for="(op, idx) in diff" :key="idx">
+          <!-- Map the JSON-patch-style op verbs to PrimeVue Tag
+               severities. Anything we do not specifically know
+               about falls back to `info` so a backend that adds
+               a new op type does not render as an empty chip. -->
+          <Tag
+            class="webui-cfg__diff-tag"
+            :value="op.op"
+            :severity="
+              op.op === 'added'
+                ? 'success'
+                : op.op === 'removed'
+                  ? 'danger'
+                  : op.op === 'changed'
+                    ? 'warn'
+                    : 'info'
+            "
+          />
+          <code>{{ op.path }}</code>
+          <span v-if="op.from !== undefined && op.from !== null">
+            from <code>{{ op.from }}</code></span
+          >
+          <span v-if="op.to !== undefined && op.to !== null">
+            to <code>{{ op.to }}</code></span
+          >
+        </li>
+      </ul>
+    </section>
+
     <DiffViewer
       :open="diffViewer.open"
       :title="diffViewer.title"
@@ -596,6 +625,25 @@ onMounted(load);
       :original="diffViewer.original"
       :modified="diffViewer.modified"
       @close="diffViewer.open = false"
+    />
+    <DestructiveActionDialog
+      :open="rollbackTarget != null"
+      title="Rollback configuration"
+      :description="
+        'Creates a new commit carrying the YAML of revision #' +
+        (rollbackTarget ?? '?') +
+        ' and ' +
+        'fans out config:reload on every peer. The cluster state will revert to ' +
+        'that revision’s topology, credentials, roles, and runtime knobs. The ' +
+        'rollback itself becomes the new latest revision; older commits stay in ' +
+        'the timeline.'
+      "
+      :expected="String(rollbackTarget ?? '')"
+      :prompt="`Type the revision number (${rollbackTarget ?? '?'}) to confirm:`"
+      confirm-label="Rollback"
+      :pending="rollingBack"
+      @cancel="cancelRollback"
+      @confirm="confirmRollback"
     />
     <DestructiveActionDialog
       :open="forceApplyTarget != null"
@@ -624,6 +672,13 @@ onMounted(load);
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  /* The app shell (`<main class="webui-shell__main">`) is a column
+     flexbox with `flex: 1`. Claiming `flex: 1` here makes the page
+     consume the same height the shell already gives us, regardless
+     of the top bar's actual height — no `100vh - <topbar>` math
+     that breaks on different viewports / topbar paddings. */
+  flex: 1;
+  min-height: 0;
 }
 .webui-cfg__head {
   display: flex;
@@ -633,10 +688,15 @@ onMounted(load);
 .webui-cfg__head h1 {
   margin: 0;
 }
-.webui-cfg__sub {
-  margin: 0.25rem 0 0;
-  color: var(--webui-text-muted);
-  font-size: 0.85rem;
+.webui-cfg__title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.webui-cfg__title-meta {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
 }
 .webui-cfg__buttons {
   display: flex;
@@ -646,25 +706,53 @@ onMounted(load);
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
   gap: 1rem;
-  align-items: start;
+  align-items: stretch;
+  /* `flex: 1; min-height: 0` lets the split consume the rest of the
+     column-flex parent so both grid items can fill it. */
+  flex: 1;
+  min-height: 0;
 }
-.webui-cfg__main {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
+/* The editor wrapper expands to whatever the grid row gives it. The
+   `min-height` keeps things usable on a half-screen window where
+   `flex: 1` could otherwise collapse to zero. */
+.webui-cfg__editor-slot {
   min-width: 0;
+  min-height: 18rem;
 }
+/* The History panel sits in the second grid column. `align-items:
+   stretch` on the grid already gives it the same row height as the
+   editor column; the rules below remove HistoryPanel's own
+   `max-height: 70vh` cap so it can actually use the room. The
+   inner block keeps its `overflow-y: auto` so the timeline scrolls
+   inside the panel instead of pushing the page taller.
+   Vue forwards the `webui-cfg__history` class to HistoryPanel's
+   root element, which already carries `webui-history` — so both
+   classes land on the same `<aside>`. A descendant-style selector
+   (`.webui-cfg__history :deep(.webui-history)`) would not match
+   because the two are not in a parent/child relationship; styling
+   directly on `.webui-cfg__history` is enough. */
 .webui-cfg__history {
-  position: sticky;
-  top: 1rem;
+  align-self: stretch;
+  min-height: 0;
+  max-height: none;
+  height: 100%;
+  /* The HistoryPanel default `--webui-border` token is barely
+     visible on the page background in the dark theme; once the
+     card stretches to the bottom it stops looking like a card.
+     Use the PrimeVue content border instead — it has the contrast
+     operators expect from a panel boundary. */
+  border-color: var(--p-content-border-color, var(--webui-border));
 }
 @media (max-width: 1100px) {
   .webui-cfg__split {
     grid-template-columns: 1fr;
   }
+  /* On a stacked layout the History block does not have a fixed
+     row height to inherit, so cap it explicitly to keep the page
+     scroll length sane. */
   .webui-cfg__history {
-    position: static;
     max-height: 50vh;
+    height: auto;
   }
 }
 .webui-cfg__editor {
@@ -688,25 +776,10 @@ onMounted(load);
   margin: 0 0 0.5rem;
   font-size: 1rem;
 }
+/* Tag inherits its severity colours from the PrimeVue theme; the
+   only thing we add is consistent spacing between the chip and the
+   path that follows it on every diff row. */
 .webui-cfg__diff-tag {
-  display: inline-block;
-  min-width: 4.5rem;
-  padding: 0 0.4rem;
-  border-radius: 999px;
-  font-size: 0.7rem;
-  text-transform: uppercase;
   margin-right: 0.5rem;
-}
-.webui-cfg__diff-added .webui-cfg__diff-tag {
-  background: rgba(60, 170, 80, 0.18);
-  color: #1b7c34;
-}
-.webui-cfg__diff-removed .webui-cfg__diff-tag {
-  background: rgba(220, 80, 80, 0.18);
-  color: #a01a1a;
-}
-.webui-cfg__diff-changed .webui-cfg__diff-tag {
-  background: rgba(220, 170, 40, 0.18);
-  color: #876202;
 }
 </style>
