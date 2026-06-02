@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia';
-import Dropdown from 'primevue/dropdown';
-import Button from 'primevue/button';
+import Select from 'primevue/select';
+import Tag from 'primevue/tag';
+import Message from 'primevue/message';
 
 import { useIssueStore, IssueRow } from '@/entities/issue';
 
@@ -34,69 +35,69 @@ const categoryOptions = [
   <section class="webui-issues-page">
     <header class="webui-issues-page__head">
       <h1 class="webui-issues-page__title">Issues</h1>
-      <div class="webui-issues-page__summary">
-        <span class="webui-issues-page__chip webui-issues-page__chip--critical">
-          critical {{ summary.critical }}
-        </span>
-        <span class="webui-issues-page__chip webui-issues-page__chip--warning">
-          warning {{ summary.warning }}
-        </span>
-        <span class="webui-issues-page__chip">total {{ summary.total }}</span>
-      </div>
+      <Tag :value="`critical ${summary.critical}`" severity="danger" />
+      <Tag :value="`warning ${summary.warning}`" severity="warn" />
+      <Tag :value="`total ${summary.total}`" severity="secondary" />
     </header>
 
     <fieldset class="webui-issues-page__filters">
-      <label>
-        <span class="webui-issues-page__filter-label">Severity</span>
-        <Dropdown
+      <!-- `show-clear` puts a built-in × inside each Select that
+           sets the bound value to null — the canonical PrimeVue way
+           to "unset" a single filter. Combined with the `{value:
+           null, label: 'all'}` option already in each list, the user
+           sees the same "all" placeholder whether they clicked clear
+           or never picked a value. Removes the need for a separate
+           Reset button that operated on every filter at once. -->
+      <div class="r-field">
+        <label for="issues-severity">Severity</label>
+        <Select
           v-model="filters.severity"
+          input-id="issues-severity"
           :options="severityOptions"
           option-label="label"
           option-value="value"
           placeholder="all"
           size="small"
-          class="webui-issues-page__select"
+          show-clear
         />
-      </label>
-      <label>
-        <span class="webui-issues-page__filter-label">Scope</span>
-        <Dropdown
+      </div>
+      <div class="r-field">
+        <label for="issues-scope">Scope</label>
+        <Select
           v-model="filters.scope"
+          input-id="issues-scope"
           :options="scopeOptions"
           option-label="label"
           option-value="value"
           placeholder="all"
           size="small"
-          class="webui-issues-page__select"
+          show-clear
         />
-      </label>
-      <label>
-        <span class="webui-issues-page__filter-label">Category</span>
-        <Dropdown
+      </div>
+      <div class="r-field">
+        <label for="issues-category">Category</label>
+        <Select
           v-model="filters.category"
+          input-id="issues-category"
           :options="categoryOptions"
           option-label="label"
           option-value="value"
           placeholder="all"
           size="small"
-          class="webui-issues-page__select"
+          show-clear
         />
-      </label>
-      <Button
-        type="button"
-        label="Reset"
-        severity="secondary"
-        outlined
-        size="small"
-        class="webui-issues-page__reset"
-        @click="store.resetFilters"
-      />
+      </div>
     </fieldset>
 
-    <p v-if="fetching && items.length === 0" class="webui-issues-page__empty">Loading…</p>
-    <p v-else-if="items.length === 0" class="webui-issues-page__empty">
-      No issues match the current filter.
-    </p>
+    <!-- Single Message instance instead of two `v-if`/`v-else-if` siblings:
+         every WS snapshot tick flips `fetching` between true and false,
+         and two distinct elements would unmount + remount the PrimeVue
+         Message each time, re-running its enter animation and causing
+         the visible flicker. Keeping one element and swapping only the
+         text leaves the DOM node in place. -->
+    <Message v-if="items.length === 0" severity="info" :closable="false" variant="simple">
+      {{ fetching ? 'Loading…' : 'No issues match the current filter.' }}
+    </Message>
     <div v-else class="webui-issues-page__list">
       <IssueRow v-for="issue in items" :key="issue.id" :issue="issue" />
     </div>
@@ -118,40 +119,16 @@ const categoryOptions = [
 .webui-issues-page__head {
   display: flex;
   align-items: center;
-  gap: 1rem;
+  gap: 0.75rem;
   flex-wrap: wrap;
 }
 
 .webui-issues-page__title {
   margin: 0;
   font-size: 1.4rem;
-}
-
-.webui-issues-page__summary {
-  display: flex;
-  gap: 0.4rem;
-  margin-left: auto;
-}
-
-.webui-issues-page__chip {
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  padding: 0.15rem 0.55rem;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--webui-text-muted);
-  font-weight: 700;
-}
-
-.webui-issues-page__chip--critical {
-  background: rgba(248, 81, 73, 0.18);
-  color: var(--webui-danger);
-}
-
-.webui-issues-page__chip--warning {
-  background: rgba(210, 153, 34, 0.18);
-  color: var(--webui-warning);
+  /* Push the summary tags to the far right while keeping them packed
+     next to each other with the parent's gap. */
+  margin-right: auto;
 }
 
 .webui-issues-page__filters {
@@ -165,39 +142,28 @@ const categoryOptions = [
   font-size: 0.85rem;
 }
 
-.webui-issues-page__filters label {
-  display: inline-flex;
+/* Canonical r-field row, matching the project pattern from the
+   failover settings dialog. The min-width keeps the dropdowns from
+   collapsing to icon-size on narrow viewports. */
+.r-field {
+  display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-}
-
-.webui-issues-page__filter-label {
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--webui-text-muted);
-}
-
-.webui-issues-page__select {
+  gap: 0.4rem;
   min-width: 9rem;
 }
 
-.webui-issues-page__reset {
-  align-self: flex-end;
+.r-field > label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--webui-text-muted);
 }
 
 .webui-issues-page__list {
   display: flex;
   flex-direction: column;
   gap: 0.45rem;
-}
-
-.webui-issues-page__empty {
-  color: var(--webui-text-muted);
-  text-align: center;
-  padding: 2rem;
-  border: 1px dashed var(--webui-border);
-  border-radius: var(--webui-radius);
 }
 
 .webui-issues-page__footer {
