@@ -57,7 +57,8 @@ const csrfTokenStore = {
 const withCsrfToken = (operation: Operation): Operation => {
   const token = csrfTokenStore.read();
   if (!token) return operation;
-  const existingHeaders = (operation.context.fetchOptions as RequestInit | undefined)?.headers ?? {};
+  const existingHeaders =
+    (operation.context.fetchOptions as RequestInit | undefined)?.headers ?? {};
   return {
     ...operation,
     context: {
@@ -141,8 +142,10 @@ const tapErrorCodes =
       }),
     );
 
-const csrfExchange: Exchange = ({ forward }) => (ops$) =>
-  forward(pipe(ops$, map(withCsrfToken)));
+const csrfExchange: Exchange =
+  ({ forward }) =>
+  (ops$) =>
+    forward(pipe(ops$, map(withCsrfToken)));
 
 /**
  * Build a urql client. Accepting handlers as a parameter keeps tests
@@ -154,6 +157,11 @@ export const createWebuiClient = (handlers: ErrorHandlers = {}): Client => {
   return createClient({
     url: GRAPHQL_PATH,
     requestPolicy: 'cache-and-network',
+    // @urql/core 5+ switched the default to `'within-url-limit'`, which
+    // ships short queries as GET. The backend only registers
+    // POST /admin/api (see backend/webui/graphql/server.lua); without
+    // this override every short query 404s. Pin it back to POST.
+    preferGetMethod: false,
     fetchOptions: {
       credentials: 'same-origin',
       headers: {

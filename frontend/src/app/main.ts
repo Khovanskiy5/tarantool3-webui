@@ -7,7 +7,7 @@
  * has a chance to throw during install.
  */
 
-import { createApp } from 'vue';
+import { createApp, watch } from 'vue';
 import PrimeVue from 'primevue/config';
 import Aura from '@primevue/themes/aura';
 
@@ -54,12 +54,23 @@ installUrql(app);
 router.isReady().finally(() => {
   app.mount('#app');
 
-  // Start the live cluster subscription right after mount. The
-  // client has its own backoff loop; if /ws is unreachable
-  // (production without WEBUI_DEV_ANONYMOUS_WS) the stores keep
-  // working via network-only urql refetches.
-  import('@/shared/api/ws').then(({ wsClient }) => {
-    wsClient.connect();
-    info('webui SPA mounted', { app_version: APP_VERSION });
-  });
+  // Live cluster subscription is gated by the authenticated session:
+  // the backend's WS handshake rejects the upgrade without a session
+  // cookie, so an anonymous connect from the /login page would loop
+  // through endless reconnect attempts and spam the console. Watch
+  // session.isAuthenticated and let the WS singleton track its state.
+  Promise.all([import('@/shared/api/ws'), import('@/entities/session')]).then(
+    ([{ wsClient }, { useSessionStore }]) => {
+      const session = useSessionStore();
+      watch(
+        () => session.isAuthenticated,
+        (isAuth) => {
+          if (isAuth) wsClient.connect();
+          else wsClient.disconnect();
+        },
+        { immediate: true },
+      );
+      info('webui SPA mounted', { app_version: APP_VERSION });
+    },
+  );
 });
