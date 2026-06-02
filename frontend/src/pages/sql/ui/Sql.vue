@@ -34,6 +34,7 @@ import Tag from 'primevue/tag';
 import ToggleSwitch from 'primevue/toggleswitch';
 import Dialog from 'primevue/dialog';
 import InputText from 'primevue/inputtext';
+import Fluid from 'primevue/fluid';
 import Checkbox from 'primevue/checkbox';
 
 import { getClient } from '@/shared/api/graphql';
@@ -674,17 +675,24 @@ function renderCell(v: unknown): string {
       header="Save SQL snippet"
       :style="{ width: '32rem' }"
     >
-      <div class="webui-sql__save-row">
-        <label>Name</label>
-        <InputText v-model="saveName" placeholder="my query" />
-      </div>
-      <div class="webui-sql__save-row">
-        <label>Share</label>
-        <label class="webui-sql__inline">
-          <Checkbox v-model="saveShared" binary />
-          <span>Visible to every operator+</span>
-        </label>
-      </div>
+      <!-- Canonical `<Fluid>` + r-field rows (the project's PrimeVue
+           form pattern). Fluid stretches the InputText to 100% width
+           so the Name field aligns with the dialog edges; explicit
+           `<label for=...>` ties the label to its input so clicking
+           it focuses the field. -->
+      <Fluid>
+        <div class="r-field">
+          <label for="sql-snippet-name">Name</label>
+          <InputText id="sql-snippet-name" v-model="saveName" placeholder="my query" />
+        </div>
+        <div class="r-field">
+          <label for="sql-snippet-shared">Share</label>
+          <label class="webui-sql__inline">
+            <Checkbox v-model="saveShared" input-id="sql-snippet-shared" binary />
+            <span>Visible to every operator+</span>
+          </label>
+        </div>
+      </Fluid>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="saveDialogOpen = false" />
         <Button
@@ -704,8 +712,13 @@ function renderCell(v: unknown): string {
 .webui-sql {
   display: grid;
   grid-template-columns: 260px 1fr;
+  /* Page lives inside `<main class="webui-shell__main">` (column
+     flex with `flex: 1`). Claiming `flex: 1` here makes the SQL
+     workbench fill that available height without the fragile
+     `100vh - <topbar>` math that breaks across viewports. */
+  flex: 1;
+  min-height: 0;
   height: 100%;
-  min-height: calc(100vh - 4rem);
 }
 .webui-sql__sidebar {
   border-right: 1px solid var(--webui-border);
@@ -770,16 +783,19 @@ function renderCell(v: unknown): string {
   gap: 1rem;
   overflow: hidden;
 }
-.webui-sql__save-row {
-  display: grid;
-  grid-template-columns: 6rem 1fr;
-  gap: 0.5rem;
-  align-items: center;
-  margin-bottom: 0.5rem;
+/* `r-field` rows inside the Save dialog mirror the project pattern
+   (label on top, control below). Fluid expands the InputText to
+   100% width inside the dialog. */
+.r-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
 }
-.webui-sql__save-row label {
-  color: var(--webui-text-muted);
+.r-field > label {
   font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--webui-text-muted);
 }
 .webui-sql__inline {
   display: inline-flex;
