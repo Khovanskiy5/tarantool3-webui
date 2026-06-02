@@ -334,3 +334,290 @@ g.test_delete_missing_tuple_reports_not_found = function()
     t.assert_equals(ok, false)
     t.assert_str_contains(tostring(err), 'NOT_FOUND')
 end
+
+-- ── update operator matrix (build_update_ops covers each op code) ──
+
+local OP_SPACE_NAME = 'data_mut_ops_test'
+
+local function ensure_ops_space()
+    if box.space[OP_SPACE_NAME] then
+        box.space[OP_SPACE_NAME]:truncate()
+    else
+        local s = box.schema.space.create(OP_SPACE_NAME)
+        s:format({
+            { name = 'id',   type = 'unsigned' },
+            { name = 'num',  type = 'unsigned' },
+            { name = 'flag', type = 'unsigned' },
+            { name = 'text', type = 'string'   },
+        })
+        s:create_index('primary', { parts = { 'id' } })
+    end
+end
+
+g.test_update_op_assign = function()
+    ensure_ops_space()
+    box.space[OP_SPACE_NAME]:insert({ 1, 10, 0, 'a' })
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    local r = mut.tuple_update(root, {
+        space = OP_SPACE_NAME, key = { 1 },
+        ops = { { op = '=', field = 'text', value = 'b' } },
+    })
+    t.assert_equals(r.after[4], 'b')
+end
+
+g.test_update_op_add = function()
+    ensure_ops_space()
+    box.space[OP_SPACE_NAME]:insert({ 1, 10, 0, 'a' })
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    local r = mut.tuple_update(root, {
+        space = OP_SPACE_NAME, key = { 1 },
+        ops = { { op = '+', field = 'num', value = 5 } },
+    })
+    t.assert_equals(r.after[2], 15)
+end
+
+g.test_update_op_sub = function()
+    ensure_ops_space()
+    box.space[OP_SPACE_NAME]:insert({ 1, 10, 0, 'a' })
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    local r = mut.tuple_update(root, {
+        space = OP_SPACE_NAME, key = { 1 },
+        ops = { { op = '-', field = 'num', value = 3 } },
+    })
+    t.assert_equals(r.after[2], 7)
+end
+
+g.test_update_op_band = function()
+    ensure_ops_space()
+    box.space[OP_SPACE_NAME]:insert({ 1, 10, 0xff, 'a' })
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    local r = mut.tuple_update(root, {
+        space = OP_SPACE_NAME, key = { 1 },
+        ops = { { op = '&', field = 'flag', value = 0x0f } },
+    })
+    t.assert_equals(r.after[3], 0x0f)
+end
+
+g.test_update_op_bor = function()
+    ensure_ops_space()
+    box.space[OP_SPACE_NAME]:insert({ 1, 10, 0x0f, 'a' })
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    local r = mut.tuple_update(root, {
+        space = OP_SPACE_NAME, key = { 1 },
+        ops = { { op = '|', field = 'flag', value = 0xf0 } },
+    })
+    t.assert_equals(r.after[3], 0xff)
+end
+
+g.test_update_op_bxor = function()
+    ensure_ops_space()
+    box.space[OP_SPACE_NAME]:insert({ 1, 10, 0xaa, 'a' })
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    local r = mut.tuple_update(root, {
+        space = OP_SPACE_NAME, key = { 1 },
+        ops = { { op = '^', field = 'flag', value = 0xff } },
+    })
+    t.assert_equals(r.after[3], 0x55)
+end
+
+g.test_update_op_splice_known_limitation = function()
+    -- Known limitation of the current resolver: ':' (splice) takes a
+    -- {position, length, replacement} triple in Tarantool's wire
+    -- protocol but the resolver passes `value` through as a single
+    -- coerced field, so Tarantool rejects with "wrong number of
+    -- arguments". This baseline test pins that behaviour so we
+    -- notice if the refactor accidentally fixes (or worsens) it —
+    -- proper splice support is out of scope for DE-1.0.
+    ensure_ops_space()
+    box.space[OP_SPACE_NAME]:insert({ 1, 10, 0, 'abcdef' })
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    local ok, err = pcall(mut.tuple_update, root, {
+        space = OP_SPACE_NAME, key = { 1 },
+        ops = { { op = ':', field = 'text', value = { 2, 2, 'XX' } } },
+    })
+    t.assert_equals(ok, false)
+    t.assert_str_contains(tostring(err), 'wrong number of arguments')
+end
+
+g.test_update_op_unknown_rejected = function()
+    ensure_ops_space()
+    box.space[OP_SPACE_NAME]:insert({ 1, 10, 0, 'a' })
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    local ok, err = pcall(mut.tuple_update, root, {
+        space = OP_SPACE_NAME, key = { 1 },
+        ops = { { op = 'magic', field = 'num', value = 1 } },
+    })
+    t.assert_equals(ok, false)
+    t.assert_str_contains(tostring(err), 'unsupported update op')
+end
+
+-- ── DDL: create / alter / drop space + indexes ──────────────────────
+
+local DDL_SPACE_NAME = 'data_mut_ddl_test'
+local DDL_SPACE_RENAMED = 'data_mut_ddl_test_renamed'
+
+local function cleanup_ddl_spaces()
+    for _, n in ipairs({ DDL_SPACE_NAME, DDL_SPACE_RENAMED }) do
+        if box.space[n] ~= nil then pcall(function() box.space[n]:drop() end) end
+    end
+end
+
+g.test_e2e_create_space_with_format_and_pk = function()
+    cleanup_ddl_spaces()
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    local r = mut.create_space(root, {
+        name   = DDL_SPACE_NAME,
+        engine = 'memtx',
+        format = {
+            { name = 'id',   type = 'unsigned' },
+            { name = 'text', type = 'string'   },
+        },
+        primary_key = { 'id' },
+    })
+    t.assert_equals(r.ok, true)
+    t.assert_equals(r.name, DDL_SPACE_NAME)
+    t.assert(box.space[DDL_SPACE_NAME] ~= nil)
+    -- Primary index must exist so the space is insertable.
+    t.assert(box.space[DDL_SPACE_NAME].index[0] ~= nil)
+    cleanup_ddl_spaces()
+end
+
+g.test_e2e_create_space_uses_first_field_as_default_pk = function()
+    cleanup_ddl_spaces()
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    -- No primary_key passed → resolver picks the first format field.
+    mut.create_space(root, {
+        name   = DDL_SPACE_NAME,
+        format = {
+            { name = 'id',  type = 'unsigned' },
+            { name = 'tag', type = 'string'   },
+        },
+    })
+    local idx = box.space[DDL_SPACE_NAME].index[0]
+    t.assert(idx ~= nil)
+    t.assert_equals(idx.parts[1].fieldno, 1)
+    cleanup_ddl_spaces()
+end
+
+g.test_e2e_alter_space_format_and_rename = function()
+    cleanup_ddl_spaces()
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    mut.create_space(root, {
+        name   = DDL_SPACE_NAME,
+        format = {
+            { name = 'id',   type = 'unsigned' },
+            { name = 'text', type = 'string'   },
+        },
+        primary_key = { 'id' },
+    })
+    local r = mut.alter_space(root, {
+        name     = DDL_SPACE_NAME,
+        new_name = DDL_SPACE_RENAMED,
+        format   = {
+            { name = 'id',   type = 'unsigned' },
+            { name = 'note', type = 'string', is_nullable = true },
+        },
+    })
+    t.assert_equals(r.ok, true)
+    t.assert_equals(r.name, DDL_SPACE_RENAMED)
+    t.assert(box.space[DDL_SPACE_RENAMED] ~= nil)
+    t.assert(box.space[DDL_SPACE_NAME] == nil)
+    cleanup_ddl_spaces()
+end
+
+g.test_e2e_drop_space = function()
+    cleanup_ddl_spaces()
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    mut.create_space(root, {
+        name = DDL_SPACE_NAME,
+        format = { { name = 'id', type = 'unsigned' } },
+        primary_key = { 'id' },
+    })
+    local r = mut.drop_space(root, { name = DDL_SPACE_NAME })
+    t.assert_equals(r.ok, true)
+    t.assert(box.space[DDL_SPACE_NAME] == nil)
+end
+
+g.test_e2e_create_index_then_drop_index = function()
+    cleanup_ddl_spaces()
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    mut.create_space(root, {
+        name = DDL_SPACE_NAME,
+        format = {
+            { name = 'id',   type = 'unsigned' },
+            { name = 'tag',  type = 'string'   },
+        },
+        primary_key = { 'id' },
+    })
+    local r_create = mut.create_index(root, {
+        space = DDL_SPACE_NAME,
+        name  = 'by_tag',
+        parts = { { field = 'tag', type = 'string' } },
+        unique = false,
+    })
+    t.assert_equals(r_create.ok, true)
+    t.assert(box.space[DDL_SPACE_NAME].index.by_tag ~= nil)
+    local r_drop = mut.drop_index(root, {
+        space = DDL_SPACE_NAME, name = 'by_tag',
+    })
+    t.assert_equals(r_drop.ok, true)
+    t.assert(box.space[DDL_SPACE_NAME].index.by_tag == nil)
+    cleanup_ddl_spaces()
+end
+
+g.test_create_space_rejects_underscore_namespace = function()
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    local ok, err = pcall(mut.create_space, root, {
+        name = '_evil_user',
+        format = { { name = 'id', type = 'unsigned' } },
+    })
+    t.assert_equals(ok, false)
+    t.assert_str_contains(tostring(err), 'FORBIDDEN')
+    t.assert_str_contains(tostring(err), '_evil_user')
+end
+
+g.test_alter_space_rejects_sensitive_target = function()
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    local ok, err = pcall(mut.alter_space, root, {
+        name = '_user',
+        format = { { name = 'id', type = 'unsigned' } },
+    })
+    t.assert_equals(ok, false)
+    t.assert_str_contains(tostring(err), 'FORBIDDEN')
+end
+
+g.test_create_index_rejects_sensitive_space = function()
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    local ok, err = pcall(mut.create_index, root, {
+        space = '_priv',
+        name  = 'evil',
+        parts = { { field = 'id', type = 'unsigned' } },
+    })
+    t.assert_equals(ok, false)
+    t.assert_str_contains(tostring(err), 'FORBIDDEN')
+end
+
+g.test_drop_space_reports_not_found = function()
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    local ok, err = pcall(mut.drop_space, root, {
+        name = 'this_space_does_not_exist_anywhere',
+    })
+    t.assert_equals(ok, false)
+    t.assert_str_contains(tostring(err), 'NOT_FOUND')
+end
+
+g.test_drop_index_reports_not_found = function()
+    cleanup_ddl_spaces()
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    mut.create_space(root, {
+        name = DDL_SPACE_NAME,
+        format = { { name = 'id', type = 'unsigned' } },
+        primary_key = { 'id' },
+    })
+    local ok, err = pcall(mut.drop_index, root, {
+        space = DDL_SPACE_NAME, name = 'ghost_index',
+    })
+    t.assert_equals(ok, false)
+    t.assert_str_contains(tostring(err), 'NOT_FOUND')
+    cleanup_ddl_spaces()
+end

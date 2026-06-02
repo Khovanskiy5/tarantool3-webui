@@ -33,3 +33,11 @@
 * **Логи:** `docker logs webui-tt-X --tail 200`. Backend пишет JSON-строки с tag'ами `twophase` / `failover.agent` / `webui.cluster_ops` — `grep -F '"tag":"failover.agent"'` сразу даёт картину состояния агента.
 
 См. также: [`../operations.md`](../operations.md) — общее описание операционной модели, [`../troubleshooting.md`](../troubleshooting.md) — разбор частых ошибок.
+
+## Developer reference
+
+Не для оператора, а для разработчика, который трогает соответствующий backend-модуль.
+
+| Документ | Когда читать |
+|---|---|
+| [data-explorer-architecture.md](data-explorer-architecture.md) | Прежде чем добавлять resolver в `data_mutations/` — структура модулей, dependency rules, deny-list, forward-to-leader, контракт фасада. |
