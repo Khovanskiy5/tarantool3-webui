@@ -14,7 +14,7 @@
 --   local Server = require('test.helpers.server')
 --   local s = Server:new({
 --       alias       = 'tt-test',
---       config_file = paths.cluster_dev_yaml,
+--       config_file = paths.cluster_seed_dir .. '/40-topology.yaml',
 --       webui_port  = 8081,
 --   })
 --   s:start()

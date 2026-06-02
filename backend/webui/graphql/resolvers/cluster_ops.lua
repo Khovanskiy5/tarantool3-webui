@@ -97,7 +97,7 @@ local function read_current_yaml()
 
     -- File fallback. Imports config resolver lazily so we re-use
     -- the same env-var precedence (TT_CONFIG_PATH → TT_CONFIG →
-    -- /opt/webui/etc/cluster.yaml → docker/configs/cluster.yaml).
+    -- /opt/webui/etc/cluster.yaml).
     local ok_cfg, config_resolver = pcall(require, 'webui.graphql.resolvers.config')
     if ok_cfg and type(config_resolver._read_local_yaml) == 'function' then
         local yaml_text = config_resolver._read_local_yaml()

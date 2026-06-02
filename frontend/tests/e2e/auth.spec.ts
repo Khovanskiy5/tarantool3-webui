@@ -7,7 +7,7 @@
  * none of those layers fails loudly when one drifts. The smoke suite
  * does not touch it; this file does.
  *
- * Credentials come from docker/configs/cluster.yaml — the dev cluster
+ * Credentials come from docker/configs/cluster/10-credentials.yaml — the dev cluster
  * provisions `admin_dev / admin-dev-password` for exactly this kind
  * of probing. CI / a different deployment can override via env so the
  * suite is portable across compose flavours.

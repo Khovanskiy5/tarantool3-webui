@@ -1,0 +1,10 @@
+# `failover: off` is mandatory for the WebUI's open-source supervised
+# agent — the built-in raft / supervised loops would fight the agent
+# over `box.cfg.read_only`. The agent acquires a coordinator lease in
+# etcd and promotes a leader by taking the synchro queue; every
+# instance is declared `database.mode: rw` (see `40-topology.yaml`),
+# so the queue owner is the real RW lock.
+replication:
+  synchro_quorum: N/2 + 1
+  failover: 'off'
+  synchro_timeout: 3

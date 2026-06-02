@@ -1,0 +1,28 @@
+roles:
+- webui
+roles_cfg:
+  webui:
+    listen: 0.0.0.0:8081
+    log_level: debug
+    graphiql_enabled: true
+    console_enabled: true
+    failover:
+      agent: true
+      keepalive_interval: 1
+      watcher_poll_interval_sec: 1
+      lease_ttl_sec: 3
+      appointment_interval: 1
+    etcd_writer:
+      endpoints:
+      - http://etcd:2379
+      prefix: /tarantool/webui
+    webhooks:
+    - name: dev-loopback
+      type: generic
+      enabled: true
+      url: http://127.0.0.1:1/sink
+      events:
+      - audit.security
+      - issue.appeared
+      - config.committed
+      - webhook.test

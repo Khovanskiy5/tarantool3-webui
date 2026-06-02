@@ -15,7 +15,7 @@
 -- Usage:
 --   local Cluster = require('test.helpers.cluster')
 --   local cl = Cluster:new({
---       config_file = paths.cluster_dev_yaml,
+--       config_file = paths.cluster_seed_dir .. '/40-topology.yaml',
 --       webui_ports = { ['tt-1'] = 18081, ['tt-2'] = 18082, ['tt-3'] = 18083 },
 --   })
 --   cl:start()

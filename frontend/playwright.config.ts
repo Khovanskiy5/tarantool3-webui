@@ -8,7 +8,7 @@
  *
  * Targeting strategy:
  *   - default `baseURL` points at the first backend instance (tt-1)
- *     exposed by `docker/docker-compose.dev.yml`. The same bundle
+ *     exposed by `docker/docker-compose.yml`. The same bundle
  *     answers the SPA, the REST API and the GraphQL endpoint.
  *   - override with `WEBUI_BASE_URL` in CI when the cluster lives
  *     somewhere else (HAProxy URL, ephemeral compose project, etc.).

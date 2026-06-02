@@ -17,7 +17,7 @@ local topology_edit = require('webui.cluster_ops.topology_edit')
 
 local g = t.group('cluster_ops_topology_edit')
 
--- Three-instance cluster blueprint matching docker/configs/cluster.yaml.
+-- Three-instance cluster blueprint matching docker/configs/cluster/40-topology.yaml.
 -- Built by hand (rather than yaml.decode'd) so the test stays
 -- hermetic — no yaml rock dependency, no fixture file drift.
 local function base_cfg()

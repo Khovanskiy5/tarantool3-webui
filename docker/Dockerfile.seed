@@ -1,0 +1,12 @@
+# One-shot etcd seeder.
+#
+# `quay.io/coreos/etcd:v3.5.x` is distroless — no shell, no `cat`. The
+# seed entrypoint in `docker-compose.yml` is a small shell script
+# (`cat /seed/*.yaml | etcdctl put …`), so we need both `/bin/sh` and
+# `etcdctl` in the same image. The smallest path that respects the
+# "official upstream images only" rule for the rest of the compose:
+# pick `etcdctl` out of the official etcd image and drop it onto a
+# plain Alpine base.
+FROM quay.io/coreos/etcd:v3.5.18 AS etcd
+FROM alpine:3.20
+COPY --from=etcd /usr/local/bin/etcdctl /usr/local/bin/etcdctl

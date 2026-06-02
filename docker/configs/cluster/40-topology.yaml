@@ -1,0 +1,40 @@
+# Three instances in a single replicaset. Each binds 3301 internally;
+# advertise URIs use the compose service names which the user-defined
+# network resolves to the right container IPs.
+#
+# `database.mode: rw` on every instance is required by the WebUI
+# failover agent: with `replication.failover: off` (see
+# `20-replication.yaml`), the real RW lock is owning the synchro
+# queue, which the agent promotes via etcd lease.
+groups:
+  default:
+    replicasets:
+      rs-1:
+        instances:
+          tt-1:
+            database:
+              mode: rw
+            iproto:
+              listen:
+              - uri: 0.0.0.0:3301
+              advertise:
+                peer:
+                  uri: tt-1:3301
+          tt-2:
+            database:
+              mode: rw
+            iproto:
+              listen:
+              - uri: 0.0.0.0:3301
+              advertise:
+                peer:
+                  uri: tt-2:3301
+          tt-3:
+            database:
+              mode: rw
+            iproto:
+              listen:
+              - uri: 0.0.0.0:3301
+              advertise:
+                peer:
+                  uri: tt-3:3301

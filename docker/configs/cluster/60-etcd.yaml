@@ -1,0 +1,9 @@
+# Self-reference: tells the running cluster where its own configuration
+# lives, so `config:reload()` rereads from the same etcd it was seeded
+# into. The mounted `etcd-source.yaml` stub holds the same values; this
+# block keeps them in lockstep when the cluster reads from etcd.
+config:
+  etcd:
+    endpoints:
+    - http://etcd:2379
+    prefix: /tarantool/webui

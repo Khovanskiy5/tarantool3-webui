@@ -25,9 +25,8 @@ local M = {
     docker_dir       = repo_root .. '/docker',
     docker_configs   = repo_root .. '/docker/configs',
     docker_haproxy   = repo_root .. '/docker/haproxy',
-    docker_compose   = repo_root .. '/docker/docker-compose.dev.yml',
-    cluster_dev_yaml = repo_root .. '/docker/configs/cluster.yaml',
-    cluster_prod_yaml_example = repo_root .. '/docker/configs/cluster.prod.example.yaml',
+    docker_compose   = repo_root .. '/docker/docker-compose.yml',
+    cluster_seed_dir = repo_root .. '/docker/configs/cluster',
     tools_dir        = repo_root .. '/tools',
 }
 

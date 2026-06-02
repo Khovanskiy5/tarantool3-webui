@@ -1,0 +1,19 @@
+# Minimal `iconfig` stub mounted on every Tarantool container.
+# Tells Tarantool ONE thing: where to find etcd. All cluster topology,
+# credentials, roles come from etcd — the `etcd-seed` init container
+# in `docker-compose.yml` concatenates `configs/cluster/*.yaml` and
+# `etcdctl put`s the result into `<prefix>/config/all` before any
+# Tarantool instance starts.
+#
+# This file MUST NOT declare `groups → replicasets → instances` — file
+# source has higher priority than etcd source (see
+# `tarantool-3.7.0/src/box/lua/config/init.lua:147-156`), and a
+# topology block here would shadow whatever etcd holds.
+#
+# Production deployments swap the endpoint list and add TLS via
+# `config.etcd.ssl.*`; nothing else changes.
+config:
+  etcd:
+    endpoints:
+    - http://etcd:2379
+    prefix: /tarantool/webui

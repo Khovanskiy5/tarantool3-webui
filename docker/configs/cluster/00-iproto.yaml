@@ -1,0 +1,6 @@
+# Shared iproto defaults. Each instance overrides
+# `iproto.listen` / `iproto.advertise.peer.uri` in 40-topology.yaml.
+iproto:
+  advertise:
+    peer:
+      login: replicator

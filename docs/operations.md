@@ -6,15 +6,33 @@
 
 Operator handbook: развёртывание, конфигурация, failover, мониторинг, бэкап, rolling upgrade.
 
-## Локальное dev-окружение
+## Локальное окружение
 
-`docker/docker-compose.dev.yml` поднимает рабочий кластер из 3 инстансов Tarantool 3.7 с HAProxy перед ними и одиночным etcd:
+`docker/docker-compose.yml` поднимает кластер из 3 инстансов Tarantool 3.7 с HAProxy перед ними, одиночным etcd и одноразовым init-контейнером `etcd-seed`:
 
 ```bash
 make dev          # build + up -d
 make dev-logs     # tail логов
-make dev-down     # teardown + удалить volumes
+make dev-down     # teardown + удалить volumes (форсирует пересев etcd)
 ```
+
+Источник истины — etcd, ключ `/tarantool/webui/config/all`. На холодный старт `etcd-seed` склеивает файлы `docker/configs/cluster/*.yaml` (lex-сортировка) в один YAML-документ и кладёт его в etcd; на тёплом перезапуске (без `--volumes`) он видит существующий ключ и ничего не пишет, чтобы не затоптать правки сделанные через WebUI.
+
+Каждый Tarantool-контейнер монтирует только тонкий стаб `docker/configs/etcd-source.yaml`, который сообщает Tarantool, где находится etcd. Топология, credentials, роли — всё приходит из etcd.
+
+Структура исходных YAML-фрагментов:
+
+| Файл | Что описывает |
+|---|---|
+| `00-iproto.yaml` | общий `iproto.advertise.peer.login` |
+| `10-credentials.yaml` | пользователи (replicator, webui_peer, *_dev) |
+| `20-replication.yaml` | `failover: supervised`, synchro-quorum |
+| `30-log.yaml` | лог-файл и уровень |
+| `40-topology.yaml` | groups → rs-1 → instances (tt-1/2/3) |
+| `50-roles.yaml` | `roles: [webui]` + `roles_cfg.webui` |
+| `60-etcd.yaml` | self-reference `config.etcd` (тот же endpoint, что в стабе) |
+
+Top-level ключи между файлами не пересекаются, поэтому `cat` склеивает их в валидный YAML; редактировать фрагменты можно по-отдельности.
 
 После healthy-сигнала:
 
@@ -27,37 +45,19 @@ make dev-down     # teardown + удалить volumes
 
 Dev-фикстуры credentials: `admin_dev / admin-dev-password`, `operator_dev / operator-dev-password`, `viewer_dev / viewer-dev-password`, `superuser_dev / superuser-dev-password`.
 
-## Production deployment template
+## Production considerations
 
-Стартовая точка — `docker/docker-compose.prod.example.yml` + `docker/haproxy/haproxy.prod.example.cfg` + `docker/configs/cluster.prod.example.yaml`. Оператор копирует их в свою деплой-директорию и адаптирует.
+Локальный compose — отправная точка, не production-шаблон. При выкатке требуется отдельная инфраструктура с учётом следующих жёстких требований:
 
-### Hard prerequisites
-
-1. **External etcd cluster** — ≥3 нод, mTLS, RBAC. Single-node etcd из dev-compose недостаточен.
-2. **TLS bundle для HAProxy** — `tls/webui.pem` (полный chain + private key одним PEM).
-3. **mTLS material для iproto** — `tls/peer.{crt,key}` + `tls/peer-ca.crt`. Iproto-порты (3301) НЕ публикуются наружу.
-4. **TLS material для etcd-клиента** — `tls/etcd-ca.crt`, `tls/etcd-client.{crt,key}`.
-
-### Production checklist
-
-- [ ] Скопировать `docker-compose.prod.example.yml` → `docker-compose.prod.yml`.
-- [ ] Скопировать `cluster.prod.example.yaml` → `cluster.prod.yaml`, адаптировать `config.etcd.endpoints`.
-- [ ] Подготовить TLS material в `./tls/`.
-- [ ] Создать `.env` с секретами:
-  ```bash
-  WEBUI_VERSION=1.0.0
-  REPLICATOR_PASSWORD=<from secret manager>
-  WEBUI_PEER_PASSWORD=<from secret manager>
-  ETCD_PASSWORD=<from secret manager>
-  WEBUI_LOG_LEVEL=info
-  ```
-- [ ] Заменить `${REPLICATOR_PASSWORD}` etc placeholders на ссылки на секреты (envsubst или Docker secrets).
-- [ ] Обновить `haproxy.prod.cfg`: `bind *:443 ssl crt /etc/haproxy/certs/webui.pem`, ACL `trusted` для stats.
-- [ ] Закрыть stats UI (`127.0.0.1:8404:8404` или SSH-туннель / VPN).
-- [ ] Настроить snapshots (`snapshot.by.interval: 86400` + remote rsync/S3 push).
-- [ ] Подключить Prometheus к `/api/metrics`.
-- [ ] Настроить log-shipper (vector / fluent-bit / journald).
-- [ ] Firewall: 443 (public), 80 (public, только redirect), 8404 (private/VPN), 3301 (internal cluster, mTLS), 2379 (etcd, mTLS).
+1. **External etcd cluster** — ≥3 нод, mTLS, RBAC. Single-node etcd из локального compose недостаточен.
+2. **TLS bundle для HAProxy** — полный chain + private key (например, в `tls/webui.pem`).
+3. **mTLS material для iproto** — peer-cert/key + CA. Порт 3301 НЕ публикуется наружу.
+4. **TLS material для etcd-клиента** — CA + client cert/key.
+5. **Секреты** — пароли (`replicator`, `webui_peer`, etcd) приходят из менеджера секретов, не из git'а.
+6. **Закрытый stats UI** — bind на приватную подсеть или SSH/VPN-туннель.
+7. **Snapshots** — `snapshot.by.interval: 86400` + push в внешнее хранилище (S3 / rsync).
+8. **Мониторинг** — `/api/metrics` к Prometheus, log-shipper (vector / fluent-bit / journald).
+9. **Firewall** — 443 (public), 80 (public redirect), stats на VPN, 3301 (internal mTLS), 2379 (etcd mTLS).
 
 ### Sizing guidelines
 
@@ -66,8 +66,6 @@ Dev-фикстуры credentials: `admin_dev / admin-dev-password`, `operator_de
 | 3–10 инстансов (small) | 1 vCPU, 512 MB | 0.5 vCPU, 128 MB |
 | 10–50 (medium) | 2 vCPU, 1 GB | 1 vCPU, 256 MB |
 | 50–256 (large) | 4 vCPU, 2 GB | 2 vCPU, 512 MB |
-
-Под medium baseline настроены `deploy.resources.limits` в `docker-compose.prod.example.yml`.
 
 ### HAProxy HA
 
@@ -81,7 +79,7 @@ Dev-фикстуры credentials: `admin_dev / admin-dev-password`, `operator_de
 
 ## HAProxy tuning
 
-`docker/haproxy/haproxy.dev.cfg` калиброван под быстрый failover:
+`docker/haproxy/haproxy.cfg` калиброван под быстрый failover:
 
 | Параметр | Значение | Почему |
 |---|---|---|

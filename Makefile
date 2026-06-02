@@ -4,7 +4,7 @@ PROJECT      := webui
 DOCKER_DIR   := docker
 FRONTEND_DIR := frontend
 BACKEND_DIR  := backend
-COMPOSE_DEV  := $(DOCKER_DIR)/docker-compose.dev.yml
+COMPOSE      := $(DOCKER_DIR)/docker-compose.yml
 
 # Bun is the frontend runtime and package manager.
 BUN          ?= bun
@@ -32,21 +32,21 @@ help: ## Show this help.
 # ─────────────────────────────────────────────────────────────────────────────
 
 .PHONY: dev
-dev: ## Bring up local cluster (HAProxy + 3 instances + etcd + dev frontend).
-	docker compose -f $(COMPOSE_DEV) up --build -d
+dev: ## Bring up the local cluster (etcd + etcd-seed + 3 instances + HAProxy).
+	docker compose -f $(COMPOSE) up --build -d
 	@echo
 	@echo "UI available at:    http://localhost:8080"
 	@echo "Direct instances:   http://localhost:8081, 8082, 8083"
 	@echo "HAProxy stats:      http://localhost:8404"
-	@echo "Vite dev frontend:  http://localhost:5173 (HMR)"
+	@echo "etcd:               http://localhost:2379"
 
 .PHONY: dev-down
-dev-down: ## Tear down the local cluster.
-	docker compose -f $(COMPOSE_DEV) down --volumes --remove-orphans
+dev-down: ## Tear down the local cluster (volumes removed, etcd re-seeded on next `make dev`).
+	docker compose -f $(COMPOSE) down --volumes --remove-orphans
 
 .PHONY: dev-logs
 dev-logs: ## Tail logs of the local cluster.
-	docker compose -f $(COMPOSE_DEV) logs -f
+	docker compose -f $(COMPOSE) logs -f
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Linting

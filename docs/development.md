@@ -33,7 +33,7 @@ cd tarantool-webui
 make dev
 ```
 
-После healthy-сигнала открыть `http://localhost:8080`. Dev-фикстуры credentials (см. `docker/configs/cluster.yaml`):
+После healthy-сигнала открыть `http://localhost:8080`. Dev-фикстуры credentials (см. `docker/configs/cluster/10-credentials.yaml`):
 
 | User | Password | Role |
 |---|---|---|
@@ -102,7 +102,7 @@ local Cluster = require('test.helpers.cluster')
 local Client  = require('test.helpers.http_client')
 
 local cl = Cluster:new({
-    config_file = paths.cluster_dev_yaml,
+    config_file = paths.cluster_seed_dir .. '/40-topology.yaml',
     webui_ports = { ['tt-1'] = 18081, ['tt-2'] = 18082, ['tt-3'] = 18083 },
 })
 cl:start()

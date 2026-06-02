@@ -24,7 +24,6 @@ local function read_current_yaml()
     push(os.getenv('TT_CONFIG_PATH'))
     push(os.getenv('TT_CONFIG'))
     push('/opt/webui/etc/cluster.yaml')
-    push('docker/configs/cluster.yaml')
     for _, p in ipairs(paths) do
         local f = fio.open(p)
         if f ~= nil then

@@ -51,7 +51,7 @@ docker run --rm \
     webui-instance:dev
 ```
 
-Полноценный кластер из 3 инстансов + HAProxy + etcd разворачивается через docker-compose — см. `docker/docker-compose.dev.yml` (Task 10).
+Полноценный кластер из 3 инстансов + HAProxy + etcd разворачивается через docker-compose — см. `docker/docker-compose.yml`.
 
 ## Переменные окружения
 

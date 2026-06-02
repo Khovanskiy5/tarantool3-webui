@@ -23,7 +23,7 @@ Runbooks для типовых инцидентов. Для каждого сл�
 
 **Причина.** `bootstrap_strategy: auto` требует подключения к majority пиров. Если compose выстраивал зависимость `tt-1 → tt-2 → tt-3`, первый инстанс не находит остальных.
 
-**Действие.** Стартовать все три инстанса параллельно (как в `docker-compose.dev.yml`: `depends_on` только на etcd, не друг на друга).
+**Действие.** Стартовать все три инстанса параллельно (как в `docker-compose.yml`: `depends_on` только на `etcd-seed`, не друг на друга).
 
 ### `box.cfg.leader cannot be used with replication.failover = election`
 

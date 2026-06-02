@@ -13,7 +13,7 @@
 --
 -- Public surface (do NOT remove without searching every consumer
 -- across the repo, including the role registration in
--- docker/configs/cluster*.yaml and `graphql/schema.lua`):
+-- docker/configs/cluster/50-roles.yaml and `graphql/schema.lua`):
 --   * validate – declarative role interface, side-effect-free
 --   * apply    – declarative role interface, idempotent
 --   * start    – explicit boot, used by tests and standalone scripts
