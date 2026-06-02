@@ -3,6 +3,8 @@ import { computed, onMounted, onScopeDispose, ref } from 'vue';
 import DataTable from 'primevue/datatable';
 import Column from 'primevue/column';
 import Tag from 'primevue/tag';
+import Button from 'primevue/button';
+import Message from 'primevue/message';
 
 import { getClient } from '@/shared/api/graphql';
 import { wsClient } from '@/shared/api/ws';
@@ -280,18 +282,18 @@ onMounted(load);
         value="Community agent: active"
         severity="success"
       />
-      <button
+      <Button
         v-if="canEditFailover"
-        type="button"
-        class="webui-failover__btn"
+        label="Settings…"
+        severity="secondary"
+        outlined
+        size="small"
         @click="settingsOpen = true"
-      >
-        Settings…
-      </button>
+      />
     </header>
-    <p v-if="error" class="webui-failover__error">{{ error }}</p>
+    <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 
-    <p class="webui-failover__lede">
+    <Message severity="info" :closable="false">
       <span v-if="mode === 'off' && agent && agent.enabled">
         Leadership is driven by the <strong>community supervised agent</strong> (below). Tarantool's
         own failover is disabled.
@@ -318,7 +320,7 @@ onMounted(load);
         >Current Tarantool failover mode: <code>{{ mode }}</code
         >.</span
       >
-    </p>
+    </Message>
 
     <section v-if="mode === 'election'" class="webui-failover__sp">
       <header class="webui-failover__sp-head">
@@ -621,9 +623,6 @@ onMounted(load);
 .webui-failover__head h1 {
   margin: 0;
 }
-.webui-failover__error {
-  color: var(--p-message-error-color, #d83535);
-}
 .webui-failover__mono {
   font-family: var(--webui-font-mono);
   font-size: 0.8rem;
@@ -651,21 +650,6 @@ onMounted(load);
   font-size: 0.75rem;
   color: var(--p-message-error-color, #d83535);
 }
-.webui-failover__lede {
-  margin: 0;
-  font-size: 0.92rem;
-  line-height: 1.4;
-  color: var(--webui-text);
-  background: var(--webui-bg-elevated);
-  border: 1px solid var(--webui-border);
-  border-left: 3px solid var(--webui-accent);
-  border-radius: var(--webui-radius);
-  padding: 0.65rem 0.9rem;
-}
-.webui-failover__lede code {
-  font-family: var(--webui-font-mono);
-  font-size: 0.85rem;
-}
 .webui-failover__subhead {
   margin: 0.25rem 0 0;
   font-size: 0.85rem;
@@ -680,19 +664,6 @@ onMounted(load);
 }
 .webui-failover__hint code {
   font-family: var(--webui-font-mono);
-}
-.webui-failover__btn {
-  padding: 0.4rem 0.85rem;
-  font-size: 0.88rem;
-  border-radius: 5px;
-  border: 1px solid var(--webui-border);
-  background: var(--webui-bg);
-  color: var(--webui-text);
-  cursor: pointer;
-}
-.webui-failover__btn:not(:disabled):hover {
-  border-color: var(--webui-accent);
-  color: var(--webui-accent);
 }
 .webui-failover__params {
   display: inline-block;
