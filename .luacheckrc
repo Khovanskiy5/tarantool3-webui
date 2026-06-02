@@ -142,3 +142,13 @@ files['backend/webui/graphql/resolvers/cluster_ops.lua'] = {
 files['backend/webui/recovery/split_brain.lua'] = {
     max_cyclomatic_complexity = 35,
 }
+
+-- M.commit orchestrates the linear etcd-put → file-mirror fan-out →
+-- optional reload fan-out → history snapshot → notification chain.
+-- Each phase has its own pcall guard with structured logging; pulling
+-- a phase into a helper would only hide the ordering that this
+-- function is built around (etcd authoritative, file cache, peer
+-- reload, then bookkeeping).
+files['backend/webui/config_store/twophase.lua'] = {
+    max_cyclomatic_complexity = 45,
+}

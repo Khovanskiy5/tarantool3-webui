@@ -291,6 +291,110 @@ function M.commit(prepared_id, opts)
         end
     end
 
+    -- Opt-in: force `config:reload()` on every peer (and self) after
+    -- the new YAML has landed in etcd AND on each peer's local file
+    -- (file_mirror above). Without this each peer would only refresh
+    -- on its own polling tick, which makes a fresh bootstrap UX feel
+    -- "did anything happen?" — the reload makes the new replication
+    -- topology apply immediately. Existing call-sites (commitConfig
+    -- from the config-editor) leave the flag off so running clusters
+    -- pick up changes on their own cadence — same behaviour as before.
+    --
+    -- Best-effort: per-peer outcome is captured in
+    -- `result.reload_failures`; partial failures do not roll back the
+    -- etcd commit (etcd is authoritative). Self reload is counted in
+    -- `reloaded_count` alongside peers.
+    if opts.fanout_reload == true then
+        local reloaded_count = 0
+        local reload_failures = {}
+
+        local self_t0 = fiber.time()
+        local self_ok, self_err = pcall(function()
+            require('config'):reload()
+        end)
+        local self_ms = math.floor((fiber.time() - self_t0) * 1000)
+        if self_ok then
+            reloaded_count = reloaded_count + 1
+            logger.debug('fanout_reload self ok', { elapsed_ms = self_ms })
+        else
+            table.insert(reload_failures, {
+                alias = '_self', err = tostring(self_err),
+            })
+            logger.warn('fanout_reload self failed', {
+                err = tostring(self_err), elapsed_ms = self_ms,
+            })
+        end
+
+        local rpc_ok2, rpc2 = pcall(require, 'webui.cluster.rpc')
+        local peers_ok2, peers2 = pcall(require, 'webui.cluster.peers')
+        if rpc_ok2 and peers_ok2 then
+            local peer_names = {}
+            for name in pairs(peers2.list() or {}) do
+                table.insert(peer_names, name)
+            end
+            if #peer_names == 0 then
+                logger.warn('fanout_reload no peers', {
+                    reason = 'peers.list() empty',
+                })
+            else
+                logger.info('fanout_reload start', {
+                    prepared_id = prepared_id,
+                    peers_count = #peer_names,
+                })
+                local t0 = fiber.time()
+                local call_ok, per_peer = pcall(rpc2.map_call,
+                    'webui_config_reload_remote', {},
+                    { timeout = 5, peers = peer_names })
+                local elapsed_ms = math.floor((fiber.time() - t0) * 1000)
+                if call_ok and type(per_peer) == 'table' then
+                    for name, r in pairs(per_peer) do
+                        local val = r and r.value
+                        if r and r.ok and type(val) == 'table' and val.ok
+                            and not val.err then
+                            reloaded_count = reloaded_count + 1
+                            logger.debug('fanout_reload peer ok', {
+                                alias = name,
+                                status = val.status,
+                                elapsed_ms = val.elapsed_ms,
+                            })
+                        else
+                            local msg = (r and r.err)
+                                or (val and val.err)
+                                or 'unknown'
+                            table.insert(reload_failures, {
+                                alias = name, err = tostring(msg),
+                            })
+                            logger.warn('fanout_reload peer failed', {
+                                alias = name, err = tostring(msg),
+                            })
+                        end
+                    end
+                else
+                    table.insert(reload_failures, {
+                        alias = '_fanout',
+                        err = 'map_call errored: ' .. tostring(per_peer),
+                    })
+                    logger.warn('fanout_reload map_call errored', {
+                        err = tostring(per_peer),
+                    })
+                end
+                logger.info('fanout_reload done', {
+                    reloaded = reloaded_count,
+                    failed = #reload_failures,
+                    total = #peer_names + 1,
+                    total_elapsed_ms = elapsed_ms,
+                })
+            end
+        else
+            logger.warn('fanout_reload modules unavailable', {
+                rpc_ok = rpc_ok2, peers_ok = peers_ok2,
+            })
+        end
+
+        result.reloaded_count = reloaded_count
+        result.reload_failures = reload_failures
+    end
+
     -- Record the snapshot in our own /history/ timeline. We deliberately
     -- key the history entry by etcd's commit revision so the timeline
     -- maps 1:1 to what `:get('config')` would return at that point. Soft

@@ -11,6 +11,10 @@
 -- delegating call. Heavy lifting (RBAC, deny-list re-check, audit)
 -- belongs in the owning module, not here.
 --
+-- One exception: `webui_config_reload_remote` delegates to Tarantool's
+-- native `config:reload()` rather than a role module — the role does
+-- not own config reload.
+--
 -- Called exactly once during M.start (right after storage bootstrap
 -- so the spaces the shims poke at already exist). Idempotent — each
 -- rawset just overwrites the previous value on a role reload.
@@ -211,6 +215,41 @@ function M.install()
             if not ok then return { err = tostring(err) } end
             return { updated = true }
         end)
+
+    -- Force the Tarantool native `config:reload()` on this peer. The
+    -- twophase commit pipeline fans this call out across `peers.list()`
+    -- after the new cluster YAML lands in etcd + on every peer's local
+    -- file (via `webui_config_file_write_remote`). Without an explicit
+    -- reload each peer would only refresh on its own polling tick,
+    -- which makes the bootstrap UX feel "did anything happen?" — the
+    -- reload makes `box.cfg{replication = ...}` apply immediately.
+    --
+    -- Returns `{ ok = true, status = <config.info().status> }` on
+    -- success or `{ err = <reason> }` on failure. Receiver delegates
+    -- to Tarantool's native module, not the role.
+    rawset(_G, 'webui_config_reload_remote', function()
+        local log_ok, lu = pcall(require, 'webui.log_util')
+        local lg = log_ok and lu.with_tag('config.reload.remote') or nil
+        local t0 = (require('fiber')).time()
+        if lg then lg.debug('called', { at = t0 }) end
+
+        local ok_cfg, cfg = pcall(require, 'config')
+        if not ok_cfg then
+            if lg then lg.warn('failed', { err = 'config module unavailable' }) end
+            return { err = 'config module unavailable' }
+        end
+        local ok_rl, err = pcall(function() cfg:reload() end)
+        if not ok_rl then
+            if lg then lg.warn('failed', { err = tostring(err) }) end
+            return { err = tostring(err) }
+        end
+        local info = (cfg.info and cfg:info()) or {}
+        local elapsed_ms = math.floor(((require('fiber')).time() - t0) * 1000)
+        if lg then
+            lg.info('ok', { status = info.status, elapsed_ms = elapsed_ms })
+        end
+        return { ok = true, status = info.status, elapsed_ms = elapsed_ms }
+    end)
 end
 
 return M
