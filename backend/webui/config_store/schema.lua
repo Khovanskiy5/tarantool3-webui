@@ -34,6 +34,27 @@ function M.collect_replicaset_uris(cfg)
     return seen
 end
 
+-- Effective `replication.X` for a scope, walking instance → replicaset
+-- → group → global (the inner-most set wins), like Tarantool's config.
+local function effective_repl(cfg, group, rs, inst, key)
+    local function v(t) return t and t.replication and t.replication[key] end
+    local x = v(inst); if x ~= nil then return x end
+    x = v(rs);    if x ~= nil then return x end
+    x = v(group); if x ~= nil then return x end
+    return v(cfg)
+end
+
+-- Count the voting (non-anonymous) instances of a replicaset.
+local function count_voters(cfg, group, rs)
+    local n = 0
+    for _, inst in pairs(rs.instances or {}) do
+        if effective_repl(cfg, group, rs, inst, 'anon') ~= true then
+            n = n + 1
+        end
+    end
+    return n
+end
+
 -- Pure helper: returns a list of {path, message} for cross-cluster
 -- constraints. Pure so it can be unit-tested without a live
 -- `config` rock.
@@ -79,9 +100,89 @@ function M.cross_validate(cfg)
                     })
                 end
             end
+            -- 3. synchro_quorum below N/2+1 (FO-11). A numeric quorum
+            -- under the majority of voting members permits split-brain
+            -- on a leader change. The formula string ('N/2+1') is safe
+            -- and auto-adjusts, so only flag explicit numbers.
+            local voters = count_voters(cfg, group, rs)
+            local q = effective_repl(cfg, group, rs, nil, 'synchro_quorum')
+            if type(q) == 'number' and voters >= 2 then
+                local need = math.floor(voters / 2) + 1
+                if q < need then
+                    table.insert(issues, {
+                        path = string.format(
+                            '/groups/%s/replicasets/%s synchro_quorum',
+                            gname, rsname),
+                        message = string.format(
+                            'synchro_quorum=%d is below N/2+1=%d for %d voting '
+                            .. 'members — permits split-brain; use the formula '
+                            .. "'N/2+1' or a value >= %d",
+                            q, need, voters, need),
+                    })
+                end
+            end
+        end
+    end
+    -- 4. EE synchro_mode while the WebUI agent is active (FO-11).
+    -- failover.replicasets.<rs>.synchro_mode forces election_mode=manual,
+    -- which fights our agent over the synchro queue.
+    local agent_on = cfg.roles_cfg and cfg.roles_cfg.webui
+        and cfg.roles_cfg.webui.failover
+        and cfg.roles_cfg.webui.failover.agent == true
+    local fo = cfg.failover
+    if agent_on and type(fo) == 'table' and type(fo.replicasets) == 'table' then
+        for rsn, r in pairs(fo.replicasets) do
+            if type(r) == 'table' and r.synchro_mode then
+                table.insert(issues, {
+                    path = string.format('/failover/replicasets/%s/synchro_mode',
+                                         tostring(rsn)),
+                    message = 'synchro_mode forces election_mode=manual, which '
+                        .. 'conflicts with the WebUI failover agent; remove it '
+                        .. 'or disable the agent',
+                })
+            end
         end
     end
     return issues
+end
+
+-- Advisory (non-blocking) guardrails — surfaced to the operator but do
+-- NOT reject the commit. Pure; returns a list of {path, message}.
+function M.guardrail_warnings(cfg)
+    local warnings = {}
+    if type(cfg) ~= 'table' then return warnings end
+    local repl = cfg.replication or {}
+    if repl.bootstrap_strategy == 'legacy' then
+        table.insert(warnings, {
+            path = '/replication/bootstrap_strategy',
+            message = 'bootstrap_strategy: legacy uses the old re-bootstrap '
+                .. 'behaviour (split-brain footgun); prefer auto',
+        })
+    end
+    local mvcc = cfg.database and cfg.database.use_mvcc_engine
+    if mvcc ~= true then
+        table.insert(warnings, {
+            path = '/database/use_mvcc_engine',
+            message = 'memtx MVCC is not enabled; required for correct '
+                .. 'isolation of synchronous transactions',
+        })
+    end
+    for gname, group in pairs(cfg.groups or {}) do
+        for rsname, rs in pairs(group.replicasets or {}) do
+            local voters = count_voters(cfg, group, rs)
+            if voters >= 2 and voters % 2 == 0 then
+                table.insert(warnings, {
+                    path = string.format('/groups/%s/replicasets/%s',
+                                         gname, rsname),
+                    message = string.format(
+                        'replicaset has %d voting members (even) — no extra '
+                        .. 'fault tolerance over %d and risks split votes; '
+                        .. 'prefer an odd count', voters, voters - 1),
+                })
+            end
+        end
+    end
+    return warnings
 end
 
 -- Parse + JSON-schema validate + cross-validate.

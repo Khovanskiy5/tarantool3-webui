@@ -152,6 +152,17 @@ function M.prepare(opts)
     local parsed, errs = schema.validate(opts.yaml)
     if parsed == nil then return nil, errs end
 
+    -- Advisory guardrails (FO-11): non-blocking — surfaced in the
+    -- prepare result for the SPA preview and logged, but do NOT reject
+    -- the commit (hard rejects live in schema.cross_validate).
+    local warnings = schema.guardrail_warnings(parsed)
+    if #warnings > 0 then
+        logger.warn('config guardrail warnings', {
+            count = #warnings, user = opts.user,
+            first = warnings[1] and warnings[1].message,
+        })
+    end
+
     -- No-op guard: reject the prepare only when the submitted YAML is
     -- byte-for-byte identical to the current one — comment-only and
     -- whitespace-only edits are legitimate (audit trail, formatting
@@ -196,6 +207,7 @@ function M.prepare(opts)
         expires_at  = entry.expires_at,
         diff        = diff_ops or {},
         categories  = diff_ops and diff.categorise(diff_ops) or nil,
+        warnings    = warnings,
     }
 end
 

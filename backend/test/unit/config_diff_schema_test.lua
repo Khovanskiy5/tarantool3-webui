@@ -98,6 +98,82 @@ g.test_cross_validate_detects_duplicate_uri = function()
     t.assert(#issues > 0)
 end
 
+-- ── FO-11 guardrails ────────────────────────────────────────────────
+
+local function cfg_3rs(repl)
+    return {
+        replication = repl,
+        groups = { default = { replicasets = { ['rs-1'] = { instances = {
+            ['tt-1'] = {}, ['tt-2'] = {}, ['tt-3'] = {},
+        } } } } },
+    }
+end
+
+g.test_guardrail_rejects_low_synchro_quorum = function()
+    local issues = schema.cross_validate(cfg_3rs({ synchro_quorum = 1 }))
+    local hit = false
+    for _, i in ipairs(issues) do
+        if tostring(i.message):find('synchro_quorum') then hit = true end
+    end
+    t.assert(hit, 'quorum=1 with 3 voters must be rejected (N/2+1=2)')
+end
+
+g.test_guardrail_allows_formula_quorum = function()
+    local issues = schema.cross_validate(cfg_3rs({ synchro_quorum = 'N/2+1' }))
+    for _, i in ipairs(issues) do
+        t.assert(not tostring(i.message):find('synchro_quorum'),
+            'formula quorum must not be flagged')
+    end
+end
+
+g.test_guardrail_allows_sufficient_quorum = function()
+    local issues = schema.cross_validate(cfg_3rs({ synchro_quorum = 2 }))
+    for _, i in ipairs(issues) do
+        t.assert(not tostring(i.message):find('synchro_quorum'))
+    end
+end
+
+g.test_guardrail_rejects_synchro_mode_with_agent = function()
+    local cfg = cfg_3rs({ failover = 'supervised' })
+    cfg.roles_cfg = { webui = { failover = { agent = true } } }
+    cfg.failover = { replicasets = { ['rs-1'] = { synchro_mode = true } } }
+    local issues = schema.cross_validate(cfg)
+    local hit = false
+    for _, i in ipairs(issues) do
+        if tostring(i.message):find('synchro_mode') then hit = true end
+    end
+    t.assert(hit, 'synchro_mode with active agent must be rejected')
+end
+
+g.test_guardrail_warnings_legacy_mvcc_even = function()
+    -- 2 voting members (even), legacy bootstrap, no mvcc.
+    local cfg = {
+        replication = { bootstrap_strategy = 'legacy' },
+        groups = { default = { replicasets = { ['rs-1'] = { instances = {
+            ['tt-1'] = {}, ['tt-2'] = {},
+        } } } } },
+    }
+    local w = schema.guardrail_warnings(cfg)
+    local codes = {}
+    for _, x in ipairs(w) do codes[#codes + 1] = x.message end
+    local joined = table.concat(codes, '|')
+    t.assert(joined:find('legacy'), 'legacy bootstrap warned')
+    t.assert(joined:find('MVCC'), 'mvcc-off warned')
+    t.assert(joined:find('even'), 'even member count warned')
+end
+
+g.test_guardrail_warnings_clean_config = function()
+    local cfg = {
+        replication = { bootstrap_strategy = 'auto' },
+        database = { use_mvcc_engine = true },
+        groups = { default = { replicasets = { ['rs-1'] = { instances = {
+            ['tt-1'] = {}, ['tt-2'] = {}, ['tt-3'] = {},
+        } } } } },
+    }
+    t.assert_equals(#schema.guardrail_warnings(cfg), 0,
+        'a clean 3-node supervised config has no warnings')
+end
+
 -- Regression: rev 175 / rev 179 incidents — values that Tarantool's
 -- config validator rejects on reload (so they leave the cluster with
 -- an unloadable YAML and a stuck synchro queue) must be rejected at
