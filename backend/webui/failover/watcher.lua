@@ -25,6 +25,7 @@ local json  = require('json')
 
 local etcd_client = require('webui.config_store.client')
 local fencing     = require('webui.failover.fencing')
+local watchdog    = require('webui.failover.watchdog')
 local log_util    = require('webui.log_util')
 local logger      = log_util.with_tag('failover.watcher')
 
@@ -396,6 +397,10 @@ function M.start(opts)
         renew_deadline = renew_deadline,
         waitlsn_timeout = tonumber(opts.waitlsn_timeout)
             or M.DEFAULTS.waitlsn_timeout,
+        -- FO-15 dead-man hard deadline: the full lease_ttl, strictly
+        -- greater than renew_deadline so self-fence (FO-1) acts first.
+        watchdog_enabled = opts.watchdog_enabled ~= false,
+        hard_deadline = lease_ttl,
     }
     STATE.self_alias = box.info.name
     STATE.replicaset = box.info.replicaset and box.info.replicaset.name
@@ -412,6 +417,17 @@ function M.start(opts)
     STATE.react_in_progress = false
     STATE.fiber = fiber.create(loop)
     STATE.fencing_fiber = fiber.create(fencing_loop)
+    -- FO-15: dead-man switch as a backstop to self-fence. Watches the
+    -- same monotonic confirm clock; forces process exit if a leader
+    -- stays unconfirmed past the full lease (self-fence acts earlier).
+    if STATE.config.watchdog_enabled then
+        watchdog.start({
+            is_leader = effectively_leader,
+            last_confirm = function() return STATE.last_leader_confirm_mono end,
+            hard_deadline = STATE.config.hard_deadline,
+            probe_interval = STATE.config.probe_interval,
+        })
+    end
     -- React immediately on every config apply/reload. In supervised
     -- mode the applier re-evaluates RO/RW on reload; the watch lets us
     -- re-assert the appointed state within the same tick instead of
@@ -448,6 +464,7 @@ function M.stop()
     -- Both loop() and fencing_loop() exit on the next tick via stop_flag.
     STATE.fiber = nil
     STATE.fencing_fiber = nil
+    pcall(function() watchdog.stop() end)
     if STATE.config_watch ~= nil then
         pcall(function() STATE.config_watch:unregister() end)
         STATE.config_watch = nil
@@ -475,6 +492,7 @@ function M._reset()
     end
     STATE.fiber = nil
     STATE.fencing_fiber = nil
+    pcall(function() watchdog.stop() end)
     STATE.last_leader_confirm_mono = nil
     STATE.last_etcd_ok = false
     STATE.last_applied_term = 0

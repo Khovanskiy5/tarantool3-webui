@@ -176,6 +176,9 @@ function M.start(opts)
         lease_ttl_sec  = opts.lease_ttl_sec,
         safety_margin  = opts.safety_margin,
         probe_interval = opts.probe_timeout_sec or opts.probe_interval,
+        -- FO-15 dead-man switch; on by default, operators may disable
+        -- via roles_cfg.webui.failover.watchdog_enabled: false.
+        watchdog_enabled = opts.watchdog_enabled,
     })
     if watch_ok == nil then
         return false, 'watcher: ' .. tostring(watch_err)
