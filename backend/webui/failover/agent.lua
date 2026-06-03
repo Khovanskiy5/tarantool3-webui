@@ -84,6 +84,7 @@ local STATE = {
     wake_cond            = nil,    -- FO-7: early-wake on coordinator-key change
     coordinator_watch    = nil,    -- FO-7: etcd streaming watch handle
     last_appointments    = {},
+    weak_subjectivity    = {},    -- FO-18: rs -> [{alias, action, reason}]
     last_error           = nil,
     last_promotion_at    = 0,
     stop_flag            = false,
@@ -193,6 +194,7 @@ local function probe_peer(conn)
     local ok, info = pcall(function()
         return conn:eval([[
             local i = box.info
+            local q = i.synchro and i.synchro.queue
             return {
                 name = i.name,
                 replicaset = i.replicaset and i.replicaset.name,
@@ -201,6 +203,9 @@ local function probe_peer(conn)
                 lsn = i.lsn,
                 vclock = i.vclock,
                 anon = box.cfg.replication_anon == true,
+                -- FO-18: synchro term for the weak-subjectivity term-gap.
+                synchro = q and { queue = { owner = q.owner, term = q.term } }
+                    or nil,
             }
         ]], {}, { timeout = M.DEFAULTS.probe_timeout_sec })
     end)
@@ -216,6 +221,7 @@ local function probe_replicasets()
     if not ok_peers then return {} end
     local conns = peers.connections() or {}
     local out = {}
+    local self_q = box.info.synchro and box.info.synchro.queue
     local self_probe = {
         reachable  = true,
         name       = box.info.name,
@@ -227,6 +233,8 @@ local function probe_replicasets()
         lsn        = box.info.lsn,
         vclock     = box.info.vclock,
         anon       = box.cfg.replication_anon == true,
+        synchro    = self_q
+            and { queue = { owner = self_q.owner, term = self_q.term } } or nil,
     }
     if self_probe.replicaset ~= nil then
         out[self_probe.replicaset] = out[self_probe.replicaset] or {}
@@ -504,6 +512,49 @@ local function evaluate_replicaset(client, rs_name, probes, ctx)
         is_failover, needs_change, now)
 end
 
+-- FO-18: write the trusted checkpoint for a replicaset and detect any
+-- reachable peer that came back with a DIVERGENT TAIL (entries the
+-- leader never confirmed). Diverged peers are logged (persistent audit
+-- of the divergence — never silently dropped), recorded in STATE for the
+-- issues panel, and — only when the operator opted into auto-rejoin AND
+-- the staleness is within the window — re-bootstrapped from the leader.
+local function scan_weak_subjectivity(client, rs_name, probes)
+    local ok_ws, ws = pcall(require, 'webui.recovery.weak_subjectivity')
+    if not ok_ws then return end
+    local ok, _, verdicts = pcall(ws.maintain, client, rs_name, probes, {
+        auto_rejoin_rebootstrap = STATE.config.auto_rejoin_rebootstrap,
+        max_term_gap = STATE.config.weak_subjectivity_max_term_gap,
+    })
+    if not ok or type(verdicts) ~= 'table' then
+        STATE.weak_subjectivity[rs_name] = nil
+        return
+    end
+    if #verdicts == 0 then
+        STATE.weak_subjectivity[rs_name] = nil
+        return
+    end
+    local recorded = {}
+    for _, v in ipairs(verdicts) do
+        recorded[#recorded + 1] = {
+            replicaset = rs_name, alias = v.alias,
+            action = v.action, reason = v.reason, term_gap = v.term_gap,
+        }
+        logger.warn('weak-subjectivity: divergent rejoin detected', {
+            replicaset = rs_name, alias = v.alias, action = v.action,
+            term_gap = v.term_gap, reason = v.reason,
+        })
+        if v.action == 'rebootstrap' then
+            local ok_sb, sb = pcall(require, 'webui.recovery.split_brain')
+            if ok_sb then
+                local rb_ok, rb_msg = pcall(sb.rebootstrap_one, v.alias)
+                logger.warn('weak-subjectivity: auto re-bootstrap dispatched',
+                    { alias = v.alias, ok = rb_ok, detail = tostring(rb_msg) })
+            end
+        end
+    end
+    STATE.weak_subjectivity[rs_name] = recorded
+end
+
 local function appointment_cycle(client)
     -- Maintenance-window pause (Task 5.11). When active, the
     -- coordinator stops issuing new promotions but keeps its lease
@@ -592,6 +643,8 @@ local function appointment_cycle(client)
         if evaluate_replicaset(client, rs_name, probes, ctx) == 'stepdown' then
             return  -- lost coordinator; election_loop will re-evaluate
         end
+        -- FO-18: anchor the trusted checkpoint + flag any divergent rejoin.
+        pcall(scan_weak_subjectivity, client, rs_name, probes)
     end
 end
 
@@ -728,6 +781,12 @@ local function build_config(opts)
     -- degrades to the poll loop if streaming is unavailable.
     cfg.watch_enabled = opts.watch_enabled ~= false
     cfg.watch_idle_timeout = tonumber(opts.watch_idle_timeout) or 10
+    -- FO-18 weak-subjectivity: auto-rebootstrap a diverged rejoining node
+    -- is OFF by default (a divergent tail is only wiped after an operator
+    -- confirms); the term gap still eligible for auto is small.
+    cfg.auto_rejoin_rebootstrap = opts.auto_rejoin_rebootstrap == true
+    cfg.weak_subjectivity_max_term_gap =
+        tonumber(opts.weak_subjectivity_max_term_gap) or 1
     return cfg
 end
 
@@ -748,6 +807,7 @@ function M.start(opts)
     STATE.coordinator_revision = nil
     STATE.last_promotion_at = 0
     STATE.last_error = nil
+    STATE.weak_subjectivity = {}
     -- FO-6: arm the anti-flap circuit-breaker with the operator
     -- tunables (lease_ttl_sec caps the per-candidate backoff window).
     antiflap._reset()
@@ -886,6 +946,13 @@ function M.status()
         last_promotion_at = STATE.last_promotion_at,
         paused_until    = STATE.paused_until,
         antiflap        = antiflap.snapshot(),
+        weak_subjectivity = (function()
+            local out = {}
+            for _, list in pairs(STATE.weak_subjectivity) do
+                for _, v in ipairs(list) do out[#out + 1] = v end
+            end
+            return out
+        end)(),
     }
 end
 

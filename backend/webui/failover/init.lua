@@ -227,6 +227,9 @@ function M.start(opts)
         -- FO-7 push watch.
         watch_enabled         = opts.watch_enabled,
         watch_idle_timeout    = opts.watch_idle_timeout,
+        -- FO-18 weak-subjectivity rejoin guard.
+        auto_rejoin_rebootstrap       = opts.auto_rejoin_rebootstrap,
+        weak_subjectivity_max_term_gap = opts.weak_subjectivity_max_term_gap,
     })
     if agent_ok == nil then
         watcher.stop()
@@ -278,6 +281,9 @@ function M.reconfigure(opts)
         -- restart); reconfigure does not churn the stream.
         watch_enabled         = opts.watch_enabled,
         watch_idle_timeout    = opts.watch_idle_timeout,
+        -- FO-18 weak-subjectivity rejoin guard (live-reconfigurable).
+        auto_rejoin_rebootstrap       = opts.auto_rejoin_rebootstrap,
+        weak_subjectivity_max_term_gap = opts.weak_subjectivity_max_term_gap,
     })
     local w = watcher.reconfigure({
         poll_interval_sec = opts.watcher_poll_interval_sec,

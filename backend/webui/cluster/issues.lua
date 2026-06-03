@@ -564,6 +564,44 @@ function M.check_failover_transition_rate(_, _, now)
     return out
 end
 
+-- Weak-subjectivity: divergent rejoin (FO-18). A node that came back
+-- with a divergent tail (entries the leader never confirmed) is flagged
+-- by the failover agent. Surface it as CRITICAL: its tail must not be
+-- pushed, and unless auto-rejoin re-bootstrap is enabled the operator
+-- must re-bootstrap it (rebootstrapInstance) from the current leader.
+function M.check_weak_subjectivity(_, _, now)
+    now = now or fiber.clock()
+    local out = {}
+    local ok_agent, agent = pcall(require, 'webui.failover.agent')
+    if not ok_agent then return out end
+    local ok_status, status = pcall(agent.status)
+    if not ok_status or type(status) ~= 'table' then return out end
+    if status.enabled ~= true then return out end
+    local ws = status.weak_subjectivity
+    if type(ws) ~= 'table' then return out end
+    for _, v in ipairs(ws) do
+        table.insert(out, make_issue {
+            id = M.make_id('failover', 'instance',
+                tostring(v.alias or '?'), 'divergent-rejoin'),
+            category = M.CATEGORIES.FAILOVER,
+            severity = M.SEVERITY.CRITICAL,
+            scope    = M.SCOPE.INSTANCE,
+            instance = v.alias,
+            replicaset = v.replicaset,
+            message  = string.format(
+                'instance %q rejoined with a divergent tail (%s). Its '
+                .. 'unconfirmed writes must NOT be replicated; %s',
+                tostring(v.alias or '?'), tostring(v.reason or 'divergence'),
+                v.action == 'rebootstrap'
+                    and 'auto re-bootstrap from the leader was dispatched.'
+                    or 're-bootstrap it (rebootstrapInstance) from the '
+                       .. 'current leader after preserving its data dir.'),
+            now = now,
+        })
+    end
+    return out
+end
+
 -- Orphan instance (FO-12). After a restart an instance can sit in
 -- `orphan` while it reconnects and replays from peers: Tarantool keeps
 -- it read-only and recovers it to `running` on its own, and the failover
@@ -727,6 +765,7 @@ function M.scan(snapshot, opts)
         M.check_synchro_quorum, M.check_failover_coordinator,
         M.check_failover_suppressed, M.check_failover_transition_rate,
         M.check_etcd_quorum, M.check_orphan,
+        M.check_weak_subjectivity,
         M.check_two_rw, M.check_alien,
     }) do
         local rule_issues = fn(snapshot, thresholds, now)

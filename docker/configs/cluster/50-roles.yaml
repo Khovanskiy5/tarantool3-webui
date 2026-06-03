@@ -34,6 +34,9 @@ roles_cfg:
       # Push watch (FO-7): streaming etcd watch for sub-second reaction.
       #   watch_enabled: true       # false → fall back to polling only
       #   watch_idle_timeout: 10    # idle re-check period for the watch fiber
+      # Weak-subjectivity rejoin guard (FO-18):
+      #   auto_rejoin_rebootstrap: false  # auto-wipe a diverged rejoiner?
+      #   weak_subjectivity_max_term_gap: 1  # gap still eligible for auto
     # Liveness reporter: each instance publishes a JSON snapshot of
     # its box.info to `<prefix>/state/by-name/<alias>` in etcd, bound
     # to a lease so the key disappears on crash. Surfaced in the
