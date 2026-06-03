@@ -107,8 +107,13 @@ re-encode, which could differ in int width or ext types.
 
 Example: a tuple `{1, "red"}` shows hex `92 01 a3 72 65 64`
 (`92` = 2-element array, `01` = int 1, `a3` = fixstr len 3, then
-`red`). UTF-8 view is disabled because raw msgpack is rarely valid
-UTF-8.
+`red`). The msgpack view renders **only Hex / Base64** — the
+`hide-utf8` prop drops the UTF-8 tab there, because raw msgpack is
+never valid UTF-8 (the framing bytes `0x92`, `0xa5`, … are
+continuation bytes) so a permanently-disabled "UTF-8 (invalid)"
+tab would just be noise. Regular binary fields keep all three
+tabs; their UTF-8 tab activates when the bytes happen to be text
+(e.g. a `varbinary` column holding `"hello world"`).
 
 ## Related
 

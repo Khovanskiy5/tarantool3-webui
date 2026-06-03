@@ -42,6 +42,13 @@ const props = defineProps<{
   // The view switch + Download stay so the operator can still
   // inspect the bytes in any representation and export them.
   readonly?: boolean;
+  // Hide the UTF-8 view entirely (DE-1.6 msgpack view). Raw msgpack
+  // is never valid UTF-8 — the framing bytes (0x92 array marker,
+  // 0xa5 str marker, …) are continuation bytes — so a permanently
+  // disabled "UTF-8 (invalid)" tab there is dead weight. Regular
+  // binary fields keep all three tabs (UTF-8 activates when the
+  // bytes happen to be text).
+  hideUtf8?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -76,15 +83,23 @@ const sizeLabel = computed(() => {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 });
 
-const VIEW_OPTIONS = computed(() => [
-  { label: 'Hex',    value: 'hex' },
-  { label: 'Base64', value: 'base64' },
-  {
-    label: utf8Valid.value ? 'UTF-8' : 'UTF-8 (invalid)',
-    value: 'utf8',
-    disabled: !utf8Valid.value,
-  },
-]);
+const VIEW_OPTIONS = computed(() => {
+  const opts: { label: string; value: string; disabled?: boolean }[] = [
+    { label: 'Hex',    value: 'hex' },
+    { label: 'Base64', value: 'base64' },
+  ];
+  // Drop the UTF-8 tab entirely when the caller asked to (msgpack
+  // view) — raw msgpack is never valid UTF-8, so a disabled tab is
+  // just noise there.
+  if (!props.hideUtf8) {
+    opts.push({
+      label: utf8Valid.value ? 'UTF-8' : 'UTF-8 (invalid)',
+      value: 'utf8',
+      disabled: !utf8Valid.value,
+    });
+  }
+  return opts;
+});
 
 // ─── hex render ──────────────────────────────────────────────────
 

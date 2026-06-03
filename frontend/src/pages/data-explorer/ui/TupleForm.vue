@@ -289,6 +289,7 @@ function close() {
         v-if="showMsgpack"
         :model-value="msgpackEnvelope"
         readonly
+        hide-utf8
       />
     </div>
 
