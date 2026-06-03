@@ -1485,7 +1485,9 @@ local Mutation = types.object {
         sequenceCreate = {
             kind = data_explorer_types.SequenceMutationResult.nonNull,
             arguments = {
-                input = data_explorer_types.SequenceCreateInput.nonNull,
+                -- inputObject does not auto-expose `.nonNull` (see line ~498);
+                -- `.nonNull` here is nil, which silently drops the argument.
+                input = types.nonNull(data_explorer_types.SequenceCreateInput),
             },
             description = 'Create a standalone sequence (`box.schema.' ..
                 'sequence.create`). The result `current` is null because ' ..
@@ -1499,7 +1501,7 @@ local Mutation = types.object {
         sequenceAlter = {
             kind = data_explorer_types.SequenceMutationResult.nonNull,
             arguments = {
-                input = data_explorer_types.SequenceAlterInput.nonNull,
+                input = types.nonNull(data_explorer_types.SequenceAlterInput),
             },
             description = 'Alter a sequence (`seq:alter`). Absent fields ' ..
                 'keep their current value.',
