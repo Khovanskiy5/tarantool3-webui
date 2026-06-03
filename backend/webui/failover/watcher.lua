@@ -25,6 +25,7 @@ local json  = require('json')
 
 local etcd_client = require('webui.config_store.client')
 local fencing     = require('webui.failover.fencing')
+local failsafe    = require('webui.failover.failsafe')
 local watchdog    = require('webui.failover.watchdog')
 local log_util    = require('webui.log_util')
 local logger      = log_util.with_tag('failover.watcher')
@@ -338,34 +339,54 @@ local function fencing_loop()
         })
         if reason ~= nil then
             local ctx = STATE.last_etcd_ok and 'lost_lease' or 'dcs_down'
-            logger.warn('self-fencing: demoting to read-only', {
-                reason = reason, context = ctx,
-                since_confirm = fiber.clock()
-                    - (STATE.last_leader_confirm_mono or 0),
-            })
-            local ok, derr = guarded_ctl(box.ctl.demote)
-            -- box.ctl.demote() freezes the synchro limbo (blocks sync
-            -- writes) but in supervised mode does NOT clear read_only —
-            -- verified live: post-demote box.info.ro stayed false and an
-            -- async write to a non-sync space was still accepted. Force
-            -- read_only=true so the fence is COMPLETE (async writes
-            -- blocked too), regardless of whether demote itself
-            -- succeeded or was skipped because ctl was busy.
-            local ro_ok, ro_err = pcall(function()
-                box.cfg({ read_only = true })
-            end)
-            if ro_ok then
-                pcall(function() box.ctl.wait_ro(3) end)
-                STATE.last_applied = { read_only = true, ts = fiber.time() }
-                -- Reset the clock so we don't re-fire every probe tick
-                -- while waiting for the next appointment.
-                STATE.last_leader_confirm_mono = fiber.clock()
-                logger.info('self-fenced: now read-only',
-                    { context = ctx, demote_ok = ok })
-            else
-                STATE.last_error = 'self-fence read_only: ' .. tostring(ro_err)
-                logger.error('self-fence read_only failed',
-                    { err = tostring(ro_err), demote_err = tostring(derr) })
+            -- FO-16 failsafe: on DCS loss only, if enabled and EVERY
+            -- peer still defers to us, stay read-write instead of
+            -- demoting (availability without split-brain). `lost_lease`
+            -- (etcd reachable, our appointment/CAS was taken over)
+            -- always demotes — someone else is the leader.
+            local held_by_failsafe = false
+            if ctx == 'dcs_down' and STATE.config.failsafe_enabled then
+                local ok_fs, stay = pcall(failsafe.check, STATE.self_alias)
+                if ok_fs and stay == true then
+                    held_by_failsafe = true
+                    -- Reset the confirm clock so neither self-fence nor
+                    -- the watchdog fires while failsafe holds.
+                    STATE.last_leader_confirm_mono = fiber.clock()
+                    logger.warn('failsafe: all peers confirm leadership; '
+                        .. 'staying read-write despite DCS loss')
+                end
+            end
+            if not held_by_failsafe then
+                logger.warn('self-fencing: demoting to read-only', {
+                    reason = reason, context = ctx,
+                    since_confirm = fiber.clock()
+                        - (STATE.last_leader_confirm_mono or 0),
+                })
+                local ok, derr = guarded_ctl(box.ctl.demote)
+                -- box.ctl.demote() freezes the synchro limbo (blocks sync
+                -- writes) but in supervised mode does NOT clear read_only
+                -- — verified live: post-demote box.info.ro stayed false
+                -- and an async write to a non-sync space was still
+                -- accepted. Force read_only=true so the fence is COMPLETE
+                -- (async writes blocked too), regardless of whether
+                -- demote itself succeeded or was skipped (ctl busy).
+                local ro_ok, ro_err = pcall(function()
+                    box.cfg({ read_only = true })
+                end)
+                if ro_ok then
+                    pcall(function() box.ctl.wait_ro(3) end)
+                    STATE.last_applied = { read_only = true, ts = fiber.time() }
+                    -- Reset the clock so we don't re-fire every probe
+                    -- tick while waiting for the next appointment.
+                    STATE.last_leader_confirm_mono = fiber.clock()
+                    logger.info('self-fenced: now read-only',
+                        { context = ctx, demote_ok = ok })
+                else
+                    STATE.last_error = 'self-fence read_only: '
+                        .. tostring(ro_err)
+                    logger.error('self-fence read_only failed', {
+                        err = tostring(ro_err), demote_err = tostring(derr) })
+                end
             end
         end
         fiber.sleep(STATE.config.probe_interval)
@@ -401,6 +422,8 @@ function M.start(opts)
         -- greater than renew_deadline so self-fence (FO-1) acts first.
         watchdog_enabled = opts.watchdog_enabled ~= false,
         hard_deadline = lease_ttl,
+        -- FO-16 failsafe: opt-in (default off → safe CP demote on DCS loss).
+        failsafe_enabled = opts.failsafe_enabled == true,
     }
     STATE.self_alias = box.info.name
     STATE.replicaset = box.info.replicaset and box.info.replicaset.name

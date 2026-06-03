@@ -179,6 +179,8 @@ function M.start(opts)
         -- FO-15 dead-man switch; on by default, operators may disable
         -- via roles_cfg.webui.failover.watchdog_enabled: false.
         watchdog_enabled = opts.watchdog_enabled,
+        -- FO-16 failsafe; opt-in via roles_cfg.webui.failover.failsafe_enabled.
+        failsafe_enabled = opts.failsafe_enabled,
     })
     if watch_ok == nil then
         return false, 'watcher: ' .. tostring(watch_err)

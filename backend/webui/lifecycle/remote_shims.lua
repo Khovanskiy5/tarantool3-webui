@@ -265,6 +265,21 @@ function M.install()
         end
         return { ok = true, status = info.status, elapsed_ms = elapsed_ms }
     end)
+
+    -- Failsafe acceptance (Task FO-16). A leader that lost the DCS asks
+    -- each peer "do you still defer to me?". A peer accepts iff it is
+    -- itself read-only — i.e. NOT a competing writer. If every peer is
+    -- read-only and reachable, the asker staying read-write keeps a
+    -- single writer (no other partition can hold a majority). The
+    -- leader_alias arg is accepted for logging/forward-compat; the
+    -- verdict only depends on our own write status.
+    rawset(_G, 'webui_failsafe_accept', function(_leader_alias)
+        local ro = true
+        if rawget(_G, 'box') ~= nil and box.info ~= nil then
+            ro = box.info.ro == true
+        end
+        return { accepted = ro }
+    end)
 end
 
 return M
