@@ -60,6 +60,10 @@ function M.classify(servers)
                     if lsn > max_lsn then max_lsn = lsn end
                 end
                 entry.last_lsn = max_lsn
+                -- Keep the FULL vclock map (not just the max LSN scalar):
+                -- the recovery risk-assessment layer needs the per-replica
+                -- vector to run vclock_dominates for leader_takeover.
+                entry.vclock = vclock
             end
         end
         -- Walk replication entries to detect split-brain or other
