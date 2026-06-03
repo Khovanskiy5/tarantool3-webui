@@ -73,6 +73,7 @@ docker exec webui-etcd-1 etcdctl get --prefix /tarantool/webui/state/by-name/ --
 
 1. Обычно само-разрешается за секунды — подожди.
 2. Если залип надолго — репликация заклинила: проверь `box.info.replication[*].upstream.status` на инстансе, сетевую связность с пирами, нет ли расхождения (тогда → [`divergent-rejoin`](#divergent-rejoin) / split-brain).
+3. Для залипшего orphan на странице `/cluster-recovery` есть визард **Orphan resolve**: `force_reconnect` (безопасный реконнект репликации), `rebootstrap` (опасно — wipe) или `solo_promote` (опасно — изоляция). См. [recovery-overview.md](recovery-overview.md).
 
 ## <a id="two-rw"></a> два RW / split-brain (critical)
 
@@ -83,5 +84,6 @@ docker exec webui-etcd-1 etcdctl get --prefix /tarantool/webui/state/by-name/ --
 ## См. также
 
 - [`../failover.md`](../failover.md) — модель, инварианты, EE→OSS матрица.
+- [`recovery-overview.md`](recovery-overview.md) — страница /cluster-recovery: модель риска и визарды восстановления.
 - [`split-brain-recovery.md`](split-brain-recovery.md), [`promote.md`](promote.md), [`failover-mode.md`](failover-mode.md), [`pause-for-maintenance.md`](pause-for-maintenance.md).
 - [`../troubleshooting.md`](../troubleshooting.md) — частые ошибки и их симптомы.

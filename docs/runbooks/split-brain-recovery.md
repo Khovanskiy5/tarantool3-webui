@@ -2,6 +2,20 @@
 
 Восстановить кластер после split-brain. Симптомы: "Split-Brain discovered: got a request with lsn from an already processed range" в логах, applier'ы stopped, replication broken.
 
+## Рекомендуемый путь: страница /cluster-recovery
+
+Основной способ — визард **Split-brain** на странице `/cluster-recovery`. Снапшот (`recoverySnapshot`) сам классифицирует пиры (split-brain / queue-owner / unreachable), группирует разошедшиеся узлы и подсказывает победителя по vclock. Визард предлагает три действия (мутация `recoveryAction(action: "split_brain_resolve", payload: ...)`):
+
+| Действие | Что делает | Класс риска |
+|---|---|---|
+| `manual` | Только пишет аудит-запись — оператор чинит руками (шаги ниже). | safe |
+| `rebootstrap_losing` | Wipe'ает проигравших и поднимает их от победителя. | **dangerous** (стирает дивергентные коммиты проигравших) |
+| `force_promote_winner` | Понижает кворум до 1, промоутит победителя, восстанавливает кворум. | **dangerous** (откат неподтверждённых транзакций победителя) |
+
+Перед любым `dangerous`-действием соблюдай универсальный порядок из [recovery-overview.md](recovery-overview.md): **пауза failover → бэкап data-dir → фиксация vclock/term → действие**. Панель показывает сводку оценки (что произойдёт, предупреждения, команды на случай неуспеха); для опасного варианта нужно подтверждение + ввод токена, и сервер откажет в применении без них.
+
+Разделы ниже — **подробная ручная процедура** (то, что делает `manual`-ветка визарда, и что использовать, если нужен полный контроль или UI недоступен).
+
 ## Что такое split-brain
 
 Synchronous replication гарантирует что только один peer может коммитить writes. Split-brain возникает когда два peer'а одновременно убеждены что они owner queue и каждый коммитит свою последовательность LSN. Когда они потом видят друг друга — applier'ы детектируют конфликт (lsn из range который уже processed) и переходят в stopped state.
@@ -108,7 +122,7 @@ mutation { resumeFailover { applied } }
 2. **Manually replay** через `vinyl_dump`/`xlog_dump` критичные записи на trusted peer после recovery.
 3. **Connect к Tarantool Enterprise support** — у них есть tools для split-brain recovery без data loss.
 
-OS-сборка WebUI'а такой поддержки не даёт — этот runbook оптимизирован для типового demo / dev setup где availability > exact consistency.
+Полностью lossless-восстановление без участия оператора (автоматический merge дивергентных хвостов) — это область Enterprise-инструментов; OSS-сборка даёт UI-управляемое восстановление с явными предупреждениями о потере данных, но не автоматический lossless-merge. Приоритет — доступность при контролируемой потере неподтверждённых записей.
 
 ## Профилактика
 
@@ -117,3 +131,10 @@ OS-сборка WebUI'а такой поддержки не даёт — это�
 * Установи `stop_grace_period: 10s` в compose чтобы agent.stop успел сделать `box.ctl.demote()` и drain'нуть limbo.
 * Synchro quorum ≥ N/2+1 (см. [failover-mode.md](failover-mode.md)).
 * Регулярно проверяй /issues — issues scanner ловит split-brain через `check_replication` и поднимает CRITICAL alert.
+
+## См. также
+
+- [recovery-overview.md](recovery-overview.md) — модель риска и универсальный порядок (пауза → бэкап → фиксация → действие).
+- [leader-takeover.md](leader-takeover.md) — назначить владельца очереди (switchover vs force-promote).
+- [failover-issues.md](failover-issues.md#two-rw) — issue `two-rw` (детект двух владельцев очереди).
+- [promote.md](promote.md), [pause-for-maintenance.md](pause-for-maintenance.md).
