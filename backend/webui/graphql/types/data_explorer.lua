@@ -151,11 +151,15 @@ M.FieldFormatInput = types.inputObject({
 M.SpaceMutationResult = types.object({
     name = 'SpaceMutationResult',
     fields = {
-        ok        = types.boolean.nonNull,
-        name      = types.string.nonNull,
-        id        = types.long,
-        forwarded = types.boolean,
-        leader    = types.string,
+        ok             = types.boolean.nonNull,
+        name           = types.string.nonNull,
+        id             = types.long,
+        forwarded      = types.boolean,
+        leader         = types.string,
+        -- truncateSpace populates this when `reset_sequence: true`
+        -- and the space had an attached sequence. Other mutations
+        -- leave it nil.
+        sequence_reset = types.boolean,
     },
 })
 

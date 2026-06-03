@@ -15,6 +15,48 @@ local common = require('webui.graphql.resolvers.data_mutations.common')
 
 local M = {}
 
+-- Look up the sequence attached to `space_id`, if any. Mirrors
+-- the helper in `admin_data.lua` (kept local so this module stays
+-- self-contained and the consumer there is unaffected). Returns
+-- the sequence name (`_sequence` field 3) or nil.
+local function attached_sequence_name(space_id)
+    if box.space._space_sequence == nil then return nil end
+    local ok, link = pcall(function()
+        return box.space._space_sequence:get({ space_id })
+    end)
+    if not ok or link == nil then return nil end
+    local seq_id = link[2]
+    if box.space._sequence == nil then return nil end
+    local seq = box.space._sequence:get({ seq_id })
+    if seq == nil then return nil end
+    return seq[3]
+end
+
+-- Truncate one space, optionally resetting its attached sequence.
+-- Pulled out of `space_apply_local` to keep the dispatcher under
+-- the per-function cyclomatic-complexity budget.
+local function truncate_one(payload)
+    if box.is_in_txn() then
+        error('TRUNCATE_INSIDE_TXN: cannot truncate while a ' ..
+            'transaction is open; commit or rollback first')
+    end
+    local s = box.space[payload.name]
+    if s == nil then
+        error('NOT_FOUND: space ' .. payload.name .. ' does not exist')
+    end
+    s:truncate()
+    local sequence_reset = false
+    if payload.reset_sequence == true then
+        local seq_name = attached_sequence_name(s.id)
+        if seq_name ~= nil and box.sequence[seq_name] ~= nil then
+            box.sequence[seq_name]:reset()
+            sequence_reset = true
+        end
+    end
+    return { ok = true, name = payload.name, id = s.id,
+             sequence_reset = sequence_reset }
+end
+
 -- Local apply for space-level ops only. Index ops live in
 -- `index.lua`; the dispatcher below routes by op-prefix.
 local function space_apply_local(op, payload)
@@ -61,6 +103,7 @@ local function space_apply_local(op, payload)
         s:drop()
         return { ok = true, name = payload.name }
     end
+    if op == 'space_truncate' then return truncate_one(payload) end
     if op == 'space_alter' then
         local s = box.space[payload.name]
         if s == nil then
@@ -160,6 +203,13 @@ end
 function M.drop_space(root, args)
     return M.ddl_apply('dropSpace', 'space_drop', {
         name = args.name,
+    }, root, space_apply_local)
+end
+
+function M.truncate_space(root, args)
+    return M.ddl_apply('truncateSpace', 'space_truncate', {
+        name           = args.name,
+        reset_sequence = args.reset_sequence == true,
     }, root, space_apply_local)
 end
 

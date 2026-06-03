@@ -151,6 +151,7 @@ M.GRAPHQL_FIELD = {
     createSpace           = 'admin',
     dropSpace             = 'admin',
     alterSpace            = 'admin',
+    truncateSpace         = 'admin',
     createIndex           = 'admin',
     dropIndex             = 'admin',
     -- Phase 3 Task 3.4 — SQL workbench snippet library.

@@ -14,7 +14,7 @@
 -- the repo, including `graphql/schema.lua` and tests):
 --   * SENSITIVE_SPACES table
 --   * tuple_insert / tuple_replace / tuple_update / tuple_delete
---   * create_space / drop_space / alter_space
+--   * create_space / drop_space / alter_space / truncate_space
 --   * create_index / drop_index
 --   * remote_entry        – peer-bound DML receiver
 --   * space_remote_entry  – peer-bound DDL receiver
@@ -35,9 +35,10 @@ M.tuple_replace = tuple.tuple_replace
 M.tuple_update  = tuple.tuple_update
 M.tuple_delete  = tuple.tuple_delete
 
-M.create_space  = space.create_space
-M.drop_space    = space.drop_space
-M.alter_space   = space.alter_space
+M.create_space   = space.create_space
+M.drop_space     = space.drop_space
+M.alter_space    = space.alter_space
+M.truncate_space = space.truncate_space
 
 M.create_index  = index.create_index
 M.drop_index    = index.drop_index

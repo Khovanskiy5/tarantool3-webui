@@ -1246,6 +1246,22 @@ local Mutation = types.object {
                     .drop_space(root, args)
             end,
         },
+        truncateSpace = {
+            kind = data_explorer_types.SpaceMutationResult.nonNull,
+            arguments = {
+                name           = types.string.nonNull,
+                reset_sequence = types.boolean,
+            },
+            description = 'Truncate a user space: delete every tuple, ' ..
+                'keep the schema. Optionally reset the attached sequence ' ..
+                'so the next insert restarts from `start`. Rejected with ' ..
+                '`TRUNCATE_INSIDE_TXN` when called while a transaction ' ..
+                'is open. System spaces blocked.',
+            resolve = function(root, args)
+                return require('webui.graphql.resolvers.data_mutations')
+                    .truncate_space(root, args)
+            end,
+        },
         alterSpace = {
             kind = data_explorer_types.SpaceMutationResult.nonNull,
             arguments = {

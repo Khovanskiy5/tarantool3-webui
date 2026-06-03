@@ -22,8 +22,10 @@ import Select from 'primevue/select';
 import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
 import Chip from 'primevue/chip';
+import Checkbox from 'primevue/checkbox';
 
 import { getClient } from '@/shared/api/graphql';
+import { DestructiveActionDialog } from '@/shared/ui/destructive-action-dialog';
 import TupleForm from './TupleForm.vue';
 import SpaceForm from './SpaceForm.vue';
 
@@ -166,6 +168,18 @@ const DROP_SPACE_M = /* GraphQL */ `
   }
 `;
 
+const TRUNCATE_SPACE_M = /* GraphQL */ `
+  mutation DxTruncateSpace($name: String!, $resetSequence: Boolean) {
+    truncateSpace(name: $name, reset_sequence: $resetSequence) {
+      ok
+      name
+      forwarded
+      leader
+      sequence_reset
+    }
+  }
+`;
+
 // ── state ───────────────────────────────────────────────────────────
 
 const spaces = ref<SpaceInfo[]>([]);
@@ -199,6 +213,14 @@ const tupleFormInitial = ref<FieldValue[] | null>(null);
 const spaceFormOpen = ref(false);
 const spaceFormMode = ref<'create' | 'alter'>('create');
 const spaceFormSource = ref<SpaceInfo | null>(null);
+
+// Truncate dialog state. `target` doubles as the open flag — null
+// means the dialog is closed. `resetSequence` is the extras-slot
+// checkbox; reset to false on every open so the more destructive
+// option is never sticky.
+const truncateTarget = ref<SpaceInfo | null>(null);
+const truncateResetSequence = ref(false);
+const truncatePending = ref(false);
 
 // Identity: the Sign-out chip already shows the connected instance,
 // but the follower banner explains the forward-to-leader path so
@@ -436,6 +458,51 @@ async function dropSpace(s: SpaceInfo) {
   await loadSpaces();
 }
 
+function openTruncate(s: SpaceInfo) {
+  if (s.name.startsWith('_')) return;
+  truncateResetSequence.value = false;
+  truncateTarget.value = s;
+}
+
+function cancelTruncate() {
+  if (truncatePending.value) return;
+  truncateTarget.value = null;
+}
+
+async function confirmTruncate() {
+  const target = truncateTarget.value;
+  if (!target) return;
+  truncatePending.value = true;
+  try {
+    const res = await getClient()
+      .mutation(TRUNCATE_SPACE_M, {
+        name: target.name,
+        resetSequence: truncateResetSequence.value,
+      })
+      .toPromise();
+    if (res.error) {
+      error.value = res.error.message;
+      return;
+    }
+    truncateTarget.value = null;
+    // Refresh space list so the row_count tag updates, and reload
+    // the visible page so the freshly truncated grid shows empty.
+    await loadSpaces();
+    if (selectedSpace.value?.id === target.id) {
+      // `selectedSpace` holds a snapshot from the previous load;
+      // re-point it at the freshly-loaded entry so the header's
+      // `N rows` / size_bytes / triggers_count meta refreshes too.
+      const fresh = spaces.value.find((s) => s.id === target.id);
+      if (fresh) selectedSpace.value = fresh;
+      cursorStack.value = [];
+      currentCursor.value = null;
+      await loadTuples();
+    }
+  } finally {
+    truncatePending.value = false;
+  }
+}
+
 // ── presentation helpers ──────────────────────────────────────────
 
 function renderField(v: FieldValue): string {
@@ -573,15 +640,28 @@ watch(includeSystem, () => {
             </span>
           </div>
         </div>
-        <div class="webui-dx__actions">
+        <!-- Mutation buttons are hidden (not just disabled) for system
+             spaces: the sensitive-space deny-list rejects every write
+             on the backend, so showing a disabled button is noise that
+             tells the operator they could maybe edit if they were
+             allowed. They cannot. The same goes for the per-row edit /
+             delete icons further below. -->
+        <div v-if="!selectedSpace.name.startsWith('_')" class="webui-dx__actions">
           <Button
             label="Edit space"
             icon="pi pi-cog"
             severity="info"
             size="small"
             text
-            :disabled="selectedSpace.name.startsWith('_')"
             @click="openAlterSpace(selectedSpace)"
+          />
+          <Button
+            label="Truncate"
+            icon="pi pi-eraser"
+            severity="warn"
+            size="small"
+            text
+            @click="openTruncate(selectedSpace)"
           />
           <Button
             label="Drop"
@@ -589,7 +669,6 @@ watch(includeSystem, () => {
             severity="danger"
             size="small"
             text
-            :disabled="selectedSpace.name.startsWith('_')"
             @click="dropSpace(selectedSpace)"
           />
           <Button
@@ -597,7 +676,6 @@ watch(includeSystem, () => {
             icon="pi pi-plus"
             severity="success"
             size="small"
-            :disabled="selectedSpace.name.startsWith('_')"
             @click="openCreate"
           />
         </div>
@@ -671,6 +749,14 @@ watch(includeSystem, () => {
       </div>
 
       <!-- Tuple grid -->
+      <!-- `scrollable` + `scroll-height="flex"` makes the DataTable
+           body scroll inside the bounded grid container instead of
+           rendering all rows at their natural height and pushing
+           the pager out of view (or, with `overflow: hidden` on the
+           parent, hiding rows behind it). `flex` reads the parent's
+           computed height — works because `.webui-dx__grid` has
+           `flex: 1; min-height: 0` and the page shell is capped at
+           100vh (see App.vue). -->
       <DataTable
         v-if="selectedSpace"
         :value="tuples"
@@ -678,6 +764,8 @@ watch(includeSystem, () => {
         size="small"
         striped-rows
         :row-hover="true"
+        scrollable
+        scroll-height="flex"
         class="webui-dx__grid"
       >
         <Column header="PK" :style="{ width: '14rem' }">
@@ -692,7 +780,11 @@ watch(includeSystem, () => {
             </span>
           </template>
         </Column>
-        <Column header="" :style="{ width: '8rem' }">
+        <Column
+          v-if="!selectedSpace.name.startsWith('_')"
+          header=""
+          :style="{ width: '8rem' }"
+        >
           <template #body="{ data }">
             <span class="webui-dx__row-actions">
               <Button
@@ -701,7 +793,6 @@ watch(includeSystem, () => {
                 text
                 size="small"
                 aria-label="Edit"
-                :disabled="selectedSpace?.name.startsWith('_')"
                 @click="openEdit(data)"
               />
               <Button
@@ -710,7 +801,6 @@ watch(includeSystem, () => {
                 text
                 size="small"
                 aria-label="Delete"
-                :disabled="selectedSpace?.name.startsWith('_')"
                 @click="deleteRow(data)"
               />
             </span>
@@ -769,6 +859,43 @@ watch(includeSystem, () => {
         :source="spaceFormSource"
         @saved="onSpaceFormSaved"
       />
+
+      <DestructiveActionDialog
+        :open="truncateTarget !== null"
+        title="Truncate space"
+        :description="
+          'Truncate deletes every tuple in space “' +
+          (truncateTarget?.name ?? '') +
+          '”. The schema, indexes, and attached sequence stay. ' +
+          'This cannot be undone — if you need a snapshot first, take one before continuing.'
+        "
+        :expected="truncateTarget?.name ?? ''"
+        :prompt="
+          'Type the space name (' + (truncateTarget?.name ?? '') + ') to confirm:'
+        "
+        confirm-label="Truncate"
+        :pending="truncatePending"
+        @cancel="cancelTruncate"
+        @confirm="confirmTruncate"
+      >
+        <template #extras>
+          <!-- A native <label> wraps the Checkbox so the whole row is
+               click-toggleable — same pattern as Sql.vue uses for its
+               "shared" toggle. Everything inside the label is PrimeVue
+               (Checkbox) + text content; no custom form widgets. -->
+          <label class="webui-dx__truncate-extra">
+            <Checkbox
+              v-model="truncateResetSequence"
+              binary
+              input-id="dx-truncate-reset-sequence"
+            />
+            <span>
+              Reset attached sequence (next insert restarts from
+              <code>start</code>). No-op when the space has no sequence.
+            </span>
+          </label>
+        </template>
+      </DestructiveActionDialog>
     </main>
   </section>
 </template>
@@ -947,6 +1074,20 @@ watch(includeSystem, () => {
 .webui-dx__row-actions {
   display: inline-flex;
   gap: 0.25rem;
+}
+.webui-dx__truncate-extra {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+  color: var(--webui-text);
+  cursor: pointer;
+}
+.webui-dx__truncate-extra code {
+  font-family: var(--webui-font-mono);
+  padding: 0 0.2rem;
+  border-radius: 3px;
+  background: var(--webui-bg);
 }
 .webui-dx__sync-badge {
   font-size: 0.65rem;

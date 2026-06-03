@@ -538,6 +538,103 @@ g.test_e2e_drop_space = function()
     t.assert(box.space[DDL_SPACE_NAME] == nil)
 end
 
+g.test_e2e_truncate_space_clears_tuples = function()
+    cleanup_ddl_spaces()
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    mut.create_space(root, {
+        name = DDL_SPACE_NAME,
+        format = {
+            { name = 'id',  type = 'unsigned' },
+            { name = 'tag', type = 'string'   },
+        },
+        primary_key = { 'id' },
+    })
+    box.space[DDL_SPACE_NAME]:insert({ 1, 'a' })
+    box.space[DDL_SPACE_NAME]:insert({ 2, 'b' })
+    box.space[DDL_SPACE_NAME]:insert({ 3, 'c' })
+    t.assert_equals(box.space[DDL_SPACE_NAME]:count(), 3)
+    local r = mut.truncate_space(root, { name = DDL_SPACE_NAME })
+    t.assert_equals(r.ok, true)
+    t.assert_equals(r.name, DDL_SPACE_NAME)
+    -- sequence_reset must be false when no sequence is attached AND
+    -- the operator did not ask for a reset — confirms the default.
+    t.assert_equals(r.sequence_reset, false)
+    t.assert_equals(box.space[DDL_SPACE_NAME]:count(), 0)
+    cleanup_ddl_spaces()
+end
+
+g.test_truncate_space_blocks_system_space = function()
+    -- _user is in SENSITIVE_SPACES + sits in the `_` namespace, so
+    -- both guards in assert_safe_ddl fire. The error must reference
+    -- the operation and the offending name so the UI can surface it.
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    local ok, err = pcall(mut.truncate_space, root, { name = '_user' })
+    t.assert_equals(ok, false)
+    t.assert_str_contains(tostring(err), 'FORBIDDEN')
+    t.assert_str_contains(tostring(err), '_user')
+end
+
+g.test_truncate_space_blocks_underscore_namespace = function()
+    -- Any name starting with `_` is rejected even when it is not in
+    -- the explicit deny-list — `_` belongs to Tarantool.
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    local ok, err = pcall(mut.truncate_space, root,
+        { name = '_does_not_exist_but_underscored' })
+    t.assert_equals(ok, false)
+    t.assert_str_contains(tostring(err), 'FORBIDDEN')
+end
+
+g.test_truncate_space_rejects_inside_txn = function()
+    -- The guard fires BEFORE Tarantool's own cryptic message so the
+    -- UI can show "commit your txn first" instead of an internal
+    -- error. We wrap the call in box.atomic so the resolver runs
+    -- with box.is_in_txn() == true.
+    cleanup_ddl_spaces()
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    mut.create_space(root, {
+        name = DDL_SPACE_NAME,
+        format = { { name = 'id', type = 'unsigned' } },
+        primary_key = { 'id' },
+    })
+    local ok, err = pcall(function()
+        box.atomic(function()
+            mut.truncate_space(root, { name = DDL_SPACE_NAME })
+        end)
+    end)
+    t.assert_equals(ok, false)
+    t.assert_str_contains(tostring(err), 'TRUNCATE_INSIDE_TXN')
+    cleanup_ddl_spaces()
+end
+
+g.test_truncate_space_resets_attached_sequence = function()
+    -- End-to-end: attach a sequence so the next insert auto-fills
+    -- the PK, fill some rows, then truncate with reset_sequence:
+    -- the next insert must restart from 1.
+    cleanup_ddl_spaces()
+    local seq_name = 'data_mut_truncate_seq'
+    pcall(function() box.schema.sequence.drop(seq_name) end)
+    box.schema.sequence.create(seq_name)
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    local s = box.schema.space.create(DDL_SPACE_NAME)
+    s:format({
+        { name = 'id',  type = 'unsigned' },
+        { name = 'tag', type = 'string'   },
+    })
+    s:create_index('primary', { parts = { 'id' }, sequence = seq_name })
+    s:insert({ nil, 'a' }); s:insert({ nil, 'b' }); s:insert({ nil, 'c' })
+    t.assert_equals(box.sequence[seq_name]:next() >= 3, true)
+    local r = mut.truncate_space(root, {
+        name = DDL_SPACE_NAME, reset_sequence = true,
+    })
+    t.assert_equals(r.sequence_reset, true)
+    -- After reset the next call to :next() starts from the sequence's
+    -- `start` (default 1). Compare strictly so a regression that no-ops
+    -- the reset fails the test.
+    t.assert_equals(box.sequence[seq_name]:next(), 1)
+    pcall(function() s:drop() end)
+    pcall(function() box.schema.sequence.drop(seq_name) end)
+end
+
 g.test_e2e_create_index_then_drop_index = function()
     cleanup_ddl_spaces()
     local root = { user = 'admin_dev', roles = { 'admin' } }

@@ -95,6 +95,12 @@ function onCancel() {
               @keyup.enter="onConfirm"
             />
           </label>
+          <!-- Optional caller-provided extras (per-flow options like
+               "Reset attached sequence" for truncate). Rendered AFTER
+               the confirm input so the type-to-confirm gate stays the
+               primary surface. Callers pass PrimeVue components so no
+               native form widgets are introduced. -->
+          <slot name="extras" />
         </div>
         <footer class="webui-destructive-dialog__foot">
           <button
