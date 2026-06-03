@@ -659,6 +659,76 @@ local Query = types.object {
                 return require('webui.recovery.snapshot').build()
             end,
         },
+        recoveryPreflight = {
+            kind = types.object({
+                name = 'RecoveryAssessment',
+                fields = {
+                    action   = types.string.nonNull,
+                    risk     = types.string.nonNull,
+                    dataLoss = types.boolean.nonNull,
+                    autoSafe = types.boolean.nonNull,
+                    summary  = types.string.nonNull,
+                    effects  = types.list(types.string.nonNull).nonNull,
+                    warnings = types.list(types.string.nonNull).nonNull,
+                    manualRecovery = types.list(types.string.nonNull).nonNull,
+                    preconditions = types.list(types.object({
+                        name = 'RecoveryCheck',
+                        fields = {
+                            ok     = types.boolean.nonNull,
+                            label  = types.string.nonNull,
+                            detail = types.string,
+                        },
+                    })).nonNull,
+                    failureCommands = types.list(types.object({
+                        name = 'RecoveryCommand',
+                        fields = {
+                            title   = types.string.nonNull,
+                            command = types.string.nonNull,
+                            note    = types.string,
+                        },
+                    })).nonNull,
+                    confirm = types.object({
+                        name = 'RecoveryConfirm',
+                        fields = {
+                            required    = types.boolean.nonNull,
+                            token       = types.string,
+                            acknowledge = types.string,
+                        },
+                    }).nonNull,
+                    docs        = types.string,
+                    fingerprint = types.string.nonNull,
+                },
+            }).nonNull,
+            arguments = {
+                action  = types.string.nonNull,
+                payload = types.string,  -- JSON envelope, same as recoveryAction
+            },
+            description = 'Read-only risk assessment for a recovery action '
+                .. '(preflight). Computes risk/effects/warnings/preconditions/'
+                .. 'failureCommands + a decision fingerprint from live state '
+                .. 'without mutating. Admin only.',
+            resolve = function(root, args)
+                local rbac = require('webui.auth.rbac')
+                if not rbac.allowed((root and root.roles) or {}, 'admin') then
+                    error('FORBIDDEN: recoveryPreflight requires admin')
+                end
+                local payload = {}
+                if type(args.payload) == 'string' and args.payload ~= '' then
+                    local ok, parsed = pcall(require('json').decode, args.payload)
+                    if not ok or type(parsed) ~= 'table' then
+                        error('VALIDATION_ERROR: payload must be a JSON object')
+                    end
+                    payload = parsed
+                end
+                local preflight = require('webui.recovery.preflight')
+                local a = preflight.assess(args.action, payload)
+                if a == nil then
+                    error('VALIDATION_ERROR: no preflight for action '
+                        .. tostring(args.action))
+                end
+                return a
+            end,
+        },
         verifyAuditChain = {
             kind = types.object({
                 name = 'AuditChainVerifyResult',
@@ -1522,12 +1592,22 @@ local Mutation = types.object {
             arguments = {
                 action  = types.string.nonNull,
                 payload = types.string,  -- JSON-encoded; per-action shape
+                -- Enforcement context for dangerous actions (Task RC-2).
+                -- A caller opts into server-side enforcement by sending
+                -- `fingerprint`; the legacy UI (no fingerprint) is allowed
+                -- through unchanged until the frontend (RC-5) sends these.
+                acknowledge    = types.boolean,
+                confirmToken   = types.string,
+                fingerprint    = types.string,
+                idempotencyKey = types.string,
             },
-            description = 'Disaster-recovery dispatch. `action` ∈ ' ..
-                '{split_brain_resolve, leader_takeover}. ' ..
-                '`payload` is a JSON envelope; see /cluster-recovery ' ..
-                'page for per-action shape. Admin only; every call ' ..
-                'is audited.',
+            description = 'Disaster-recovery dispatch. Mutating actions are '
+                .. 're-assessed server-side and gated: dangerous ones are '
+                .. 'refused (STALE_FINGERPRINT / CONFIRMATION_REQUIRED / '
+                .. 'PRECONDITION_FAILED) without acknowledge + confirmToken + '
+                .. 'matching fingerprint. `payload` is a JSON envelope; see '
+                .. '/cluster-recovery for per-action shape. Admin only; '
+                .. 'every call is audited.',
             resolve = function(root, args)
                 local rbac = require('webui.auth.rbac')
                 if not rbac.allowed((root and root.roles) or {}, 'admin') then
@@ -1541,25 +1621,13 @@ local Mutation = types.object {
                     end
                     payload = parsed
                 end
-                if args.action == 'split_brain_resolve' then
-                    return require('webui.recovery.split_brain')
-                        .resolve(payload, root)
-                end
-                if args.action == 'leader_takeover' then
-                    return require('webui.recovery.leader_takeover')
-                        .promote(payload, root)
-                end
-                if args.action == 'orphan_resolve' then
-                    return require('webui.recovery.orphan')
-                        .resolve(payload, root)
-                end
-                if args.action == 'quorum_loss_escape' then
-                    return require('webui.recovery.quorum_loss')
-                        .escape(payload, root)
-                end
-                if args.action == 'topology_fix' then
-                    return require('webui.recovery.topology_fix')
-                        .apply(payload, root)
+                -- Mutating actions go through one guarded path: re-assess
+                -- from a fresh snapshot, enforce the dangerous-action gate,
+                -- dedup by idempotency key (Task RC-2). Read-only diagnose
+                -- pseudo-actions below bypass the gate (invariant 9).
+                local preflight = require('webui.recovery.preflight')
+                if preflight.is_mutating(args.action) then
+                    return preflight.guarded(args.action, payload, args, root)
                 end
                 -- DR-6 WAL repair — diagnose returns one row per
                 -- xlog with `ok` flag; quarantine renames a
@@ -1580,10 +1648,6 @@ local Mutation = types.object {
                     end
                     return { ok = true, action = 'wal_diagnose',
                         results = results }
-                end
-                if args.action == 'wal_quarantine' then
-                    return require('webui.recovery.wal_repair')
-                        .quarantine(payload, root)
                 end
                 if args.action == 'topology_fix_diagnose' then
                     -- Pseudo-action: returns the diagnostic

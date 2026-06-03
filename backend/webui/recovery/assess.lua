@@ -172,6 +172,54 @@ function M.universal_preconditions()
     }
 end
 
+-- ── Enforcement gate (pure) ──────────────────────────────────────────
+--
+-- Decide whether a recovery action may proceed, given the freshly
+-- recomputed assessment and the caller's arguments. Pure and unit-testable
+-- — no box, no etcd. The resolver (Task RC-2) computes `preconditions_ok`
+-- live (e.g. is failover paused) and passes it in.
+--
+-- Returns { allow = bool, code = string|nil, message = string|nil }.
+-- Distinct refusal codes (mirror K8s 409/412 vs admission) so the client
+-- can tell retry-after-refresh apart from needs-confirmation:
+--   * STALE_FINGERPRINT     — risk-relevant state changed; re-run preflight.
+--   * CONFIRMATION_REQUIRED — missing acknowledge / wrong confirm token.
+--   * PRECONDITION_FAILED    — a blocking precondition (pause) is unmet.
+--
+-- Transition: a caller opts INTO enforcement by sending `fingerprint`.
+-- The legacy UI (no fingerprint) is allowed through unchanged — enforcement
+-- activates once the frontend (Task RC-5) sends fingerprint/token/ack.
+function M.gate(assessment, args, preconditions_ok)
+    args = args or {}
+    if type(assessment) ~= 'table' then
+        return { allow = false, code = 'INTERNAL',
+            message = 'no assessment computed' }
+    end
+    if assessment.risk ~= M.DANGEROUS then
+        return { allow = true }
+    end
+    if args.fingerprint == nil then
+        -- Legacy / not-yet-enforcing caller (current UI). Activated with RC-5.
+        return { allow = true, legacy = true }
+    end
+    if args.fingerprint ~= assessment.fingerprint then
+        return { allow = false, code = 'STALE_FINGERPRINT',
+            message = 'cluster state changed since preflight; re-run preflight' }
+    end
+    local want = assessment.confirm and assessment.confirm.token or nil
+    if args.acknowledge ~= true or args.confirmToken ~= want then
+        return { allow = false, code = 'CONFIRMATION_REQUIRED',
+            message = 'dangerous action requires acknowledge + the exact '
+                .. 'confirm token' }
+    end
+    if preconditions_ok == false then
+        return { allow = false, code = 'PRECONDITION_FAILED',
+            message = 'required preconditions not met (pause failover before '
+                .. 'a dangerous data-plane action)' }
+    end
+    return { allow = true }
+end
+
 -- ── Assessment builder ───────────────────────────────────────────────
 --
 -- Closure-based builder (no metatables). Every mutator returns the

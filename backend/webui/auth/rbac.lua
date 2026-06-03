@@ -110,6 +110,7 @@ M.GRAPHQL_FIELD = {
     audit        = 'admin',
     verifyAuditChain = 'admin',
     recoverySnapshot = 'admin',
+    recoveryPreflight = 'admin',
     recoveryAction   = 'admin',
     issues       = 'viewer',
     suggestions  = 'viewer',
