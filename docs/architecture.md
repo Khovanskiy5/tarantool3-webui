@@ -389,6 +389,10 @@ Frontend через `@/shared/api/ws/client.ts` (singleton с auto-reconnect, ex
 
 Гейтинг: handshake требует валидную сессию (тот же `webui_session` cookie). Slow consumer (backlog > 1000 frames) → close 1008.
 
+**Liveness двунаправленный.** Per-connection heartbeat-фибер считает соединение живым, если за `PONG_DEADLINE_SEC` (60s) пришёл pong **или** удалось отправить клиенту данные (успешный `safe_write` data-фрейма обновляет `last_send`). Закрытие (`idle_timeout`, 1008) — только когда обе стороны молчат дедлайн; ping (`PING_INTERVAL_SEC`, 30s) шлётся только на простаивающем линке. Так клиент, который активно получает снапшоты, не отрывается из-за того, что его pong-фреймы не доходят до сервера (их теряют некоторые прокси / сетевой стек dev-окружения), а реально мёртвый пир всё равно ловится — записи к нему начинают падать и writer выставляет `entry.closed`.
+
+**Владение сокетом.** Сокет соединения закрывает `tcp_server_handler` http-rock'а (`shutdown()`+`close()`) ровно один раз, после возврата хендлера. Код роли сокет **не закрывает** — reader/writer/`close_fn` только выставляют `entry.closed`. Ранний `sock:close()` приводил к `attempt to use closed socket` в фибере `webui_ws_writer_<id>` на каждом реконнекте.
+
 ## Логирование
 
 `backend/webui/log_util.lua` — единая точка. Прямое `log.*` из Tarantool запрещено в коде роли.

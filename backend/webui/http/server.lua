@@ -338,7 +338,13 @@ function M.start(opts)
 
     local httpd = http_server.new(host, port, {
         log_requests = false,  -- we log via our middleware
-        log_errors = true,
+        -- Route handler exceptions are caught and rendered by our
+        -- middleware, so the rock's own error logging is just noise.
+        -- (Note: the rock's "failed to read request: Connection reset
+        -- by peer" line on keep-alive teardown is logged unconditionally
+        -- and is not affected by this flag — that churn is addressed by
+        -- the WebSocket liveness fix in http/ws.lua.)
+        log_errors = false,
     })
 
     httpd:hook('before_dispatch', function(_self, req)

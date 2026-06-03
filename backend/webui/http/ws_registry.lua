@@ -83,6 +83,7 @@ function M.register(meta)
         ua           = meta.ua,
         created_at   = now,
         last_pong    = now,
+        last_send    = now,
         backlog_size = 0,
         queue        = {},
         closed       = false,
@@ -191,6 +192,7 @@ function M.list()
             ua           = entry.ua,
             created_at   = entry.created_at,
             last_pong    = entry.last_pong,
+            last_send    = entry.last_send,
             backlog_size = entry.backlog_size,
         })
     end

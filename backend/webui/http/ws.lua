@@ -241,7 +241,12 @@ local function spawn_reader(entry, sock)
             end
         end
         if not entry.closed then entry.closed = true end
-        pcall(function() sock:close() end)
+        -- Do NOT close the socket here. It is owned by the http rock's
+        -- tcp_server_handler, which calls shutdown()+close() once after
+        -- the connection fiber (the writer loop below) returns. Closing
+        -- it ourselves makes that later shutdown() raise "attempt to use
+        -- closed socket". Flipping entry.closed is enough — the writer
+        -- exits and the rock tears the socket down exactly once.
         registry.unregister(entry.id, 'reader_exit')
     end)
 end
@@ -264,6 +269,15 @@ local function run_writer_loop(entry, sock)
                 entry.closed = true
                 break
             end
+            -- A successful data write means the peer's TCP is still
+            -- accepting bytes — treat that as a liveness signal. The
+            -- heartbeat uses it so an actively-fed client is never
+            -- torn down for a missing pong (browser pong frames can be
+            -- dropped by some proxies / dev networking stacks while the
+            -- downstream stream stays healthy). Note: only real data
+            -- frames refresh this — NOT the keepalive ping below, so a
+            -- genuinely idle+dead link is still detected.
+            entry.last_send = os.time()
             logger.debug('ws message sent', {
                 id = entry.id, bytes = #message,
             })
@@ -287,19 +301,36 @@ local function ensure_heartbeat()
             for _, meta in ipairs(registry.list()) do
                 local entry = registry.get(meta.id)
                 if entry ~= nil and not entry.closed then
-                    -- Send a ping every interval; close if we have
-                    -- not heard a pong within the deadline.
-                    if now - entry.last_pong > M.PONG_DEADLINE_SEC then
-                        logger.warn('ws no pong, closing', {
+                    -- Liveness is bidirectional: a connection is alive
+                    -- if we have heard a pong recently OR have managed
+                    -- to push data to it recently. We only tear it down
+                    -- when BOTH directions have been silent for the
+                    -- deadline — that catches a genuinely dead/idle peer
+                    -- without killing a client that is actively
+                    -- receiving snapshots but whose pong frames never
+                    -- reach us. A dead peer we keep feeding is still
+                    -- caught: its writes start failing and the writer
+                    -- fiber flips entry.closed.
+                    local silent_in  = now - entry.last_pong
+                    local silent_out = now - (entry.last_send or entry.created_at)
+                    if silent_in > M.PONG_DEADLINE_SEC
+                        and silent_out > M.PONG_DEADLINE_SEC then
+                        logger.warn('ws idle both directions, closing', {
                             id = entry.id,
-                            silent_for_sec = now - entry.last_pong,
+                            silent_in_sec  = silent_in,
+                            silent_out_sec = silent_out,
                         })
                         pcall(function()
                             if entry.close_fn then
-                                entry.close_fn(frame.CLOSE.POLICY_VIOL, 'pong_timeout')
+                                entry.close_fn(frame.CLOSE.POLICY_VIOL, 'idle_timeout')
                             end
                         end)
-                    elseif (now - entry.last_pong) >= M.PING_INTERVAL_SEC then
+                    elseif silent_in >= M.PING_INTERVAL_SEC
+                        and silent_out >= M.PING_INTERVAL_SEC then
+                        -- Link idle in both directions — probe with a
+                        -- ping so a silent-but-alive client refreshes
+                        -- last_pong. No need to ping while snapshots are
+                        -- flowing; the data stream is its own keepalive.
                         registry.enqueue(entry.id, '__ping__')
                         notify_cond:broadcast()
                     end
@@ -415,7 +446,12 @@ function M.handler(req)
             sock:write(frame.encode_close(code, reason))
         end)
         entry.closed = true
-        pcall(function() sock:close() end)
+        -- Socket close is owned by the rock's tcp_server_handler (see
+        -- the reader note above). Setting entry.closed makes the writer
+        -- loop return within WRITER_IDLE_SEC, after which the rock
+        -- shuts the socket down once. Wake the writer so it happens
+        -- promptly instead of waiting out the idle tick.
+        notify_cond:broadcast()
         registry.unregister(entry.id, 'close_fn:' .. tostring(reason or code))
     end
 
@@ -445,7 +481,11 @@ function M.handler(req)
         })
     end
 
-    pcall(function() sock:close() end)
+    -- Return DETACHED without closing the socket: the rock's
+    -- tcp_server_handler runs shutdown()+close() once this returns.
+    -- Closing here first made that shutdown() raise "attempt to use
+    -- closed socket" (logged under the webui_ws_writer_<id> fiber name)
+    -- on every reconnect.
     registry.unregister(entry.id, 'writer_exit')
 
     return require('webui.http.server').DETACHED
