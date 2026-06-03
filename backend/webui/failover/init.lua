@@ -171,6 +171,11 @@ function M.start(opts)
     end
     local watch_ok, watch_err = watcher.start({
         poll_interval_sec = opts.watcher_poll_interval_sec,
+        -- Self-fencing timings (FO-1). renew_deadline is derived inside
+        -- the watcher as lease_ttl_sec - safety_margin.
+        lease_ttl_sec  = opts.lease_ttl_sec,
+        safety_margin  = opts.safety_margin,
+        probe_interval = opts.probe_timeout_sec or opts.probe_interval,
     })
     if watch_ok == nil then
         return false, 'watcher: ' .. tostring(watch_err)
