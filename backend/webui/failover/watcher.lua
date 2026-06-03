@@ -38,6 +38,7 @@ local STATE = {
     self_alias  = nil,
     replicaset  = nil,
     fiber       = nil,
+    config_watch = nil,   -- box.watch('config.info') handle
     last_seen   = nil,    -- { leader, ts }
     last_applied = nil,   -- { read_only, ts }
     last_error  = nil,
@@ -60,20 +61,17 @@ local function read_appointment(client)
 end
 
 -- Determine whether we're "really" the leader from Tarantool's
--- perspective. `box.info.ro == false` alone is not enough — with
--- every instance declared `database.mode: rw` (required so the
--- config-applier does not stomp our box.ctl calls), all three
--- peers technically have ro=false. The single source of truth for
--- "who is the leader" is the synchronous-queue ownership: only
--- the owner can append to synchro spaces; everyone else either
--- waits (synchro_quorum) or hits `ro_reason='synchro'`.
+-- perspective. `box.info.ro == false` alone is not enough — the
+-- single source of truth for "who is the leader" is synchronous-queue
+-- ownership: only the owner can append to synchro spaces; everyone
+-- else waits (synchro_quorum) or hits `ro_reason='synchro'`.
 --
--- An owner of 0 means NO ONE currently owns the queue — that is
--- the post-bootstrap state before the first box.ctl.promote()
--- claim. Treating "no owner" as "I am leader" was a bug: it
--- caused the watcher to skip the initial promote(), leaving
--- every peer in a quasi-RW state where the appointed leader had
--- never actually claimed the queue.
+-- An owner of 0 means NO ONE currently owns the queue — that is the
+-- post-bootstrap state before the first box.ctl.promote() claim (under
+-- supervised mode the fresh bootstrap leader comes up RW but does not
+-- own the queue yet). Treating "no owner" as "I am leader" was a bug:
+-- it skipped the initial promote(), leaving the appointed leader never
+-- actually claiming the queue.
 local function effectively_leader()
     if box.info.ro then return false end
     local synchro = box.info.synchro
@@ -134,33 +132,64 @@ local function apply_appointment(appt)
             STATE.last_error = 'demote: ' .. tostring(err)
             logger.error('failed to apply demotion', { err = tostring(err) })
         end
+    elseif not should_be_leader and not box.info.ro then
+        -- We are NOT the appointed leader, do not own the synchro
+        -- queue (effectively_leader() was false), yet we are still
+        -- read-write. This is the fresh-bootstrap leader (minimal
+        -- name, came up RW to bootstrap the replicaset) before the
+        -- agent appointed someone else, or a leftover RW peer. Drop
+        -- to read-only so it cannot accept async writes while another
+        -- instance is the real leader — closing the two-writable
+        -- window. No box.ctl.demote() here: we never owned the queue,
+        -- so a plain read_only flip is the correct, cheaper move.
+        local ok, err = pcall(function()
+            box.cfg({ read_only = true })
+        end)
+        if ok then
+            STATE.last_applied = { read_only = true, ts = fiber.time() }
+            logger.info('set read_only on non-appointed RW instance',
+                { appointed_leader = appt.leader,
+                  coordinator = appt.coordinator })
+        else
+            STATE.last_error = 'read_only=true: ' .. tostring(err)
+            logger.error('failed to RO non-appointed instance',
+                { err = tostring(err) })
+        end
+    end
+end
+
+-- One read-appointment + apply cycle. Shared by the poll loop and the
+-- `box.watch('config.info')` callback so a config reload re-asserts the
+-- target RO/RW state immediately, without waiting for the next poll
+-- tick. apply_appointment is idempotent (it checks the current state
+-- before acting), so concurrent invocations from both paths are safe.
+local function react_once()
+    local client, err = etcd_client.get_client()
+    if client == nil then
+        STATE.last_error = 'etcd unavailable: ' .. tostring(err)
+        return
+    end
+    local appt, get_err = read_appointment(client)
+    if get_err ~= nil then
+        STATE.last_error = 'get: ' .. tostring(get_err)
+    elseif appt == nil then
+        -- No appointment yet — the coordinator hasn't written one.
+        -- Wait quietly; do NOT clear last_error from a previous
+        -- transient failure until we actually succeed at applying.
+        STATE.last_error = nil
+    else
+        STATE.last_error = nil
+        local ok, ap_err = pcall(apply_appointment, appt)
+        if not ok then
+            STATE.last_error = 'apply: ' .. tostring(ap_err)
+        end
     end
 end
 
 local function loop()
     fiber.self():name('webui_failover_watch', { truncate = true })
     while not STATE.stop_flag do
-        local client, err = etcd_client.get_client()
-        if client == nil then
-            STATE.last_error = 'etcd unavailable: ' .. tostring(err)
-        else
-            local appt, get_err = read_appointment(client)
-            if get_err ~= nil then
-                STATE.last_error = 'get: ' .. tostring(get_err)
-            elseif appt == nil then
-                -- No appointment yet — the coordinator hasn't
-                -- written one. Wait quietly; do NOT clear
-                -- last_error from a previous transient failure
-                -- until we actually succeed at applying state.
-                STATE.last_error = nil
-            else
-                STATE.last_error = nil
-                local ok, ap_err = pcall(apply_appointment, appt)
-                if not ok then
-                    STATE.last_error = 'apply: ' .. tostring(ap_err)
-                end
-            end
-        end
+        react_once()
         fiber.sleep(STATE.config.poll_interval_sec)
     end
 end
@@ -180,6 +209,25 @@ function M.start(opts)
     STATE.stop_flag = false
     STATE.enabled = true
     STATE.fiber = fiber.create(loop)
+    -- React immediately on every config apply/reload. In supervised
+    -- mode the applier re-evaluates RO/RW on reload; the watch lets us
+    -- re-assert the appointed state within the same tick instead of
+    -- waiting up to poll_interval_sec. Guarded: never let a watch
+    -- callback error escape, and stop reacting once disabled.
+    do
+        local ok, handle = pcall(function()
+            return box.watch('config.info', function()
+                if STATE.stop_flag or not STATE.enabled then return end
+                pcall(react_once)
+            end)
+        end)
+        if ok then
+            STATE.config_watch = handle
+        else
+            logger.warn('config.info watch unavailable; relying on poll',
+                { err = tostring(handle) })
+        end
+    end
     logger.info('failover watcher started', {
         self = STATE.self_alias,
         replicaset = STATE.replicaset,
@@ -192,6 +240,10 @@ function M.stop()
     if not STATE.enabled then return end
     STATE.stop_flag = true
     STATE.enabled = false
+    if STATE.config_watch ~= nil then
+        pcall(function() STATE.config_watch:unregister() end)
+        STATE.config_watch = nil
+    end
     logger.info('failover watcher stop requested')
 end
 
@@ -209,6 +261,10 @@ end
 function M._reset()
     STATE.enabled = false
     STATE.stop_flag = true
+    if STATE.config_watch ~= nil then
+        pcall(function() STATE.config_watch:unregister() end)
+        STATE.config_watch = nil
+    end
     STATE.last_seen = nil
     STATE.last_applied = nil
     STATE.last_error = nil
