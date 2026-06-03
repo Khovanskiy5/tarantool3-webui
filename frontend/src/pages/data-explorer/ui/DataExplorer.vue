@@ -728,7 +728,6 @@ watch(includeSystem, () => {
            with DE-1.4. -->
       <SequencePanel
         v-if="selectedSpace && !selectedSpace.name.startsWith('_') && selectedSpace.sequence"
-        :space-name="selectedSpace.name"
         :sequence-name="selectedSpace.sequence"
       />
 

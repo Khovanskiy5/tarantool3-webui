@@ -44,8 +44,6 @@ interface SequenceInfo {
 }
 
 const props = defineProps<{
-  /** The selected space — used as cache key for the lazy load. */
-  spaceName: string;
   /** Attached sequence name resolved from `spaceInfo`. Null → no panel. */
   sequenceName: string | null;
 }>();
@@ -212,7 +210,7 @@ function openDropConfirm() {
   dropConfirmOpen.value = true;
 }
 
-async function confirmDrop(_token: string) {
+async function confirmDrop() {
   if (!info.value) return;
   dropPending.value = true;
   const res = await getClient()

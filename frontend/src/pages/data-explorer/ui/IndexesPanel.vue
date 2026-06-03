@@ -218,11 +218,15 @@ function statForDialog(): string {
       </li>
     </ul>
 
-    <Menu ref="menuRef" :model="ACTIONS.map((a) => ({
-      label: a.label,
-      icon: a.icon,
-      command: () => runAction(a.key),
-    }))" :popup="true" />
+    <Menu
+      ref="menuRef"
+      :model="ACTIONS.map((a) => ({
+        label: a.label,
+        icon: a.icon,
+        command: () => runAction(a.key),
+      }))"
+      :popup="true"
+    />
 
     <Dialog
       v-model:visible="statDialogOpen"
