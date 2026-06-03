@@ -11,10 +11,7 @@ export function bytesToBase64(bytes: Uint8Array): string {
   const CHUNK = 0x8000;
   let s = '';
   for (let i = 0; i < bytes.length; i += CHUNK) {
-    s += String.fromCharCode.apply(
-      null,
-      Array.from(bytes.subarray(i, i + CHUNK)),
-    );
+    s += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + CHUNK)));
   }
   return btoa(s);
 }
@@ -59,9 +56,7 @@ export interface BinaryEnvelope {
   _binary_base64: string;
 }
 
-export function envelopeOf(
-  v: BinaryEnvelope | string | null | undefined,
-): string {
+export function envelopeOf(v: BinaryEnvelope | string | null | undefined): string {
   if (v === null || v === undefined) return '';
   if (typeof v === 'string') {
     return v === '' ? '' : bytesToBase64(utf8Encode(v));

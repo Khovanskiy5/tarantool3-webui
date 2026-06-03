@@ -85,7 +85,7 @@ const sizeLabel = computed(() => {
 
 const VIEW_OPTIONS = computed(() => {
   const opts: { label: string; value: string }[] = [
-    { label: 'Hex',    value: 'hex' },
+    { label: 'Hex', value: 'hex' },
     { label: 'Base64', value: 'base64' },
   ];
   // Show the UTF-8 tab only when the bytes actually decode as UTF-8
@@ -238,12 +238,7 @@ function download() {
         :disabled="disabled"
         @click="triggerUpload"
       />
-      <input
-        ref="fileInput"
-        type="file"
-        class="dx-bf__hidden-file"
-        @change="onFile"
-      />
+      <input ref="fileInput" type="file" class="dx-bf__hidden-file" @change="onFile" />
     </div>
 
     <Message v-if="editError" severity="error" :closable="false">

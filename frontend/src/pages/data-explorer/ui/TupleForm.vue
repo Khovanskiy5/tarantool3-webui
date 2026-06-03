@@ -256,11 +256,7 @@ function close() {
           <small>{{ r.type }}<span v-if="r.is_nullable"> · nullable</span></small>
         </label>
         <div class="dx-tf__value">
-          <BinaryField
-            v-if="r.is_binary"
-            v-model="r.binary"
-            :disabled="r.is_null"
-          />
+          <BinaryField v-if="r.is_binary" v-model="r.binary" :disabled="r.is_null" />
           <Textarea
             v-else-if="r.type === 'map' || r.type === 'array' || r.type === 'any'"
             v-model="r.raw"
@@ -285,12 +281,7 @@ function close() {
         <ToggleSwitch v-model="showMsgpack" input-id="tf-show-msgpack" />
         <span>Show msgpack</span>
       </label>
-      <BinaryField
-        v-if="showMsgpack"
-        :model-value="msgpackEnvelope"
-        readonly
-        hide-utf8
-      />
+      <BinaryField v-if="showMsgpack" :model-value="msgpackEnvelope" readonly hide-utf8 />
     </div>
 
     <template #footer>

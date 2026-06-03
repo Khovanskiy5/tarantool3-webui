@@ -46,13 +46,13 @@ const props = defineProps<{
 }>();
 
 const Q_ACTION = /* GraphQL */ `
-  query IndexAction(
-    $space: String!
-    $index: String!
-    $action: IndexActionKind!
-  ) {
+  query IndexAction($space: String!, $index: String!, $action: IndexActionKind!) {
     indexAction(space: $space, index: $index, action: $action) {
-      action tuple count bytes stat
+      action
+      tuple
+      count
+      bytes
+      stat
     }
   }
 `;
@@ -75,12 +75,12 @@ const statDialogOpen = ref(false);
 const statDialogIndex = ref<string | null>(null);
 
 const ACTIONS: { label: string; key: string; icon: string }[] = [
-  { label: 'Min',    key: 'MIN',    icon: 'pi pi-arrow-down' },
-  { label: 'Max',    key: 'MAX',    icon: 'pi pi-arrow-up' },
+  { label: 'Min', key: 'MIN', icon: 'pi pi-arrow-down' },
+  { label: 'Max', key: 'MAX', icon: 'pi pi-arrow-up' },
   { label: 'Random', key: 'RANDOM', icon: 'pi pi-refresh' },
-  { label: 'Count',  key: 'COUNT',  icon: 'pi pi-hashtag' },
-  { label: 'Stat',   key: 'STAT',   icon: 'pi pi-chart-pie' },
-  { label: 'Bsize',  key: 'BSIZE',  icon: 'pi pi-database' },
+  { label: 'Count', key: 'COUNT', icon: 'pi pi-hashtag' },
+  { label: 'Stat', key: 'STAT', icon: 'pi pi-chart-pie' },
+  { label: 'Bsize', key: 'BSIZE', icon: 'pi pi-database' },
 ];
 
 function openMenu(event: Event, indexName: string) {
@@ -158,9 +158,7 @@ function statForDialog(): string {
       {{ error }}
     </Message>
 
-    <div v-if="indexes.length === 0" class="webui-idx__empty">
-      No indexes on this space.
-    </div>
+    <div v-if="indexes.length === 0" class="webui-idx__empty">No indexes on this space.</div>
 
     <ul v-else class="webui-idx__list">
       <li v-for="idx in indexes" :key="idx.id" class="webui-idx__item">
@@ -173,12 +171,7 @@ function statForDialog(): string {
             :severity="idx.unique ? 'success' : 'secondary'"
           />
           <span class="webui-idx__parts">
-            <Tag
-              v-for="part in idx.parts ?? []"
-              :key="part"
-              :value="part"
-              severity="secondary"
-            />
+            <Tag v-for="part in idx.parts ?? []" :key="part" :value="part" severity="secondary" />
           </span>
           <div class="webui-idx__spacer" />
           <Button
@@ -202,9 +195,7 @@ function statForDialog(): string {
           <code v-else-if="results[idx.name]!.bytes !== null">
             bsize = {{ humanBytes(results[idx.name]!.bytes!) }}
           </code>
-          <code v-else-if="results[idx.name]!.stat !== null">
-            stat shown in dialog
-          </code>
+          <code v-else-if="results[idx.name]!.stat !== null"> stat shown in dialog </code>
           <code v-else>—</code>
           <Button
             icon="pi pi-times"
@@ -220,11 +211,13 @@ function statForDialog(): string {
 
     <Menu
       ref="menuRef"
-      :model="ACTIONS.map((a) => ({
-        label: a.label,
-        icon: a.icon,
-        command: () => runAction(a.key),
-      }))"
+      :model="
+        ACTIONS.map((a) => ({
+          label: a.label,
+          icon: a.icon,
+          command: () => runAction(a.key),
+        }))
+      "
       :popup="true"
     />
 
@@ -236,12 +229,7 @@ function statForDialog(): string {
     >
       <pre class="webui-idx__stat-dump">{{ statForDialog() }}</pre>
       <template #footer>
-        <Button
-          label="Close"
-          severity="secondary"
-          text
-          @click="statDialogOpen = false"
-        />
+        <Button label="Close" severity="secondary" text @click="statDialogOpen = false" />
       </template>
     </Dialog>
   </Panel>

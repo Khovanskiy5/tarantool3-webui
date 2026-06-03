@@ -845,11 +845,7 @@ watch(includeSystem, () => {
             </span>
           </template>
         </Column>
-        <Column
-          v-if="!selectedSpace.name.startsWith('_')"
-          header=""
-          :style="{ width: '8rem' }"
-        >
+        <Column v-if="!selectedSpace.name.startsWith('_')" header="" :style="{ width: '8rem' }">
           <template #body="{ data }">
             <span class="webui-dx__row-actions">
               <Button
@@ -936,9 +932,7 @@ watch(includeSystem, () => {
           'This cannot be undone — if you need a snapshot first, take one before continuing.'
         "
         :expected="truncateTarget?.name ?? ''"
-        :prompt="
-          'Type the space name (' + (truncateTarget?.name ?? '') + ') to confirm:'
-        "
+        :prompt="'Type the space name (' + (truncateTarget?.name ?? '') + ') to confirm:'"
         confirm-label="Truncate"
         :pending="truncatePending"
         @cancel="cancelTruncate"

@@ -140,9 +140,7 @@ async function load() {
   if (!props.spaceName) return;
   loading.value = true;
   error.value = null;
-  const res = await getClient()
-    .query(Q_STATS, { name: props.spaceName })
-    .toPromise();
+  const res = await getClient().query(Q_STATS, { name: props.spaceName }).toPromise();
   loading.value = false;
   if (res.error) {
     error.value = res.error.message;
@@ -345,7 +343,8 @@ function humanBytes(n: number): string {
     </div>
 
     <div v-else class="webui-stats__empty">
-      Expand to load stats for <code>{{ spaceName }}</code>.
+      Expand to load stats for <code>{{ spaceName }}</code
+      >.
     </div>
   </Panel>
 </template>

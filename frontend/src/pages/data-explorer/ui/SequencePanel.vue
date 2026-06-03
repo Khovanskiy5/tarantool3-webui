@@ -51,33 +51,59 @@ const props = defineProps<{
 const Q_INFO = /* GraphQL */ `
   query SequenceInfo($name: String!) {
     sequenceInfo(name: $name) {
-      id name step min max start cache cycle current
-      attached_to { space field path }
+      id
+      name
+      step
+      min
+      max
+      start
+      cache
+      cycle
+      current
+      attached_to {
+        space
+        field
+        path
+      }
     }
   }
 `;
 
 const M_SET = /* GraphQL */ `
   mutation SeqSet($name: String!, $value: Long!) {
-    sequenceSet(name: $name, value: $value) { ok name current }
+    sequenceSet(name: $name, value: $value) {
+      ok
+      name
+      current
+    }
   }
 `;
 
 const M_RESET = /* GraphQL */ `
   mutation SeqReset($name: String!) {
-    sequenceReset(name: $name) { ok name current }
+    sequenceReset(name: $name) {
+      ok
+      name
+      current
+    }
   }
 `;
 
 const M_ALTER = /* GraphQL */ `
   mutation SeqAlter($input: SequenceAlterInput!) {
-    sequenceAlter(input: $input) { ok name }
+    sequenceAlter(input: $input) {
+      ok
+      name
+    }
   }
 `;
 
 const M_DROP = /* GraphQL */ `
   mutation SeqDrop($name: String!) {
-    sequenceDrop(name: $name) { ok name }
+    sequenceDrop(name: $name) {
+      ok
+      name
+    }
   }
 `;
 
@@ -142,9 +168,7 @@ async function confirmSet() {
     return;
   }
   setPending.value = true;
-  const res = await getClient()
-    .mutation(M_SET, { name: info.value.name, value: v })
-    .toPromise();
+  const res = await getClient().mutation(M_SET, { name: info.value.name, value: v }).toPromise();
   setPending.value = false;
   if (res.error) {
     error.value = res.error.message;
@@ -156,9 +180,7 @@ async function confirmSet() {
 
 async function reset() {
   if (!info.value) return;
-  const res = await getClient()
-    .mutation(M_RESET, { name: info.value.name })
-    .toPromise();
+  const res = await getClient().mutation(M_RESET, { name: info.value.name }).toPromise();
   if (res.error) {
     error.value = res.error.message;
     return;
@@ -213,9 +235,7 @@ function openDropConfirm() {
 async function confirmDrop() {
   if (!info.value) return;
   dropPending.value = true;
-  const res = await getClient()
-    .mutation(M_DROP, { name: info.value.name })
-    .toPromise();
+  const res = await getClient().mutation(M_DROP, { name: info.value.name }).toPromise();
   dropPending.value = false;
   if (res.error) {
     error.value = res.error.message;
@@ -248,11 +268,7 @@ async function confirmDrop() {
           :value="`current: ${info.current}`"
           severity="secondary"
         />
-        <Tag
-          v-else-if="info && info.current === null"
-          value="unused"
-          severity="secondary"
-        />
+        <Tag v-else-if="info && info.current === null" value="unused" severity="secondary" />
       </span>
     </template>
 
@@ -302,8 +318,8 @@ async function confirmDrop() {
         <Message severity="info" :closable="false">
           <strong>Shared sequence.</strong> This sequence drives
           {{ info.attached_to.length }} indexes —
-          {{ info.attached_to.map((a) => a.space).join(', ') }}. Drop
-          requires detaching from every index first.
+          {{ info.attached_to.map((a) => a.space).join(', ') }}. Drop requires detaching from every
+          index first.
         </Message>
       </div>
 
@@ -345,7 +361,8 @@ async function confirmDrop() {
     </div>
 
     <div v-else class="webui-seq__empty">
-      Expand to load info for <code>{{ sequenceName }}</code>.
+      Expand to load info for <code>{{ sequenceName }}</code
+      >.
     </div>
   </Panel>
 
@@ -359,12 +376,7 @@ async function confirmDrop() {
     <Fluid>
       <div class="r-field">
         <label for="seq-set-value">New value</label>
-        <InputText
-          id="seq-set-value"
-          v-model="setValueInput"
-          autofocus
-          @keyup.enter="confirmSet"
-        />
+        <InputText id="seq-set-value" v-model="setValueInput" autofocus @keyup.enter="confirmSet" />
         <Message size="small" variant="simple">
           The next <code>:next()</code> will return <code>value + step</code>.
         </Message>
@@ -410,18 +422,8 @@ async function confirmDrop() {
       </div>
     </Fluid>
     <template #footer>
-      <Button
-        label="Cancel"
-        severity="secondary"
-        text
-        @click="alterDialogOpen = false"
-      />
-      <Button
-        label="Apply"
-        icon="pi pi-check"
-        :loading="alterPending"
-        @click="confirmAlter"
-      />
+      <Button label="Cancel" severity="secondary" text @click="alterDialogOpen = false" />
+      <Button label="Apply" icon="pi pi-check" :loading="alterPending" @click="confirmAlter" />
     </template>
   </Dialog>
 
