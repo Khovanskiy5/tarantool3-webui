@@ -19,7 +19,13 @@ local logger   = log_util.with_tag('recovery.preflight')
 
 local M = {}
 
--- action -> { module, method }. Only MUTATING actions have an assess().
+-- Forward declaration: EXEC (the executable-action map) is assigned in the
+-- execute-path section below. is_mutating() keys off it.
+local EXEC
+
+-- action -> { module, method } for ASSESS. Every action that has a
+-- preflight assessment is here, including the "analogous" actions (RC-3)
+-- whose execution may still live behind their own mutations.
 local DISPATCH = {
     leader_takeover    = { 'webui.recovery.leader_takeover', 'assess' },
     orphan_resolve     = { 'webui.recovery.orphan',         'assess' },
@@ -27,6 +33,12 @@ local DISPATCH = {
     topology_fix       = { 'webui.recovery.topology_fix',   'assess' },
     wal_quarantine     = { 'webui.recovery.wal_repair',     'assess' },
     split_brain_resolve = { 'webui.recovery.split_brain',   'assess' },
+    -- Analogous functions (RC-3): assessed via recovery/ops.lua.
+    restart_replication = { 'webui.recovery.ops', 'assess_restart_replication' },
+    restart_failover    = { 'webui.recovery.ops', 'assess_restart_failover' },
+    force_apply         = { 'webui.recovery.ops', 'assess_force_apply' },
+    rebootstrap         = { 'webui.recovery.ops', 'assess_rebootstrap' },
+    promote             = { 'webui.recovery.ops', 'assess_promote' },
 }
 
 -- Read-only diagnose pseudo-actions: no assess(), bypass the enforcement
@@ -37,7 +49,10 @@ M.DIAGNOSE = {
 }
 
 M.is_diagnose = function(action) return M.DIAGNOSE[action] == true end
-M.is_mutating = function(action) return DISPATCH[action] ~= nil end
+-- "Mutating" for routing = executable via recoveryAction's guarded path
+-- (has an EXEC entry). Actions with an assessment but no EXEC (e.g. promote,
+-- restart_failover) are preflight-only for now and keep their own mutation.
+M.is_mutating = function(action) return EXEC[action] ~= nil end
 
 -- Compute the assessment for an action. `snap` is an optional pre-built
 -- snapshot (snapshot.build()); when nil the module fetches its own.
@@ -113,13 +128,18 @@ M._reset_idem = function() idem = {} end
 -- action -> { module, method } for the REAL mutation (distinct from the
 -- assess() method).
 
-local EXEC = {
+EXEC = {
     leader_takeover    = { 'webui.recovery.leader_takeover', 'promote' },
     orphan_resolve     = { 'webui.recovery.orphan',         'resolve' },
     quorum_loss_escape = { 'webui.recovery.quorum_loss',    'escape' },
     topology_fix       = { 'webui.recovery.topology_fix',   'apply' },
     wal_quarantine     = { 'webui.recovery.wal_repair',     'quarantine' },
     split_brain_resolve = { 'webui.recovery.split_brain',   'resolve' },
+    -- Analogous functions with a clean adapter (RC-3). promote / restart_
+    -- failover stay behind their existing mutations until RC-5 wires the UI.
+    restart_replication = { 'webui.recovery.ops', 'exec_restart_replication' },
+    force_apply         = { 'webui.recovery.ops', 'exec_force_apply' },
+    rebootstrap         = { 'webui.recovery.ops', 'exec_rebootstrap' },
 }
 
 -- Run the real mutation for a mutating action.
