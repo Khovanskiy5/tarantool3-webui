@@ -26,6 +26,7 @@ local json  = require('json')
 local etcd_client = require('webui.config_store.client')
 local fencing     = require('webui.failover.fencing')
 local failsafe    = require('webui.failover.failsafe')
+local identity    = require('webui.failover.identity')
 local watchdog    = require('webui.failover.watchdog')
 local log_util    = require('webui.log_util')
 local logger      = log_util.with_tag('failover.watcher')
@@ -130,6 +131,19 @@ end
 -- vclockkeeper key so two instances cannot both promote. Returns
 -- (true) when safe to promote, or (false, reason) to defer.
 local function prepare_to_promote(appt, client)
+    -- (0) Cluster identity guard (FO-17): never promote an instance
+    -- whose replicaset UUID does not match the pinned sysid — that
+    -- would be an alien (a different cluster sharing this etcd prefix).
+    local my_uuid = box.info.replicaset and box.info.replicaset.uuid
+    local id_ok, id_info = identity.ensure_sysid(client, STATE.replicaset, my_uuid)
+    if not id_ok then
+        if id_info and id_info.alien then
+            return false, 'alien instance: replicaset sysid mismatch (pinned='
+                .. tostring(id_info.recorded) .. ', mine=' .. tostring(my_uuid)
+                .. ')'
+        end
+        return false, 'sysid guard: ' .. tostring(id_info and id_info.error)
+    end
     -- (1) Catch up to the previous leader.
     if type(appt.prev_vclock) == 'table' then
         local deadline = fiber.clock() + (STATE.config.waitlsn_timeout or 3)
