@@ -8,7 +8,7 @@ Operator handbook: развёртывание, конфигурация, failove
 
 ## Локальное окружение
 
-`docker/docker-compose.yml` поднимает кластер из 3 инстансов Tarantool 3.7 с HAProxy перед ними, одиночным etcd и одноразовым init-контейнером `etcd-seed`:
+`docker/docker-compose.yml` поднимает кластер из 3 инстансов Tarantool 3.7 с HAProxy перед ними, трёхузловым кворумом etcd (`etcd`/`etcd-2`/`etcd-3`) и одноразовым init-контейнером `etcd-seed`:
 
 ```bash
 make dev          # build + up -d
@@ -25,6 +25,7 @@ make dev-down     # teardown + удалить volumes (форсирует пер
 | Файл | Что описывает |
 |---|---|
 | `00-iproto.yaml` | общий `iproto.advertise.peer.login` |
+| `05-box.yaml` | box-defaults (`database.use_mvcc_engine` для synchro) |
 | `10-credentials.yaml` | пользователи (replicator, webui_peer, *_dev) |
 | `20-replication.yaml` | `failover: supervised`, synchro-quorum |
 | `30-log.yaml` | лог-файл и уровень |
@@ -119,7 +120,7 @@ roles_cfg:
       lease_ttl_sec: 20           # время жизни coordinator/RW-лизы (ttl)
       keepalive_interval: 5       # период цикла координатора / продления лизы (loop_wait)
       probe_timeout_sec: 3        # бюджет одного запроса к etcd (retry_timeout)
-      appointment_interval: 1
+      appointment_interval: 2
       watcher_poll_interval_sec: 1
 ```
 
@@ -186,7 +187,7 @@ database:
 
 ### Fallback и переключение режимов
 
-- **Fallback `off`.** Агент по-прежнему стартует при `replication.failover: off` (legacy). Это запасной путь на случай сборки Tarantool, отвергающей `supervised` на CE; гарантии RO-при-рестарте в нём слабее — критичные спейсы должны быть `is_sync`. В логе при старте: `failover agent running in legacy "off" mode`.
+- **Fallback `off`.** Агент по-прежнему стартует при `replication.failover: off` (legacy). Это запасной путь на случай сборки Tarantool, отвергающей `supervised` на CE; гарантии RO-при-рестарте в нём слабее — критичные спейсы должны быть `is_sync`. В логе при старте: `failover agent in legacy "off" mode …` (или `… in legacy "off" fallback …`, если сборка не поддерживает supervised).
 - **Переключение на встроенный raft.** Один edit: `replication.failover: election` и `roles_cfg.webui.failover.agent: false`. Агент отказывается стартовать при `failover ∈ {election, manual}`, поэтому double-leadership на transition исключён.
 
 ## etcd HA — кворум control-plane
@@ -284,7 +285,7 @@ roles_cfg:
 }
 ```
 
-Поля совпадают с контрактом Tarantool Enterprise stateboard (`tarantool-3.7.0/src/box/lua/config/descriptions.lua:2862`). Единственное отличие — JSON вместо YAML (единообразно с остальными ключами WebUI в etcd: `/failover/coordinator`, `/failover/replicasets/<rs>/leader`).
+Поля — надмножество контракта Tarantool Enterprise stateboard (`hostname`/`pid`/`mode`/`ro_reason`/`status` из `tarantool-3.7.0/src/box/lua/config/descriptions.lua:2862` плюс `alias` и `ts`). Формат — JSON вместо YAML (единообразно с остальными ключами WebUI в etcd: `/failover/coordinator`, `/failover/replicasets/<rs>/leader`).
 
 ### Проверка из CLI
 
@@ -393,16 +394,14 @@ Failover-телеметрия (статус агента, anti-flap, weak-subjec
 - Появление critical-issue `etcd-quorum-lost` / `two-rw` / `coordinator-stuck` (через `issuesSummary` или webhook `issue.appeared`) → page.
 - `webui_audit_rows` > 80% retention budget → notice (расширить retention или прорежить).
 - `webui_webhook_dead_letter_depth > 0` → notice (есть provider, который не отвечает).
-- `webui_config_cas_conflicts_total` rate > 0.1/min дольше 10 минут → notice (конфликтующие операторы).
-- `webui_failover_promotions_total` rate > 1/min → notice (flapping leader).
+- Появление WARNING-issue `transition-rate` или `failover suppressed: flapping` (через `issuesSummary` / `failoverAgentStatus`) → notice (flapping leader; failover-телеметрия идёт через GraphQL/issue-сканер, не через Prometheus).
 
 ## Snapshots и backup
 
 ### Создание snapshot'а
 
 - Из UI: страница «Snapshots» → кнопка «Take snapshot» на нужном инстансе.
-- Через REST: `POST /api/snapshots/take` (RBAC: admin).
-- Через GraphQL: mutation `takeSnapshot { instance }` (RBAC: admin).
+- Через REST: `POST /api/snapshots/take` (RBAC: admin). GraphQL-мутации для снапшота нет — канал только REST.
 
 Snapshot создаётся на текущем инстансе (роутинг прозрачен — кнопка работает на любом RO/RW peer).
 
@@ -473,12 +472,13 @@ HAProxy сам выводит инстанс из ротации через heal
 
 ```
 Stage 1 (oven/bun:1-alpine)
-   ├── bun install --frozen-lockfile  (cache на package.json)
+   ├── bun install --frozen-lockfile  (cache на package.json + bun.lock)
    └── bun run build                   → frontend/dist/
 
 Stage 2 (tarantool/tarantool:3.7.0)
-   ├── tt rocks install http graphql errors etcd-client ...
-   ├── COPY backend/                   → /usr/share/tarantool/webui/
+   ├── tt rocks install http 1.9.0 graphql 0.3.1 errors 2.2.1
+   ├── COPY backend/webui              → /usr/share/tarantool/webui/
+   ├── COPY backend/internal           → /usr/share/tarantool/internal/  (CE config-shim)
    ├── tarantool tools/embed-assets.lua → bundle.lua
    ├── COPY tools/, rockspec
    ├── non-root user (uid 1000)
@@ -538,7 +538,6 @@ config:
 - Live updates через `box.watch('config.info', ...)`
 - Edit-lock через etcd lease (для `proposeConfig`)
 - CAS-write через `put_if_witness_unchanged`
-- Self-metrics (`webui_etcd_request_total`)
 
 ## See Also
 
