@@ -64,6 +64,8 @@ local STATE = {
     last_etcd_ok = false,
     last_applied_term = 0,          -- FO-4: highest appointment term applied
     react_in_progress = false,      -- re-entrancy guard for react_once
+    watchdog_params = nil,          -- last-applied watchdog {hard_deadline,probe}
+    sysid_validated = false,        -- S-1: sysid checked OK once this run
     -- Guards against the watcher loop and the fencing loop calling
     -- box.ctl.promote/demote at the same time (Tarantool rejects
     -- "simultaneous invocations"). A plain boolean is safe: fibers only
@@ -134,15 +136,23 @@ local function prepare_to_promote(appt, client)
     -- (0) Cluster identity guard (FO-17): never promote an instance
     -- whose replicaset UUID does not match the pinned sysid — that
     -- would be an alien (a different cluster sharing this etcd prefix).
-    local my_uuid = box.info.replicaset and box.info.replicaset.uuid
-    local id_ok, id_info = identity.ensure_sysid(client, STATE.replicaset, my_uuid)
-    if not id_ok then
-        if id_info and id_info.alien then
-            return false, 'alien instance: replicaset sysid mismatch (pinned='
-                .. tostring(id_info.recorded) .. ', mine=' .. tostring(my_uuid)
-                .. ')'
+    -- The replicaset UUID is immutable for the life of the process, so
+    -- once validated we cache the verdict and skip the etcd round-trip
+    -- on every subsequent (re)promote (review S-1: cut promote-path
+    -- etcd churn).
+    if not STATE.sysid_validated then
+        local my_uuid = box.info.replicaset and box.info.replicaset.uuid
+        local id_ok, id_info =
+            identity.ensure_sysid(client, STATE.replicaset, my_uuid)
+        if not id_ok then
+            if id_info and id_info.alien then
+                return false, 'alien instance: replicaset sysid mismatch '
+                    .. '(pinned=' .. tostring(id_info.recorded)
+                    .. ', mine=' .. tostring(my_uuid) .. ')'
+            end
+            return false, 'sysid guard: ' .. tostring(id_info and id_info.error)
         end
-        return false, 'sysid guard: ' .. tostring(id_info and id_info.error)
+        STATE.sysid_validated = true
     end
     -- (1) Catch up to the previous leader.
     if type(appt.prev_vclock) == 'table' then
@@ -210,15 +220,14 @@ local function apply_appointment(appt, client)
         --     box.cfg{ read_only = false }
         --     box.ctl.promote()
         -- The order matters: a RO peer cannot claim the queue.
-        local rw_ok, rw_err = pcall(function()
+        -- Run read_only=false + promote as ONE guarded unit (S-3) so
+        -- the sequence is atomic w.r.t. the demote/fence sequence in the
+        -- other fiber — no read_only race. Order matters: a RO peer
+        -- cannot claim the queue, so flip read_only first.
+        local ok, err = guarded_ctl(function()
             box.cfg({ read_only = false })
+            box.ctl.promote()
         end)
-        if not rw_ok then
-            STATE.last_error = 'read_only=false: ' .. tostring(rw_err)
-            logger.error('failed to flip read_only before promote',
-                { err = tostring(rw_err) })
-        end
-        local ok, err = guarded_ctl(box.ctl.promote)
         if ok then
             STATE.last_applied = { read_only = false, ts = fiber.time() }
             logger.info('promoted to leader by appointment',
@@ -231,8 +240,10 @@ local function apply_appointment(appt, client)
         -- box.ctl.demote() releases the synchronous queue. In supervised
         -- mode it freezes the limbo but does NOT clear read_only, so
         -- pair it with an explicit read_only=true (see fencing_loop).
-        local ok, err = guarded_ctl(box.ctl.demote)
-        pcall(function() box.cfg({ read_only = true }) end)
+        local ok, err = guarded_ctl(function()
+            box.ctl.demote()
+            box.cfg({ read_only = true })
+        end)
         if ok then
             STATE.last_applied = { read_only = true, ts = fiber.time() }
             logger.info('demoted to follower by appointment',
@@ -252,7 +263,8 @@ local function apply_appointment(appt, client)
         -- instance is the real leader — closing the two-writable
         -- window. No box.ctl.demote() here: we never owned the queue,
         -- so a plain read_only flip is the correct, cheaper move.
-        local ok, err = pcall(function()
+        -- Under the same guard (S-3) so it cannot race a promote/demote.
+        local ok, err = guarded_ctl(function()
             box.cfg({ read_only = true })
         end)
         if ok then
@@ -376,30 +388,30 @@ local function fencing_loop()
                     since_confirm = fiber.clock()
                         - (STATE.last_leader_confirm_mono or 0),
                 })
-                local ok, derr = guarded_ctl(box.ctl.demote)
-                -- box.ctl.demote() freezes the synchro limbo (blocks sync
-                -- writes) but in supervised mode does NOT clear read_only
-                -- — verified live: post-demote box.info.ro stayed false
-                -- and an async write to a non-sync space was still
-                -- accepted. Force read_only=true so the fence is COMPLETE
-                -- (async writes blocked too), regardless of whether
-                -- demote itself succeeded or was skipped (ctl busy).
-                local ro_ok, ro_err = pcall(function()
+                -- Run demote + read_only=true as ONE guarded unit (S-3),
+                -- atomic w.r.t. promote in the other fiber. demote is
+                -- best-effort INSIDE the unit (pcall) so its failure does
+                -- not skip the critical read_only=true: box.ctl.demote()
+                -- freezes the synchro limbo (blocks sync writes) but in
+                -- supervised mode does NOT clear read_only — verified
+                -- live that async writes still landed without this flip.
+                local ok, err = guarded_ctl(function()
+                    pcall(box.ctl.demote)
                     box.cfg({ read_only = true })
                 end)
-                if ro_ok then
+                if ok then
                     pcall(function() box.ctl.wait_ro(3) end)
                     STATE.last_applied = { read_only = true, ts = fiber.time() }
                     -- Reset the clock so we don't re-fire every probe
                     -- tick while waiting for the next appointment.
                     STATE.last_leader_confirm_mono = fiber.clock()
-                    logger.info('self-fenced: now read-only',
-                        { context = ctx, demote_ok = ok })
+                    logger.info('self-fenced: now read-only', { context = ctx })
                 else
-                    STATE.last_error = 'self-fence read_only: '
-                        .. tostring(ro_err)
-                    logger.error('self-fence read_only failed', {
-                        err = tostring(ro_err), demote_err = tostring(derr) })
+                    -- err == 'ctl busy' just means a transition is in
+                    -- flight; we retry on the next probe tick.
+                    STATE.last_error = 'self-fence: ' .. tostring(err)
+                    logger.warn('self-fence deferred/failed',
+                        { err = tostring(err) })
                 end
             end
         end
@@ -439,17 +451,34 @@ local function build_config(opts)
     }
 end
 
--- (Re)start the dead-man watchdog fiber to match the current config.
+-- Reconcile the dead-man watchdog fiber with the current config.
+-- Only (re)starts it when the effective params actually change — a
+-- no-op reconfigure (same timings) leaves the running fiber untouched
+-- (review S-2: avoid needless fiber churn on every reconfigure).
 local function reconcile_watchdog()
-    pcall(function() watchdog.stop() end)
+    local want = nil
     if STATE.config.watchdog_enabled then
+        want = {
+            hard_deadline = STATE.config.hard_deadline,
+            probe = STATE.config.probe_interval,
+        }
+    end
+    local cur = STATE.watchdog_params
+    local unchanged = (want == nil and cur == nil)
+        or (want ~= nil and cur ~= nil
+            and want.hard_deadline == cur.hard_deadline
+            and want.probe == cur.probe)
+    if unchanged then return end
+    pcall(function() watchdog.stop() end)
+    if want ~= nil then
         watchdog.start({
             is_leader = effectively_leader,
             last_confirm = function() return STATE.last_leader_confirm_mono end,
-            hard_deadline = STATE.config.hard_deadline,
-            probe_interval = STATE.config.probe_interval,
+            hard_deadline = want.hard_deadline,
+            probe_interval = want.probe,
         })
     end
+    STATE.watchdog_params = want
 end
 
 function M.start(opts)
@@ -469,6 +498,8 @@ function M.start(opts)
     STATE.last_etcd_ok = false
     STATE.last_applied_term = 0
     STATE.react_in_progress = false
+    STATE.sysid_validated = false
+    STATE.watchdog_params = nil
     STATE.fiber = fiber.create(loop)
     STATE.fencing_fiber = fiber.create(fencing_loop)
     -- FO-15: dead-man switch as a backstop to self-fence. Watches the
@@ -560,6 +591,8 @@ function M._reset()
     STATE.last_etcd_ok = false
     STATE.last_applied_term = 0
     STATE.react_in_progress = false
+    STATE.sysid_validated = false
+    STATE.watchdog_params = nil
     STATE.last_seen = nil
     STATE.last_applied = nil
     STATE.last_error = nil
