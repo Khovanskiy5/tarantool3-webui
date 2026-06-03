@@ -2,7 +2,7 @@
 
 > Веб-интерфейс администрирования кластера Tarantool 3.7 — функциональный эквивалент Cartridge UI, адаптированный под декларативную модель Tarantool 3.x.
 
-Backend встроен в каждый инстанс кластера как Lua-роль `webui`. Frontend — Vue 3 SPA, упакованная в Lua-модуль и отдаваемая тем же инстансом. Источник истины кластерного конфига — etcd. Любой инстанс является точкой входа; в production кластеру предшествует HAProxy с TLS termination, healthcheck и sticky-session для WebSocket.
+Backend встроен в каждый инстанс кластера как Lua-роль `webui`: тот же бинарник, что запускает базу, отдаёт SPA и admin-API. Frontend — Vue 3 SPA, упакованная в Lua-модуль. Источник истины кластерного конфига — etcd (3-узловой кворум). Любой инстанс — точка входа; в production кластеру предшествует HAProxy с TLS termination, healthcheck и sticky-session для WebSocket.
 
 ## Быстрый старт
 
@@ -14,17 +14,20 @@ cd tarantool-webui
 make dev
 ```
 
-`make dev` собирает образ инстанса, поднимает локальный кластер из 3 нод с etcd и HAProxy. После healthy-сигнала откройте `http://localhost:8080` и войдите как `admin_dev / admin-dev-password`.
+`make dev` собирает образ инстанса и поднимает локальный кластер: 3 ноды Tarantool + 3-узловой etcd + HAProxy. После healthy-сигнала откройте `http://localhost:8080` и войдите как `admin_dev / admin-dev-password`. Снести — `make dev-down`.
 
 ## Возможности
 
-- **Кластер one-glance** — топология, статус всех инстансов, репликасеты, vshard-группы.
-- **Issues + suggestions** — live-диагностика (replication, memory, clock skew, config alerts) с предлагаемыми действиями.
-- **Config editor** — Monaco + JSON Schema из работающего бинарника + two-phase commit через etcd с CAS-guard.
-- **Supervised failover на open-source** — кастомный coordinator-агент на etcd lease, единый writer через synchro-queue ownership, leader-change за 3–5 секунд.
-- **Schema / Snapshots / Console** — обзор спейсов и индексов, ручные снапшоты, Lua/SQL eval для `superuser` (выключено по умолчанию).
-- **RBAC** — четыре роли (`viewer / operator / admin / superuser`), RBAC enforced на уровне резолверов.
-- **Audit trail** — каждое мутирующее действие пишется в реплицированный `_webui_audit` с retention.
+- **Кластер one-glance** — топология, статус инстансов, репликасеты, vshard-группы; bootstrap-wizard для пустого кластера.
+- **Issues + suggestions** — live-диагностика (репликация, память, clock skew, synchro-кворум, failover, etcd, config) с предлагаемыми действиями.
+- **Config editor** — Monaco + JSON Schema из живого бинарника + two-phase commit через etcd с CAS-guard, history и rollback.
+- **Supervised failover на open-source** — координатор-агент на etcd-lease, единый writer через synchro-queue ownership; OSS-паритет Enterprise: self-fencing, RO-старт, vclockkeeper-switchover, anti-flap, etcd-HA, weak-subjectivity rejoin-guard, pause/maintenance.
+- **Безопасные рестарты** — rolling restart с majority-guard и demote-first; восстановление после split-brain (rebootstrap, выбор победителя).
+- **Data explorer** — обзор и редактирование спейсов/таплов, индексы, sequences, collations, статистика.
+- **Schema / SQL / Console** — обзор спейсов и индексов, SQL-консоль с EXPLAIN, Lua-eval (только `superuser`, выключено по умолчанию).
+- **Snapshots / Logs / Metrics** — ручные снапшоты + скачивание, просмотр логов, Prometheus-метрики.
+- **RBAC** — четыре роли (`viewer / operator / admin / superuser`), enforced на уровне резолверов.
+- **Audit trail** — каждое мутирующее действие пишется в реплицированный `_webui_audit` с retention и hash-chain верификацией.
 - **Outbound webhooks** — Slack / Discord / SMTP / generic с retry и dead-letter.
 
 ## Пример
@@ -45,15 +48,14 @@ curl -s -X POST http://localhost:8080/admin/api \
 
 | Раздел | Назначение |
 |---|---|
-| [Architecture](docs/architecture.md) | Layout, потоки данных, failover-агент, 2PC, synchro-spaces |
-| [Operations](docs/operations.md) | Deploy, HAProxy, мониторинг, snapshots, rolling upgrade, capacity |
+| [Architecture](docs/architecture.md) | Layout, потоки данных, слои, 2PC, synchro-spaces |
+| [Failover](docs/failover.md) | OSS supervised-parity: инварианты, lease/term/vclockkeeper, тайминги, матрица Enterprise→OSS, issue→runbook |
+| [Operations](docs/operations.md) | Deploy, HAProxy, мониторинг, etcd-HA, pause, безопасные рестарты, каталоги API |
 | [Security](docs/security.md) | TLS / mTLS, RBAC, audit, peer-auth, threat model |
 | [RBAC matrix](docs/rbac-matrix.md) | Полная матрица ролей × операций |
-| [Troubleshooting](docs/troubleshooting.md) | Runbooks для типовых инцидентов |
+| [Troubleshooting](docs/troubleshooting.md) + [Runbooks](docs/runbooks/index.md) | Разбор инцидентов и пошаговые операции |
 | [Development](docs/development.md) | Setup, Makefile, FSD-конвенции, тесты, CI |
-| [GraphQL API](docs/api/graphql-schema.md) | SDL, query/mutation справочник |
-| [REST API](docs/api/rest.md) | Auth, eval, metrics, health, config IO, bundle |
-| [Error codes](docs/api/error-codes.md) | Стабильные коды ошибок и UI-поведение |
+| [GraphQL API](docs/api/graphql-schema.md) · [REST API](docs/api/rest.md) · [Error codes](docs/api/error-codes.md) | Справочник API |
 
 ## Лицензия
 

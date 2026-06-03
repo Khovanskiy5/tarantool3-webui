@@ -48,13 +48,19 @@ backend/webui/
 ├── api/                     REST: auth, health, metrics, eval, snapshots, diagnostics, config_io
 ├── graphql/                 GraphQL-сервер, типы, резолверы
 ├── cluster/                 net.box pool, poller, in-memory state, issues, suggestions, peer_cookie
-├── config_store/            2PC, schema, diff, history, etcd HTTP client, bootstrap
+├── cluster_ops/             атомарные топологические операции (promote, topology_edit)
+├── config_store/            2PC (twophase), schema, diff, history, etcd HTTP client, file-mirror, bootstrap
 ├── config_source/           CE-совместимый Tarantool config source поверх etcd
-├── failover/                Supervised-failover агент + watcher
-├── storage/                 spaces.lua (DDL) + migrations.lua (runner)
-├── auth/                    сессии, RBAC, rate-limit
-├── audit/                   audit-log + retention
+├── failover/                Supervised-failover агент + watcher + fencing/watchdog/failsafe/
+│                            antiflap/timings/identity/drain/pause
+├── recovery/                split-brain, quorum-loss, wal-repair, orphan, weak-subjectivity,
+│                            leader-takeover, snapshot, topology-fix
+├── data_explorer/           обзор спейсов/таплов + мутации + filter/types
+├── storage/                 spaces.lua (DDL служебных `_webui_*` спейсов) + migrations
+├── auth/                    сессии, RBAC, rate-limit, peer-cookie
+├── audit/                   audit-log + retention + hash-chain (chain/verifier) + forwarder
 ├── notifications/           outbound webhooks (slack/discord/email/generic)
+├── lifecycle/               start/stop/apply/validate/state + orchestrator (rolling-restart)
 └── assets/                  встроенный SPA-бандл (генерируется `embed-assets`)
 ```
 
@@ -63,10 +69,11 @@ backend/webui/
 ```
 frontend/src/
 ├── app/         инициализация, провайдеры (i18n, urql, pinia, error-boundary), router, стили
-├── pages/       роутовые слайсы: cluster, issues, config-editor, console, schema, snapshots,
-│                users, vshard, failover, metrics, audit, webhooks-settings, bootstrap, login, errors
+├── pages/       роутовые слайсы: cluster, cluster-recovery, issues, config-editor, console,
+│                data-explorer, schema, sql, logs, snapshots, users, vshard, failover, metrics,
+│                audit, webhooks-settings, bootstrap, login, errors
 ├── widgets/     композитные блоки: sidebar, top-bar, cluster-topology, issues-badge,
-│                suggestions-banner, yaml-editor
+│                suggestions-banner, code-editor, log-viewer
 ├── features/    пользовательские сценарии: auth-login, auth-logout, audit-export
 ├── entities/    бизнес-сущности: session, cluster, replicaset, instance, issue, suggestion, audit-entry
 └── shared/      инфраструктура без знания домена: api (gql + rest + ws), ui, lib, config, i18n
@@ -88,6 +95,7 @@ Runtime и пакетный менеджер — **Bun ≥ 1.1**. Node.js и npm
 | `lifecycle/start.lua` | `start(opts)` — линейная boot-последовательность от storage до HTTP |
 | `lifecycle/stop.lua` | `stop()` — фазы 0–6 graceful shutdown (failover lease → drain → fibers → pool) |
 | `lifecycle/remote_shims.lua` | `install()` — все `webui_*_remote` net.box receivers в `_G` |
+| `lifecycle/orchestrator.lua` | Безопасная оркестрация рестартов (rolling, demote-first, majority-guard, restart-lock) — вызывается из lifecycle-резолвера, не реэкспортируется через `init.lua` |
 
 Поддерживает оба интерфейса Tarantool 3.x:
 
@@ -363,7 +371,7 @@ backend/webui/graphql/schema.lua
 frontend/src/shared/api/schema.graphql  (gitignored)
    │  bunx graphql-codegen --config codegen.yml
    ▼
-frontend/src/shared/api/generated.ts    (gitignored, TS types + DocumentNodes + Vue urql composables)
+frontend/src/shared/api/__generated/{gql,graphql}.ts  (gitignored, TS types + DocumentNodes + Vue urql composables)
 ```
 
 Команды: `make dump-schema` / `make gen-types` / `make gen-types-watch`.

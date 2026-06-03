@@ -198,19 +198,12 @@ frontend/src/
 
 ### Создание нового слайса
 
-```bash
-cd frontend && bun run scaffold entity book
-cd frontend && bun run scaffold feature book-borrow
-cd frontend && bun run scaffold widget library-shelf
-cd frontend && bun run scaffold page library
-```
-
-Шаблоны — в `tools/scaffold/templates/`.
+Слайсы создаются вручную по FSD-конвенции (отдельного scaffold-скрипта нет): директория `<layer>/<slice>/` с `index.ts` (public API), компоненты/composables внутри, импорт только из нижних слоёв через алиасы `@/...`. Сверяйся с соседним слайсом того же слоя как образцом.
 
 ### Bun-runtime
 
 - Менеджер пакетов и runtime — **Bun ≥ 1.1**, не Node/npm.
-- Lockfile — `bun.lockb` (бинарный, коммитится).
+- Lockfile — `bun.lock` (текстовый, коммитится).
 - Vite, vue-tsc, ESLint, vitest, Playwright работают под Bun без модификаций.
 - `bunfig.toml` фиксирует registry, отключает встроенный `bun test` (используем vitest для лучшей Vue-интеграции).
 
@@ -254,7 +247,7 @@ backend/webui/graphql/schema.lua
 frontend/src/shared/api/schema.graphql        (gitignored)
    │  bunx graphql-codegen --config codegen.yml
    ▼
-frontend/src/shared/api/generated.ts          (gitignored)
+frontend/src/shared/api/__generated/{gql,graphql}.ts  (gitignored)
 ```
 
 Команды:
@@ -265,11 +258,11 @@ make gen-types            # SDL + TS-типы + Vue composables
 make gen-types-watch      # Watch
 ```
 
-После каждого backend-изменения в GraphQL схемы PR обязан включать regenerated `generated.ts`. CI gate ловит drift.
+После каждого backend-изменения в GraphQL схемы PR обязан включать regenerated `__generated/*.ts`. CI gate ловит drift.
 
 ## Storybook
 
-`frontend/.storybook/` — Storybook 8 поверх `@storybook/vue3-vite`. Stories — TypeScript рядом с компонентами:
+`frontend/.storybook/` — Storybook 10 поверх `@storybook/vue3-vite`. Stories — TypeScript рядом с компонентами:
 
 ```bash
 cd frontend
@@ -277,7 +270,7 @@ bun run storybook         # dev-сервер на http://localhost:6006
 bun run build-storybook   # статика в frontend/storybook-static/
 ```
 
-Аддоны: `addon-essentials`, `addon-a11y` (axe-core), `addon-themes` (light/dark), `addon-interactions`, `addon-viewport`. Глобальные декораторы: PrimeVue Aura, Pinia, vue-i18n, vue-router memory history.
+Аддоны: `addon-a11y` (axe-core), `addon-themes` (light/dark), `addon-vitest`. Глобальные декораторы: PrimeVue Aura, Pinia, vue-i18n, vue-router memory history.
 
 Каждый UI-примитив в `frontend/src/shared/ui/` обязан идти вместе со story-файлом и проходить axe-checks.
 

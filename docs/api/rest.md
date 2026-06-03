@@ -2,7 +2,7 @@
 
 # REST API
 
-Основная админ-поверхность — GraphQL по `POST /admin/api` (см. `graphql-schema.md`). REST зарезервирован для случаев, где GraphQL только мешает: аутентификация, eval, метрики, health, upload/download конфигов, diagnostic bundle.
+Основная админ-поверхность — GraphQL по `POST /admin/api` (см. `graphql-schema.md`). REST зарезервирован для случаев, где GraphQL только мешает: аутентификация, eval/SQL, метрики, health, скачивание/загрузка конфигов, снапшоты, логи, диагностический бандл, WebSocket.
 
 Все ответы — `application/json; charset=utf-8`. Все запросы и ответы несут заголовок `X-Request-Id` (UUID v4) — клиент может передать свой, иначе сервер сгенерирует. Этот же ID попадает в structured-логи на всех инстансах кластера для cross-instance correlation.
 
@@ -20,6 +20,37 @@
 ```
 
 Полный список `code` — в `docs/api/error-codes.md`. Stack-trace, имена файлов и внутренние пути никогда не попадают в envelope.
+
+## Каталог эндпоинтов
+
+Точные требуемые роли — в [`rbac-matrix.md`](../rbac-matrix.md). Все мутирующие POST требуют валидный CSRF-токен (см. `security.md`).
+
+| Метод | Путь | Назначение |
+|---|---|---|
+| GET | `/api/health` | Liveness/readiness для HAProxy и мониторинга (детали ниже) |
+| POST | `/admin/api` | GraphQL — основная админ-поверхность |
+| GET | `/admin/api/explore` | Минимальный GraphQL explorer (gated `graphiql_enabled`) |
+| POST | `/api/auth/login` | Логин по `{username, password}` → session-cookie + CSRF |
+| POST | `/api/auth/logout` | Завершить сессию |
+| GET | `/api/auth/me` | Текущий пользователь + роли + CSRF-токен |
+| POST | `/api/eval` | Lua-eval на выбранном инстансе (`superuser`, по умолчанию выключен; пишется в audit) |
+| POST | `/api/sql` | SQL-запрос |
+| POST | `/api/sql/explain` | `EXPLAIN` для SQL-запроса |
+| GET | `/api/metrics` | Prometheus-экспозиция (метрики Tarantool) |
+| GET | `/api/metrics/webui` | Prometheus-экспозиция self-метрик роли (`webui_*`) |
+| GET | `/api/config/download` | Скачать текущий cluster YAML |
+| POST | `/api/config/upload` | Загрузить cluster YAML (идёт через 2PC prepare) |
+| GET | `/api/logs` | Хвост role-логов (фильтры через query-параметры) |
+| GET | `/api/snapshots` | Список снапшотов инстанса |
+| POST | `/api/snapshots/take` | Сделать снапшот (`box.snapshot`) |
+| GET | `/api/snapshots/download` | Скачать `.snap`/`.xlog` |
+| GET | `/api/diagnostics/bundle` | Диагностический бандл (логи + box.info + конфиг) |
+| POST | `/api/diagnostics/rebootstrap` | Re-bootstrap инстанса (wipe WAL/snap; деструктивно) |
+| GET | `/ws` | WebSocket live-обновлений (issues/state/audit) |
+
+Статические роуты SPA (`/`, `/index.html`, `/assets/*`, `/favicon.ico`, `/robots.txt`, `/monacoeditorwork/*`, fallback `/*splat`) отдают упакованный фронтенд.
+
+Ниже — детальные контракты ключевых эндпоинтов.
 
 ## GET /api/health
 

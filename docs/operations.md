@@ -104,7 +104,7 @@ Dev-фикстуры credentials: `admin_dev / admin-dev-password`, `operator_de
 
 ## Supervised failover (open-source)
 
-WebUI реализует «supervised»-режим (аналог EE-функции) поверх Tarantool CE через open-source агент. Подробности дизайна — в `architecture.md` (раздел *Supervised failover*).
+WebUI реализует «supervised»-режим (аналог EE-функции) поверх Tarantool CE через open-source агент. **Канонический справочник модели** (инварианты, lease/term/vclockkeeper/fencing, тайминги, матрица Enterprise→OSS, индекс issue→runbook) — в [`failover.md`](failover.md); разбор инцидентов — в [`runbooks/failover-issues.md`](runbooks/failover-issues.md). Ниже — операционные детали (конфиг, тайминги, etcd-HA, рестарты, pause).
 
 ### Включение
 
@@ -327,10 +327,15 @@ etcdctl --endpoints=http://etcd:2379 \
 | GET   | `/api/auth/me`             | session    | Текущий user + roles                              |
 | GET   | `/api/snapshots`           | admin      | Список `.snap`-файлов на инстансе                 |
 | POST  | `/api/snapshots/take`      | admin      | `box.snapshot()`                                  |
+| GET   | `/api/snapshots/download`  | admin      | Скачать `.snap`/`.xlog`                           |
 | GET   | `/api/config/download`     | admin      | Скачать текущий cluster YAML                      |
 | POST  | `/api/config/upload`       | admin      | Загрузить YAML → `proposeConfig` (dry-run)        |
-| POST  | `/api/eval`                | superuser  | Lua/SQL консоль (gating `console_enabled`)        |
+| POST  | `/api/eval`                | superuser  | Lua консоль (gating `console_enabled`)            |
+| POST  | `/api/sql`                 | operator   | SQL-запрос (write-стейтменты эскалируют до `admin`) |
+| POST  | `/api/sql/explain`         | operator   | `EXPLAIN` для SQL-запроса                         |
+| GET   | `/api/logs`                | admin      | Хвост role-логов (фильтры через query)            |
 | GET   | `/api/diagnostics/bundle`  | admin      | JSON-бандл состояния для тикетов поддержки        |
+| POST  | `/api/diagnostics/rebootstrap` | admin  | Re-bootstrap инстанса (wipe WAL/snap; деструктивно) |
 | GET   | `/ws`                      | session    | WebSocket подписка                                |
 | POST  | `/admin/api`               | session    | GraphQL endpoint, RBAC на уровне резолверов       |
 | GET   | `/admin/api/explore`       | admin      | GraphiQL (если `graphiql_enabled: true`)          |
@@ -339,47 +344,22 @@ CSRF: cookie `webui_csrf` (не HttpOnly) дублируется в заголо
 
 ## Каталог GraphQL операций
 
-| Тип       | Имя                 | RBAC       | Назначение                                    |
-|-----------|---------------------|------------|-----------------------------------------------|
-| Query     | `cluster`           | viewer     | Self / servers / replicasets / knownRoles     |
-| Query     | `issues`            | viewer     | Live-issues с фильтрами                       |
-| Query     | `suggestions`       | viewer     | Восстановительные suggestions                 |
-| Query     | `config`            | viewer     | Текущий YAML + source (`file`/`memory`/`etcd`) |
-| Query     | `audit`             | admin      | Paginated audit-log с фильтрами               |
-| Query     | `schema`            | viewer     | Список спейсов и индексов                     |
-| Query     | `users`             | admin      | Tarantool users + RBAC роли                   |
-| Query     | `failover`          | admin      | Mode + per-server election state              |
-| Query     | `clusterLiveness`   | viewer     | Records published by `state_reporter` (etcd liveness) |
-| Query     | `vshard`            | viewer     | Groups summary (если sharding включён)        |
-| Query     | `bootstrapStatus`   | admin      | Нужен ли initial bootstrap                    |
-| Query     | `bootstrapTemplates`| admin      | Список шаблонов (single / replicaset-3 / vshard-3x3) |
-| Query     | `bootstrapRender`   | admin      | Preview YAML без записи                       |
-| Query     | `webhooks`          | admin      | Конфигурированные webhooks + per-receiver stats |
-| Query     | `webhookQueueDepth` | admin      | Pending + dead-letter counts                  |
-| Query     | `webhookDeadLetter` | admin      | Последние записи dead-letter                  |
-| Mutation  | `validateConfig`    | operator   | Schema + cross-validate YAML                  |
-| Mutation  | `proposeConfig`     | operator   | 2PC prepare → возвращает diff                 |
-| Mutation  | `commitConfig`      | admin      | Применить prepared YAML с CAS-guard           |
-| Mutation  | `abortConfig`       | operator   | Отменить prepared                             |
-| Mutation  | `forceTakeLock`     | admin      | Перехватить edit-lock                         |
-| Mutation  | `setFailover`       | admin      | Сменить failover mode                         |
-| Mutation  | `promote`           | admin      | Принудительно promote инстанс                 |
-| Mutation  | `expel`             | admin      | Expel инстанс из cluster config               |
-| Mutation  | `joinInstance`      | admin      | Добавить новый инстанс                        |
-| Mutation  | `setUserRoles`      | admin      | Изменить RBAC-роли пользователя               |
-| Mutation  | `setLabels`         | operator   | Labels на инстансе                            |
-| Mutation  | `setVshardWeight`   | admin      | Изменить vshard weight                        |
-| Mutation  | `setVshardGroup`    | admin      | Перенести инстанс в другую vshard-группу      |
-| Mutation  | `bootstrapVshard`   | admin      | `vshard.router.bootstrap()`                    |
-| Mutation  | `bootstrapInitialize` | admin    | Initial-bootstrap из шаблона                  |
-| Mutation  | `testWebhook`       | admin      | Synthetic event через указанный webhook       |
-| Mutation  | `clearDeadLetter`   | admin      | TRUNCATE `_webui_webhook_dead_letter`         |
-| Mutation  | `exportAudit`       | admin      | JSON-дамп audit-лога                          |
-| Mutation  | `runEval`           | superuser  | Lua-eval (`POST /api/eval` GraphQL-эквивалент) |
-| Mutation  | `runSql`            | superuser  | SQL-eval                                       |
-| Mutation  | `hotReloadModule`   | superuser  | Перезагрузить Lua-модуль                       |
+Полный per-field справочник — [`api/graphql-schema.md`](api/graphql-schema.md); точные роли — [`rbac-matrix.md`](rbac-matrix.md). Ниже — операции, сгруппированные по доменам (38 query + 52 mutation).
 
-Полная RBAC-матрица — `rbac-matrix.md`.
+| Домен | Query | Mutation |
+|---|---|---|
+| Кластер | `cluster`, `clusterLiveness`, `serverTime` | — |
+| Issues / suggestions | `issues`, `issuesSummary`, `suggestions` | `applyForceApply`, `applyRestartReplication`, `applyRefreshVshard`, `applyDisableServer`, `applyRefineUri`, `applyRestartFailover`, `applyBootstrapVshard` |
+| Config 2PC | `config`, `configHistory`, `configRevision`, `configJsonSchema` | `proposeConfig`, `validateConfig`, `commitConfig`, `abortConfig`, `rollbackConfig`, `forceReapplyConfig`, `reloadRoles` |
+| Топология | — | `editTopology`, `setReplicasetRoles`, `createReplicaset`, `editReplicaset`, `addInstance`, `expelInstance`, `setInstanceState` |
+| Failover | `failover`, `failoverAgentStatus`, `failoverStateProviderStatus`, `failoverCommands`, `rollingRestartPlan` | `setFailoverMode`, `promoteInstance`, `demoteInstance`, `pauseFailover`, `resumeFailover`, `safeRestartInstance`, `rebootstrapInstance` |
+| Recovery | `recoverySnapshot` | `recoveryAction` |
+| vshard | `vshard`, `vshardKnownGroups`, `canBootstrapVshard` | `bootstrapVshard` |
+| Data explorer | `spaces`, `tuples`, `spaceStats`, `sequenceInfo`, `collations`, `indexAction` | `tupleInsert/Replace/Update/Delete`, `createSpace`, `dropSpace`, `alterSpace`, `truncateSpace`, `createIndex`, `dropIndex`, `sequenceCreate/Alter/Drop/Reset/Set` |
+| Users / saved queries | `users`, `savedQueries` | `saveQuery`, `deleteSavedQuery` |
+| Audit / webhooks | `audit`, `verifyAuditChain`, `webhooks`, `webhookQueueDepth`, `webhookDeadLetter` | `exportAudit`, `testWebhook`, `clearDeadLetter` |
+| Bootstrap | `bootstrapStatus`, `bootstrapTemplates`, `bootstrapRender` | `bootstrapInitialize` |
+| Базовое / lifecycle | `ping`, `webuiVersion`, `roleStatus` | `probeUri` |
 
 ## Мониторинг
 
@@ -391,28 +371,26 @@ Prometheus-формат. Экспортируется rock `metrics` плюс м
 
 Self-metrics WebUI-роли:
 
-| Metric | Type | Labels |
+| Metric | Type | Назначение |
 |---|---|---|
-| `webui_ws_connections` | gauge | — |
-| `webui_ws_backlog_bytes` | gauge | — |
-| `webui_audit_rows` | gauge | — |
-| `webui_audit_writes_total` | counter | `action` |
-| `webui_peer_probe_success_total` | counter | `peer` |
-| `webui_peer_probe_failure_total` | counter | `peer` |
-| `webui_peer_backoff_seconds` | gauge | `peer` |
-| `webui_config_commits_total` | counter | `status` |
-| `webui_config_cas_conflicts_total` | counter | — |
-| `webui_webhook_queue_depth` | gauge | — |
-| `webui_webhook_dead_letter_depth` | gauge | — |
-| `webui_webhook_deliveries_total` | counter | `name` |
-| `webui_webhook_failures_total` | counter | `name` |
-| `webui_etcd_request_total` | counter | `endpoint`, `op`, `status` |
-| `webui_failover_promotions_total` | counter | `replicaset` |
+| `webui_up` | gauge | Маркер живости роли (`1`) |
+| `webui_self_time` | gauge | Текущее время инстанса (epoch) |
+| `webui_servers_seen` | gauge | Сколько инстансов видит поллер |
+| `webui_audit_rows` | gauge | Размер `_webui_audit` |
+| `webui_ws_connections` | gauge | Активные WebSocket-подписчики |
+| `webui_webhook_queue_depth` | gauge | Pending-доставки webhooks |
+| `webui_webhook_dead_letter_depth` | gauge | Записей в dead-letter |
+| `webui_webhook_dead_letter_total` | counter | Всего ушло в dead-letter |
+| `webui_webhook_deliveries_total` | counter | Успешные доставки |
+| `webui_webhook_failures_total` | counter | Неуспешные попытки |
+| `webui_webhook_retry_count_total` | counter | Ретраи доставки |
+
+Failover-телеметрия (статус агента, anti-flap, weak-subjectivity, pause) отдаётся не Prometheus-метриками, а через GraphQL `failoverAgentStatus` / `agent.status()` и issue-сканер.
 
 ### Рекомендованные alerts
 
 - `up == 0` или `webui_up == 0` дольше 30 секунд → page.
-- `webui_peer_probe_failure_total` rate > 0.5/min дольше 5 минут → page (cluster splits / network).
+- Появление critical-issue `etcd-quorum-lost` / `two-rw` / `coordinator-stuck` (через `issuesSummary` или webhook `issue.appeared`) → page.
 - `webui_audit_rows` > 80% retention budget → notice (расширить retention или прорежить).
 - `webui_webhook_dead_letter_depth > 0` → notice (есть provider, который не отвечает).
 - `webui_config_cas_conflicts_total` rate > 0.1/min дольше 10 минут → notice (конфликтующие операторы).

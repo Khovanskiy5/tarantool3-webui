@@ -14,6 +14,9 @@
 | [pause-for-maintenance.md](pause-for-maintenance.md) | Остановить failover-агент на maintenance window. |
 | [leader-autoreturn.md](leader-autoreturn.md) | Настроить автоматический возврат лидерства на preferred peer. |
 | [split-brain-recovery.md](split-brain-recovery.md) | Восстановить кластер после split-brain (LSN-конфликты, "Split-Brain discovered" в логах). |
+| [failover-issues.md](failover-issues.md) | Разбор failover/etcd issue'ов: coordinator-stuck, etcd-quorum-lost, failover-suppressed, divergent-rejoin, alien, orphan. |
+
+> Модель failover целиком (инварианты, lease/term/vclockkeeper, матрица Enterprise→OSS) — в [`../failover.md`](../failover.md).
 
 ## Что общего у всех runbook'ов
 

@@ -31,7 +31,7 @@
 - Объектные типы и скаляры: `PascalCase` (`RoleStatus`, `Server`, `Issue`).
 - Поля и аргументы: `camelCase` (`uptimeSec`, `replicasetName`).
 - Enum-значения: `UPPER_SNAKE_CASE` (`ISSUE_SEVERITY_WARNING`).
-- Mutation-имена: `verbObject` (`configCommit`, `expelInstance`).
+- Mutation-имена: `verbObject` (`commitConfig`, `expelInstance`, `promoteInstance`).
 - Input-типы: суффикс `Input`.
 - Payload-типы (для mutations): суффикс `Payload`.
 
@@ -104,11 +104,45 @@ query { configJsonSchema }
 
 Клиент парсит результат как JSON и подаёт в любой JSON-Schema-валидатор.
 
+### Полный каталог query по доменам
+
+Ниже — все query-поля корня (детальные контракты ключевых — в этом файле; остальные самоописаны через introspection/GraphiQL).
+
+| Домен | Поля |
+|---|---|
+| Базовое | `ping`, `serverTime`, `webuiVersion`, `roleStatus`, `configJsonSchema` |
+| Кластер | `cluster`, `clusterLiveness`, `serverTime` |
+| Config | `config`, `configHistory`, `configRevision` |
+| Issues / suggestions | `issues`, `issuesSummary`, `suggestions` |
+| Failover | `failover`, `failoverAgentStatus`, `failoverStateProviderStatus`, `failoverCommands`, `rollingRestartPlan` |
+| vshard | `vshard`, `vshardKnownGroups`, `canBootstrapVshard` |
+| Data explorer | `spaces`, `tuples`, `spaceStats`, `sequenceInfo`, `collations`, `indexAction` |
+| Recovery | `recoverySnapshot` |
+| Users / RBAC | `users` |
+| Saved queries | `savedQueries` |
+| Audit | `audit`, `verifyAuditChain` |
+| Webhooks | `webhooks`, `webhookQueueDepth`, `webhookDeadLetter` |
+| Bootstrap | `bootstrapStatus`, `bootstrapTemplates`, `bootstrapRender` |
+
 ## Mutation
 
-### `_noop: Boolean!`
+Все мутирующие операции RBAC-гейтятся (см. [`rbac-matrix.md`](../rbac-matrix.md)) и пишутся в audit.
 
-Placeholder. Возвращает `true`. Сохранён для введения unit-теста на GraphQL-execute path; рабочие мутации перечислены в `operations.md` и `rbac-matrix.md`.
+### Полный каталог mutation по доменам
+
+| Домен | Мутации |
+|---|---|
+| Config 2PC | `proposeConfig`, `validateConfig`, `commitConfig`, `abortConfig`, `rollbackConfig`, `forceReapplyConfig`, `reloadRoles` |
+| Топология | `editTopology`, `setReplicasetRoles`, `createReplicaset`, `editReplicaset`, `addInstance`, `expelInstance`, `setInstanceState` |
+| Failover | `setFailoverMode`, `promoteInstance`, `demoteInstance`, `pauseFailover`, `resumeFailover`, `safeRestartInstance`, `rebootstrapInstance` |
+| Recovery | `recoveryAction` |
+| vshard | `bootstrapVshard` |
+| Data explorer | `tupleInsert/Replace/Update/Delete`, `createSpace`, `dropSpace`, `alterSpace`, `truncateSpace`, `createIndex`, `dropIndex`, `sequenceCreate/Alter/Drop/Reset/Set` |
+| Saved queries | `saveQuery`, `deleteSavedQuery` |
+| Suggestions-apply | `applyForceApply`, `applyRestartReplication`, `applyRefreshVshard`, `applyDisableServer`, `applyRefineUri`, `applyRestartFailover`, `applyBootstrapVshard` |
+| Audit / webhooks | `exportAudit`, `testWebhook`, `clearDeadLetter` |
+| Bootstrap | `bootstrapInitialize` |
+| Lifecycle | `probeUri` |
 
 ### Cluster operator controls (Cartridge-style)
 

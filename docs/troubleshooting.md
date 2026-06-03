@@ -136,6 +136,8 @@ message: 'Duplicate replica name tt-1, already occupied by <uuid>'
 
 ## Failover
 
+> Модель failover целиком (инварианты, lease/term/vclockkeeper, матрица Enterprise→OSS) — [`failover.md`](failover.md). Разбор конкретных issue'ов с `/issues` (coordinator-stuck, etcd-quorum-lost, failover-suppressed, divergent-rejoin, alien, orphan) — [`runbooks/failover-issues.md`](runbooks/failover-issues.md).
+
 ### Failover не происходит, но лидер мёртв
 
 **Симптомы.** `docker stop tt-1` (был лидером), прошло > 10 секунд, ни один из tt-2/tt-3 не promote'ил себя. На странице failover у обоих RW = `false`.
