@@ -154,6 +154,11 @@ M.GRAPHQL_FIELD = {
     truncateSpace         = 'admin',
     createIndex           = 'admin',
     dropIndex             = 'admin',
+    -- DE-1.4a read-only collation listing for the schema editor.
+    -- Full CRUD on `_collation` (DE-2.5) requires `superuser` so
+    -- the dedicated mutations gate themselves; this query stays
+    -- `viewer` because picking from the list is a read activity.
+    collations            = 'viewer',
     -- Phase 3 Task 3.4 — SQL workbench snippet library.
     saveQuery             = 'operator',
     deleteSavedQuery      = 'operator',

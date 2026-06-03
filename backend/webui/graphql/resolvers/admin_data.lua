@@ -371,6 +371,53 @@ function M.query_tuples(root, args)
     }
 end
 
+-- ── collations ─────────────────────────────────────────────────────
+--
+-- `_collation` lists every collation Tarantool can use as a string
+-- index part. There are ~270 built-in ICU collations plus any extras
+-- the operator added. The schema editor needs the list so the index
+-- form can offer a dropdown — picking by string name is the only
+-- way Tarantool addresses collations from `space:create_index`.
+--
+-- Read-only here; create / drop ship in DE-2.5 (superuser).
+
+-- The "none" collation (id 0) is the implicit default for every
+-- string index. Exposing it as a configurable item would tell
+-- operators "pick one" while in fact it is the no-op fallback —
+-- the dropdown should treat its absence as "use default" instead.
+local DEFAULT_COLLATION_ID = 0
+
+function M.query_collations(root)
+    require_role(root, 'collations')
+    if rawget(_G, 'box') == nil or box.space == nil
+        or box.space._collation == nil then
+        return { collations = {} }
+    end
+    local out = {}
+    for _, row in box.space._collation:pairs() do
+        if row[1] ~= DEFAULT_COLLATION_ID then
+            -- `_collation` format: {id, name, owner, type, locale, opts}.
+            -- `owner` is intentionally dropped — the schema editor does
+            -- not surface authorship, and including it would force a
+            -- join through `_user` just to render a name. DE-2.5 brings
+            -- that back when it adds the management surface.
+            table.insert(out, {
+                id       = row[1],
+                name     = row[2],
+                type     = row[4],
+                locale   = row[5],
+                icu_opts = row[6],
+            })
+        end
+    end
+    table.sort(out, function(a, b) return a.name < b.name end)
+    logger.debug('listCollations', {
+        count = #out, user = root and root.user,
+        request_id = root and root.request_id,
+    })
+    return { collations = out }
+end
+
 -- ── users ──────────────────────────────────────────────────────────
 
 function M.query_users(root)

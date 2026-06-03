@@ -163,6 +163,28 @@ M.SpaceMutationResult = types.object({
     },
 })
 
+M.Collation = types.object({
+    name = 'Collation',
+    description = 'A collation registered in `_collation`. The schema ' ..
+        'editor surfaces these so an operator can pick one when ' ..
+        'declaring a string index part. Mutations live in DE-2.5; ' ..
+        'this type is read-only.',
+    fields = {
+        id       = types.long.nonNull,
+        name     = types.string.nonNull,
+        type     = types.string,
+        locale   = types.string,
+        icu_opts = M.Json,
+    },
+})
+
+M.CollationsPayload = types.object({
+    name = 'CollationsPayload',
+    fields = {
+        collations = types.list(M.Collation.nonNull).nonNull,
+    },
+})
+
 M.TupleMutationResult = types.object({
     name = 'TupleMutationResult',
     fields = {

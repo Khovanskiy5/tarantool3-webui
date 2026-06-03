@@ -529,6 +529,14 @@ local Query = types.object {
             description = 'Tarantool users plus their WebUI RBAC roles. Admin only.',
             resolve = admin_data_resolver.query_users,
         },
+        collations = {
+            kind = data_explorer_types.CollationsPayload.nonNull,
+            description = 'Collations registered in `_collation`. Read-only ' ..
+                '— the schema editor uses the list to populate the ' ..
+                'index-part collation dropdown. Full CRUD ships under ' ..
+                'a separate `superuser`-gated mutation set.',
+            resolve = admin_data_resolver.query_collations,
+        },
         audit = {
             kind = audit_types.AuditPage.nonNull,
             description = 'Paginated audit log filtered by user/action/scope/time. '
