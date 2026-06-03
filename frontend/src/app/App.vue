@@ -44,7 +44,13 @@ const hideShell = computed(() => route.meta?.hideShell === true);
 .webui-shell {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  /* Cap the shell at the viewport so `.webui-shell__main`'s
+     `overflow: auto` actually engages instead of growing the
+     whole page. Pages with naturally tall content scroll inside
+     `main`; pages that wire up their own per-section scroll
+     (config-editor, logs, console) keep the outer surface
+     pinned and let the inner panels handle the scroll. */
+  height: 100vh;
   background: var(--webui-bg);
 }
 .webui-shell--bare {

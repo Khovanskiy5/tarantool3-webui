@@ -705,6 +705,12 @@ onMounted(load);
 .webui-cfg__split {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
+  /* `minmax(0, 1fr)` on the row caps it at the parent's available
+     height instead of letting the grid auto-row inflate to the tallest
+     child's intrinsic size. Without this the History panel's natural
+     content height (one card per revision) pushes the split past the
+     viewport and the page scrolls instead of the panel. */
+  grid-template-rows: minmax(0, 1fr);
   gap: 1rem;
   align-items: stretch;
   /* `flex: 1; min-height: 0` lets the split consume the rest of the
@@ -712,12 +718,16 @@ onMounted(load);
   flex: 1;
   min-height: 0;
 }
-/* The editor wrapper expands to whatever the grid row gives it. The
-   `min-height` keeps things usable on a half-screen window where
-   `flex: 1` could otherwise collapse to zero. */
+/* The editor wrapper expands to whatever the grid row gives it.
+   `min-height: 0` releases the implicit "fit content" floor that
+   grid items inherit so the row can actually shrink to the parent's
+   bounded height; `overflow: hidden` keeps Monaco's own internal
+   scroller (CodeEditor sets `height="100%"`) from pushing the slot
+   taller than the row. */
 .webui-cfg__editor-slot {
   min-width: 0;
-  min-height: 18rem;
+  min-height: 0;
+  overflow: hidden;
 }
 /* The History panel sits in the second grid column. `align-items:
    stretch` on the grid already gives it the same row height as the
