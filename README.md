@@ -1,6 +1,6 @@
-# Tarantool 3.7 WebUI
+# Tarantool Cluster Manager
 
-> Веб-интерфейс администрирования кластера Tarantool 3.7 — функциональный эквивалент Cartridge UI, адаптированный под декларативную модель Tarantool 3.x.
+> **Community Edition** — веб-интерфейс администрирования кластера Tarantool 3.7, функциональный эквивалент Cartridge UI, адаптированный под декларативную модель Tarantool 3.x.
 
 Backend встроен в каждый инстанс кластера как Lua-роль `webui`: тот же бинарник, что запускает базу, отдаёт SPA и admin-API. Frontend — Vue 3 SPA, упакованная в Lua-модуль. Источник истины кластерного конфига — etcd (3-узловой кворум). Любой инстанс — точка входа; в production кластеру предшествует HAProxy с TLS termination, healthcheck и sticky-session для WebSocket.
 
