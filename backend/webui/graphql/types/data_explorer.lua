@@ -101,7 +101,17 @@ M.TupleConnection = types.object({
         next_cursor  = types.string,
         total        = types.long,
         partial_scan = types.boolean.nonNull,
+        -- `truncated` = the resolver returned `limit` tuples and more
+        -- pages exist. Combined with `next_cursor` this is normal
+        -- pagination — the SPA renders a "Next" button.
         truncated    = types.boolean.nonNull,
+        -- `scan_aborted` = the residual-filter walker bailed early
+        -- (`scanned >= fetch_cap * 50`) to protect the TX-thread
+        -- against a pathological filter. Unlike `truncated` this is
+        -- a real problem: results are incomplete with no
+        -- `next_cursor` to resume from. SPA renders a warning chip
+        -- only when this flag is true.
+        scan_aborted = types.boolean.nonNull,
         index_used   = types.string,
     },
 })

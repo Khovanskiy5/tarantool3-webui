@@ -75,7 +75,13 @@ interface TupleConnection {
   next_cursor: string | null;
   total: number | null;
   partial_scan: boolean;
+  // Normal pagination boundary — used to enable the Next button.
   truncated: boolean;
+  // Residual-filter walker hit its safety cap. The only condition
+  // that warrants a visible warning chip — `truncated` alone is a
+  // routine paging signal and was being mis-read as "the space was
+  // emptied", which collides with the new Truncate Space action.
+  scan_aborted: boolean;
   index_used: string | null;
 }
 
@@ -144,6 +150,7 @@ const TUPLES_Q = /* GraphQL */ `
       total
       partial_scan
       truncated
+      scan_aborted
       index_used
     }
   }
@@ -197,6 +204,7 @@ const nextCursor = ref<string | null>(null);
 const totalRows = ref<number | null>(null);
 const partialScan = ref(false);
 const truncated = ref(false);
+const scanAborted = ref(false);
 const indexUsed = ref<string | null>(null);
 const loadingTuples = ref(false);
 const allowFullScan = ref(false);
@@ -321,6 +329,7 @@ async function loadTuples() {
     totalRows.value = conn.total;
     partialScan.value = conn.partial_scan;
     truncated.value = conn.truncated;
+    scanAborted.value = conn.scan_aborted;
     indexUsed.value = conn.index_used;
   }
   loadingTuples.value = false;
@@ -754,7 +763,14 @@ watch(includeSystem, () => {
       <div v-if="selectedSpace && indexUsed !== null" class="webui-dx__index-hint">
         <Tag :value="`index: ${indexUsed}`" severity="secondary" />
         <Tag v-if="partialScan" value="partial scan" severity="warn" />
-        <Tag v-if="truncated" value="page truncated" severity="warn" />
+        <!-- Show a warning chip ONLY when the residual-filter walker
+             aborted (scan_aborted). The old `truncated` chip fired
+             on every normal pagination boundary and the label
+             "page truncated" was being mis-read as "the space was
+             emptied" — same word as the Truncate Space action.
+             Normal pagination is already communicated by the Prev /
+             Next buttons + `next_cursor`, no warning needed. -->
+        <Tag v-if="scanAborted" value="scan aborted" severity="warn" />
         <Tag v-if="totalRows !== null" :value="`total: ${totalRows}`" severity="info" />
       </div>
 

@@ -293,6 +293,7 @@ function M.query_tuples(root, args)
             total         = 0,
             partial_scan  = false,
             truncated     = false,
+            scan_aborted  = false,
             index_used    = nil,
         }
     end
@@ -315,7 +316,17 @@ function M.query_tuples(root, args)
     local items, last_pk = {}, nil
     local format_list = de_types.normalize_format(box.space._space:get({ space.id })[7])
     local lookup      = de_filter._build_field_lookup(format_list)
-    local scanned, truncated = 0, false
+    local scanned       = 0
+    -- `truncated` = the page hit `limit` and at least one more tuple
+    -- exists — normal pagination. The SPA uses this to enable the
+    -- Next button via `next_cursor`.
+    --
+    -- `scan_aborted` = the residual-filter walker bailed early
+    -- (`scanned >= fetch_cap * 50`) to protect the TX-thread. This
+    -- is the real "results incomplete" signal — there is no
+    -- `next_cursor` to resume from and the SPA shows a warning.
+    local truncated     = false
+    local scan_aborted  = false
 
     -- We over-fetch by one to detect "more pages exist" without
     -- a second probe.
@@ -331,8 +342,9 @@ function M.query_tuples(root, args)
         end
         if scanned >= fetch_cap * 50 then
             -- Bail to avoid pinning the tx-thread on a pathological
-            -- residual that filters everything out.
-            truncated = true
+            -- residual that filters everything out. Distinct from
+            -- `truncated` (which is a normal pagination boundary).
+            scan_aborted = true
             break
         end
     end
@@ -358,6 +370,7 @@ function M.query_tuples(root, args)
         scanned       = scanned,
         returned      = #items,
         truncated     = truncated,
+        scan_aborted  = scan_aborted,
         partial_scan  = #residual > 0,
     })
 
@@ -367,6 +380,7 @@ function M.query_tuples(root, args)
         total         = total,
         partial_scan  = #residual > 0,
         truncated     = truncated,
+        scan_aborted  = scan_aborted,
         index_used    = idx.name,
     }
 end
