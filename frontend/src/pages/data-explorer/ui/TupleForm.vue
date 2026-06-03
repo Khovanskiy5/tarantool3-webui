@@ -16,6 +16,8 @@ import { computed, ref, watch } from 'vue';
 import Dialog from 'primevue/dialog';
 import Button from 'primevue/button';
 import InputText from 'primevue/inputtext';
+import BinaryField from './BinaryField.vue';
+import { type BinaryEnvelope } from './binary-helpers';
 import Textarea from 'primevue/textarea';
 import Checkbox from 'primevue/checkbox';
 import Message from 'primevue/message';
@@ -85,6 +87,22 @@ interface FieldState {
   is_nullable: boolean;
   raw: string;
   is_null: boolean;
+  // True for `varbinary` fields AND for `string` fields whose
+  // initial value arrived as the `_binary_base64` envelope (the
+  // backend wraps non-UTF-8 string bytes that way — see
+  // `data_explorer/types.lua:99`). When set, the row renders
+  // through BinaryField instead of InputText and `binary` carries
+  // the canonical envelope.
+  is_binary: boolean;
+  binary: BinaryEnvelope;
+}
+
+function isBinaryEnvelope(v: unknown): v is BinaryEnvelope {
+  return (
+    typeof v === 'object' &&
+    v !== null &&
+    typeof (v as { _binary_base64?: unknown })._binary_base64 === 'string'
+  );
 }
 
 const rows = ref<FieldState[]>([]);
@@ -107,8 +125,21 @@ function rebuildRows() {
   rows.value = fmt.map((f, i) => {
     const initial = isCreate ? undefined : props.initialFields?.[i];
     const hasExistingValue = !isCreate && initial !== undefined && initial !== null;
+
+    // Binary detection. A `varbinary` field always renders as binary;
+    // a `string` field renders as binary when the wire shape is
+    // already the envelope (i.e. the stored bytes are not UTF-8 and
+    // the backend escaped them). Otherwise the field stays a regular
+    // InputText so plain-text strings keep their usual UX.
+    const initialIsEnvelope = isBinaryEnvelope(initial);
+    const isBinary = f.type === 'varbinary' || initialIsEnvelope;
+    let binary: BinaryEnvelope = { _binary_base64: '' };
+    if (isBinary && initialIsEnvelope) {
+      binary = initial as BinaryEnvelope;
+    }
+
     let raw = '';
-    if (hasExistingValue) {
+    if (!isBinary && hasExistingValue) {
       if (typeof initial === 'string') raw = initial;
       else raw = JSON.stringify(initial);
     }
@@ -124,6 +155,8 @@ function rebuildRows() {
       is_nullable: f.is_nullable === true,
       raw,
       is_null: isNullableNullInEdit,
+      is_binary: isBinary,
+      binary,
     };
   });
 }
@@ -134,6 +167,10 @@ const title = computed(() =>
 
 function parseValue(row: FieldState): unknown {
   if (row.is_null) return null;
+  // Binary fields ship the envelope object straight through. The
+  // backend `coerce_field` (data_explorer/types.lua) accepts
+  // `{_binary_base64: ...}` and decodes it server-side.
+  if (row.is_binary) return row.binary;
   // Numeric types: try Number() first so the operator does not
   // have to wrap small ints in quotes.
   if (['unsigned', 'integer', 'number', 'double', 'float'].includes(row.type)) {
@@ -205,8 +242,13 @@ function close() {
           <small>{{ r.type }}<span v-if="r.is_nullable"> · nullable</span></small>
         </label>
         <div class="dx-tf__value">
+          <BinaryField
+            v-if="r.is_binary"
+            v-model="r.binary"
+            :disabled="r.is_null"
+          />
           <Textarea
-            v-if="r.type === 'map' || r.type === 'array' || r.type === 'any'"
+            v-else-if="r.type === 'map' || r.type === 'array' || r.type === 'any'"
             v-model="r.raw"
             :disabled="r.is_null"
             rows="2"

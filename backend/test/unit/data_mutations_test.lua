@@ -335,6 +335,64 @@ g.test_delete_missing_tuple_reports_not_found = function()
     t.assert_str_contains(tostring(err), 'NOT_FOUND')
 end
 
+-- ── varbinary + box.NULL wire roundtrip (DE-1.2) ───────────────────
+
+local BIN_SPACE_NAME = 'data_mut_binary_test'
+
+local function ensure_bin_space()
+    if box.space[BIN_SPACE_NAME] then
+        box.space[BIN_SPACE_NAME]:truncate()
+        return
+    end
+    local s = box.schema.space.create(BIN_SPACE_NAME)
+    s:format({
+        { name = 'id',      type = 'unsigned'                       },
+        { name = 'payload', type = 'varbinary', is_nullable = true  },
+        { name = 'label',   type = 'string'                         },
+    })
+    s:create_index('primary', { parts = { 'id' } })
+end
+
+g.test_varbinary_insert_via_envelope_roundtrips = function()
+    ensure_bin_space()
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    -- bytes 0xde 0xad 0xbe 0xef 0x00 0x01 0x02 — base64 of which is
+    -- "3q2+7wABAg==". coerce_field must wrap this into a varbinary
+    -- cdata or Tarantool rejects the insert with FIELD_TYPE.
+    local b64 = require('digest').base64_encode(
+        string.char(0xde, 0xad, 0xbe, 0xef, 0x00, 0x01, 0x02))
+    local r = mut.tuple_insert(root, {
+        space  = BIN_SPACE_NAME,
+        fields = { 1, { _binary_base64 = b64 }, 'bin' },
+    })
+    t.assert_equals(r.ok, true)
+    -- The stored field must come back as the envelope, not a raw
+    -- string (varbinary reads back as cdata; encode_field base64s it).
+    t.assert_type(r.after[2], 'table')
+    t.assert_equals(r.after[2]._binary_base64, b64)
+    -- And the bytes on disk match what we sent.
+    local stored = box.space[BIN_SPACE_NAME]:get({ 1 })[2]
+    t.assert_equals(tostring(stored),
+        string.char(0xde, 0xad, 0xbe, 0xef, 0x00, 0x01, 0x02))
+end
+
+g.test_varbinary_null_roundtrips_as_json_null = function()
+    ensure_bin_space()
+    local root = { user = 'admin_dev', roles = { 'admin' } }
+    local r = mut.tuple_insert(root, {
+        space  = BIN_SPACE_NAME,
+        fields = { 2, box.NULL, 'no-payload' },
+    })
+    t.assert_equals(r.ok, true)
+    -- The list must keep all three positions (a Lua-nil in the
+    -- middle would truncate it to length 1).
+    t.assert_equals(#r.after, 3)
+    -- The NULL position is the box.NULL sentinel, which json.encode
+    -- renders as `null` — NOT the string "cdata<void *>: NULL".
+    t.assert_equals(r.after[2], box.NULL)
+    t.assert_equals(r.after[3], 'no-payload')
+end
+
 -- ── update operator matrix (build_update_ops covers each op code) ──
 
 local OP_SPACE_NAME = 'data_mut_ops_test'

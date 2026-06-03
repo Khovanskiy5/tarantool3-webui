@@ -201,7 +201,12 @@ end
 local function tuple_to_graphql(tuple, pk_parts, space_name, format)
     local fields = {}
     for i = 1, #tuple do
-        fields[i] = de_types.encode_field(tuple[i])
+        -- Substitute the box.NULL sentinel for a stored NULL so the
+        -- list keeps its length (a Lua-nil in the middle truncates
+        -- it); json.encode renders box.NULL as JSON `null`.
+        local enc = de_types.encode_field(tuple[i])
+        if enc == nil then enc = box.NULL end
+        fields[i] = enc
     end
     fields = mask_sensitive(space_name, fields, format)
     -- Extract the primary key fields by fieldno (parts[i].fieldno
@@ -555,7 +560,13 @@ local COUNT_ITERATORS = {
 local function tuple_fields(tuple)
     if tuple == nil then return nil end
     local out = {}
-    for i = 1, #tuple do out[i] = de_types.encode_field(tuple[i]) end
+    for i = 1, #tuple do
+        -- box.NULL sentinel for stored NULLs, same as tuple_to_graphql
+        -- (keeps the list length; json.encode renders it as null).
+        local enc = de_types.encode_field(tuple[i])
+        if enc == nil then enc = box.NULL end
+        out[i] = enc
+    end
     return out
 end
 

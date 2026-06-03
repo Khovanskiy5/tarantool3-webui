@@ -176,7 +176,16 @@ end
 function M.tuple_to_wire(tuple)
     if tuple == nil then return nil end
     local fields = {}
-    for i = 1, #tuple do fields[i] = de_types.encode_field(tuple[i]) end
+    -- `encode_field` maps a stored NULL to Lua nil. Writing nil into
+    -- the middle of `fields` would punch a hole and truncate the
+    -- list (Lua `#` stops at the first nil), so we substitute the
+    -- box.NULL sentinel — it occupies the slot AND json.encode
+    -- renders it as JSON `null` on the wire.
+    for i = 1, #tuple do
+        local enc = de_types.encode_field(tuple[i])
+        if enc == nil then enc = box.NULL end
+        fields[i] = enc
+    end
     return fields
 end
 

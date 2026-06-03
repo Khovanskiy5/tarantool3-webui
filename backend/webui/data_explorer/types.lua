@@ -24,6 +24,11 @@ local digest    = require('digest')
 local json      = require('json')
 local msgpack   = require('msgpack')
 
+-- `varbinary` is a 3.x core module; pcall-guard so the pure-module
+-- unit tests (which never touch box) still load on stripped builds.
+local ok_vb, varbinary = pcall(require, 'varbinary')
+if not ok_vb then varbinary = nil end
+
 local M = {}
 
 -- ── binary / UTF-8 ─────────────────────────────────────────────────
@@ -95,8 +100,14 @@ end
 -- ── field-level encoding ───────────────────────────────────────────
 
 -- Convert one tuple field into a JSON-friendly form.
---   * cdata uuid / decimal → tostring  (cdata never survives json.encode)
---   * non-UTF-8 string     → {_binary_base64 = "..."}
+--   * box.NULL             → nil (JSON null) — a stored NULL in a
+--     nullable field reads back as the box.NULL cdata, not Lua nil
+--   * varbinary cdata      → {_binary_base64 = "..."} — Tarantool 3.x
+--     returns `varbinary` columns as a cdata, not a Lua string;
+--     `tostring()` yields the raw bytes which we then base64
+--   * non-UTF-8 string     → {_binary_base64 = "..."} — the escaped
+--     form for byte strings stored in a plain `string` column
+--   * uuid / decimal cdata → tostring  (cdata never survives json.encode)
 --   * everything else      → as-is
 local function encode_field(v)
     local tp = type(v)
@@ -104,6 +115,14 @@ local function encode_field(v)
         if is_valid_utf8(v) then return v end
         return { _binary_base64 = digest.base64_encode(v) }
     elseif tp == 'cdata' then
+        -- `box.NULL` is a cdata; guard the global lookup so the
+        -- pure-module contract (encode_field callable without box)
+        -- holds even though tuple data always implies box is up.
+        local box_g = rawget(_G, 'box')
+        if box_g ~= nil and v == box_g.NULL then return nil end
+        if varbinary ~= nil and varbinary.is(v) then
+            return { _binary_base64 = digest.base64_encode(tostring(v)) }
+        end
         return tostring(v)
     end
     return v
@@ -212,8 +231,22 @@ function M.coerce_field(value, declared_type)
         return nil, 'boolean field needs true|false, got ' .. tostring(value)
     end
 
-    if declared_type == 'string' or declared_type == 'varbinary'
-        or declared_type == 'scalar' then
+    if declared_type == 'varbinary' then
+        -- After unwrap_binary, value is a plain Lua string of raw
+        -- bytes. Tarantool rejects a plain string for a varbinary
+        -- column ("expected varbinary, got string") — it must be a
+        -- `varbinary` cdata. Wrap it. Strings that came in UTF-8
+        -- (not via the envelope) are encoded byte-for-byte.
+        if type(value) ~= 'string' then
+            return nil, 'varbinary field needs bytes, got ' .. type(value)
+        end
+        if varbinary == nil then
+            return nil, 'varbinary module unavailable'
+        end
+        return varbinary.new(value)
+    end
+
+    if declared_type == 'string' or declared_type == 'scalar' then
         -- After unwrap_binary, value is either a plain Lua string
         -- (UTF-8 or raw bytes) or, for `scalar`, any primitive.
         return value
