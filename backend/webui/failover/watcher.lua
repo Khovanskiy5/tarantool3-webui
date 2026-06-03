@@ -55,8 +55,26 @@ local STATE = {
     -- Self-fencing bookkeeping (monotonic clock):
     last_leader_confirm_mono = nil, -- last successful self-as-leader read
     last_etcd_ok = false,
+    -- Guards against the watcher loop and the fencing loop calling
+    -- box.ctl.promote/demote at the same time (Tarantool rejects
+    -- "simultaneous invocations"). A plain boolean is safe: fibers only
+    -- yield at the box.ctl call itself, never between the check and set.
+    ctl_in_progress = false,
     stop_flag   = false,
 }
+
+-- Run box.ctl.promote/demote under the single-flight guard. Returns
+-- (ok, err) like pcall; returns (false, 'busy') if another fiber is
+-- already mid promote/demote (caller retries on its next tick).
+local function guarded_ctl(ctl_fn)
+    if STATE.ctl_in_progress then
+        return false, 'ctl busy'
+    end
+    STATE.ctl_in_progress = true
+    local ok, err = pcall(ctl_fn)
+    STATE.ctl_in_progress = false
+    return ok, err
+end
 
 local function read_appointment(client)
     local key = string.format(M.KEY_APPOINTMENT, STATE.replicaset)
@@ -123,7 +141,7 @@ local function apply_appointment(appt)
             logger.error('failed to flip read_only before promote',
                 { err = tostring(rw_err) })
         end
-        local ok, err = pcall(box.ctl.promote)
+        local ok, err = guarded_ctl(box.ctl.promote)
         if ok then
             STATE.last_applied = { read_only = false, ts = fiber.time() }
             logger.info('promoted to leader by appointment',
@@ -133,9 +151,11 @@ local function apply_appointment(appt)
             logger.error('failed to apply promotion', { err = tostring(err) })
         end
     elseif not should_be_leader and am_leader then
-        -- box.ctl.demote() releases the synchronous queue and
-        -- flips `read_only` back to true. Mirror of promote().
-        local ok, err = pcall(box.ctl.demote)
+        -- box.ctl.demote() releases the synchronous queue. In supervised
+        -- mode it freezes the limbo but does NOT clear read_only, so
+        -- pair it with an explicit read_only=true (see fencing_loop).
+        local ok, err = guarded_ctl(box.ctl.demote)
+        pcall(function() box.cfg({ read_only = true }) end)
         if ok then
             STATE.last_applied = { read_only = true, ts = fiber.time() }
             logger.info('demoted to follower by appointment',
@@ -229,17 +249,29 @@ local function fencing_loop()
                 since_confirm = fiber.clock()
                     - (STATE.last_leader_confirm_mono or 0),
             })
-            local ok, derr = pcall(box.ctl.demote)
-            if ok then
+            local ok, derr = guarded_ctl(box.ctl.demote)
+            -- box.ctl.demote() freezes the synchro limbo (blocks sync
+            -- writes) but in supervised mode does NOT clear read_only —
+            -- verified live: post-demote box.info.ro stayed false and an
+            -- async write to a non-sync space was still accepted. Force
+            -- read_only=true so the fence is COMPLETE (async writes
+            -- blocked too), regardless of whether demote itself
+            -- succeeded or was skipped because ctl was busy.
+            local ro_ok, ro_err = pcall(function()
+                box.cfg({ read_only = true })
+            end)
+            if ro_ok then
                 pcall(function() box.ctl.wait_ro(3) end)
                 STATE.last_applied = { read_only = true, ts = fiber.time() }
                 -- Reset the clock so we don't re-fire every probe tick
                 -- while waiting for the next appointment.
                 STATE.last_leader_confirm_mono = fiber.clock()
-                logger.info('self-fenced: now read-only', { context = ctx })
+                logger.info('self-fenced: now read-only',
+                    { context = ctx, demote_ok = ok })
             else
-                STATE.last_error = 'self-fence demote: ' .. tostring(derr)
-                logger.error('self-fence demote failed', { err = tostring(derr) })
+                STATE.last_error = 'self-fence read_only: ' .. tostring(ro_err)
+                logger.error('self-fence read_only failed',
+                    { err = tostring(ro_err), demote_err = tostring(derr) })
             end
         end
         fiber.sleep(STATE.config.probe_interval)
