@@ -7,7 +7,9 @@
 ```bash
 # состояние агента (на координаторе видно is_coordinator=true)
 docker logs webui-tt-1 --tail 200 | grep -F '"tag":"failover.agent"'
-# текущие appointment'ы и режимы
+# текущие appointment'ы и режимы (координатор, лидеры репликасетов, pause/disabled)
+docker exec webui-etcd-1 etcdctl get --prefix /tarantool/webui/failover/
+# liveness-репорты инстансов (mode/status/ro_reason) — отдельная ветка
 docker exec webui-etcd-1 etcdctl get --prefix /tarantool/webui/state/by-name/ --print-value-only
 ```
 

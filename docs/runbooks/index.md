@@ -15,6 +15,10 @@
 | [leader-autoreturn.md](leader-autoreturn.md) | Настроить автоматический возврат лидерства на preferred peer. |
 | [split-brain-recovery.md](split-brain-recovery.md) | Восстановить кластер после split-brain (LSN-конфликты, "Split-Brain discovered" в логах). |
 | [failover-issues.md](failover-issues.md) | Разбор failover/etcd issue'ов: coordinator-stuck, etcd-quorum-lost, failover-suppressed, divergent-rejoin, alien, orphan. |
+| [recovery-overview.md](recovery-overview.md) | Обзор страницы /cluster-recovery: модель риска (safe/caution/dangerous) и универсальный порядок для опасных действий. |
+| [leader-takeover.md](leader-takeover.md) | Аварийно назначить владельца synchro-очереди, когда владельца нет / он недоступен (vclock-доминирование, switchover). |
+| [topology-fix.md](topology-fix.md) | Починить URI репликации в топологии, когда applier завис на мёртвом адресе. |
+| [wal-repair.md](wal-repair.md) | Восстановить повреждённый xlog (хвостовое vs серединное повреждение, rejoin vs quarantine). |
 
 > Модель failover целиком (инварианты, lease/term/vclockkeeper, матрица Enterprise→OSS) — в [`../failover.md`](../failover.md).
 
