@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Monaco-based viewer for Tarantool log lines.
 //
-// Mirrors the YamlEditor pattern from the config-editor page —
+// Mirrors the CodeEditor pattern from the config-editor page —
 // dynamic import keeps Monaco out of the initial bundle, manual
 // ResizeObserver replaces Monaco's automaticLayout polling — but
 // runs in read-only mode and auto-scrolls to the bottom when the

@@ -18,6 +18,8 @@ declare module '*.vue' {
 // so vue-tsc is happy; Vite resolves the actual files normally.
 declare module 'monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution' {}
 declare module 'monaco-editor/esm/vs/basic-languages/sql/sql.contribution' {}
+declare module 'monaco-editor/esm/vs/basic-languages/lua/lua.contribution' {}
+declare module 'monaco-editor/esm/vs/language/json/monaco.contribution' {}
 
 interface ImportMetaEnv {
   readonly VITE_APP_VERSION?: string;

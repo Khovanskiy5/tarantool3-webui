@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Monaco-based side-by-side YAML diff dialog. The Monaco bundle is
-// already paid for by YamlEditor in the same page, so loading the diff
+// already paid for by CodeEditor in the same page, so loading the diff
 // editor doesn't grow the initial chunk.
 //
 // `open: boolean` controls visibility; the parent fetches both YAML
@@ -32,7 +32,7 @@ let monacoMod: typeof Monaco | null = null;
 let resizeObs: ResizeObserver | null = null;
 
 const initMonacoEnv = async () => {
-  // Same env shim as YamlEditor.vue — the worker module is shared
+  // Same env shim as CodeEditor.vue — the worker module is shared
   // between the two via Monaco's MonacoEnvironment global, so the
   // diff editor doesn't ship a second worker chunk.
   const EditorWorker = (await import('monaco-editor/esm/vs/editor/editor.worker?worker')).default;

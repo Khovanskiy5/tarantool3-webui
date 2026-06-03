@@ -1,19 +1,19 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import Button from 'primevue/button';
 import SelectButton from 'primevue/selectbutton';
 import Message from 'primevue/message';
-import Textarea from 'primevue/textarea';
+import Tag from 'primevue/tag';
 import ToggleSwitch from 'primevue/toggleswitch';
+import Splitter from 'primevue/splitter';
+import SplitterPanel from 'primevue/splitterpanel';
 
 import { restClient, RestApiError } from '@/shared/api/rest/client';
+import { CodeEditor } from '@/widgets/code-editor';
 
 // Per-language defaults mirror each other: both return the local
 // instance's name+uuid so an operator switching the SelectButton
-// gets an identity probe in either dialect. The SQL flavor uses
-// the built-in `_cluster` system table — it's the closest SQL has
-// to `box.info`. Tarantool 3.x does not expose `box.info` via SQL
-// scalar functions, so the system view is the only stable surface.
+// gets an identity probe in either dialect.
 const DEFAULT_LUA = 'return box.info.name, box.info.uuid';
 const DEFAULT_SQL = 'SELECT "name", "uuid" FROM "_cluster"';
 
@@ -24,13 +24,11 @@ const result = ref<unknown>(null);
 const errorMsg = ref<string | null>(null);
 const latency = ref<number | null>(null);
 const instance = ref<string | null>(null);
-const sqlPlaceholder = 'SELECT * FROM "_space" LIMIT 5';
 
 // Sticky toggle. Same semantics as /sql page — when on, every
 // Run sends seqscan_allowed: true. Only meaningful for lang=sql.
 const allowFullScan = ref(false);
 
-import { watch } from 'vue';
 // Swap defaults on language toggle, but ONLY when the buffer is
 // unchanged from the previous language's default — typed user
 // content stays put across toggles.
@@ -58,6 +56,13 @@ const seqscanRequired = computed(() => {
     s.includes('scanning is not allowed') || s.includes('seqscan') || s.includes('sql_seq_scan')
   );
 });
+
+// Pretty-printed JSON of the latest result — passed straight into
+// the read-only Monaco viewer so it gets syntax highlighting,
+// virtual scroll, and a familiar surface for picking values.
+const resultText = computed(() =>
+  result.value === null ? '' : JSON.stringify(result.value, null, 2),
+);
 
 const run = async (opts: { seqscanAllowed?: boolean } = {}) => {
   running.value = true;
@@ -93,14 +98,11 @@ const run = async (opts: { seqscanAllowed?: boolean } = {}) => {
   }
 };
 
-import { computed } from 'vue';
-
-const onKeydown = (ev: KeyboardEvent) => {
-  if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') {
-    ev.preventDefault();
-    run();
-  }
-};
+// Ctrl/Cmd+Enter is wired inside Monaco itself via the CodeEditor
+// widget's `addCommand` call, which then emits a `submit` event
+// the template handles directly on the `<CodeEditor>` instance.
+// A page-level `keydown` listener cannot catch the shortcut because
+// Monaco intercepts the event before it bubbles.
 </script>
 
 <template>
@@ -109,56 +111,74 @@ const onKeydown = (ev: KeyboardEvent) => {
       <h1>Lua / SQL console</h1>
       <SelectButton v-model="lang" :options="['lua', 'sql']" :allow-empty="false" size="small" />
     </header>
+
     <Message severity="warn" :closable="false">
       Console runs against the local instance with full privileges. Every eval is recorded in
       <code>_webui_audit</code>. Disabled by default; flip
       <code>roles_cfg.webui.console_enabled</code> to enable.
     </Message>
-    <Textarea
-      v-model="code"
-      class="webui-console__editor"
-      rows="10"
-      :placeholder="lang === 'lua' ? 'return box.info' : sqlPlaceholder"
-      @keydown="onKeydown"
-    />
+
     <div class="webui-console__actions">
       <Button :loading="running" icon="pi pi-play" :label="`Run (${lang})`" @click="() => run()" />
-      <label v-if="lang === 'sql'" class="webui-console__full-scan">
-        <ToggleSwitch v-model="allowFullScan" />
+      <label v-if="lang === 'sql'" class="webui-console__option">
+        <ToggleSwitch v-model="allowFullScan" input-id="console-fullscan" />
         <span>allow full scan</span>
       </label>
       <span class="webui-console__hint">Ctrl/Cmd+Enter to run</span>
     </div>
-    <Message
-      v-if="seqscanRequired"
-      severity="warn"
-      :closable="false"
-      class="webui-console__seqscan"
-    >
-      <strong>Sequence scan required.</strong>
-      Tarantool blocks full-scan SELECTs by default (<code>sql_seq_scan = false</code>). Re-run with
-      the toggle enabled for this call only — the session setting is restored after the response.
-      <Button
-        label="Re-run with SEQSCAN"
-        icon="pi pi-refresh"
-        size="small"
-        severity="warn"
-        @click="run({ seqscanAllowed: true })"
-      />
-    </Message>
-    <Message v-if="errorMsg && !seqscanRequired" severity="error" :closable="false">
-      {{ errorMsg }}
-    </Message>
-    <section v-if="result !== null || errorMsg" class="webui-console__output">
-      <header class="webui-console__output-head">
-        <span>Result</span>
-        <span v-if="instance"
-          >instance: <code>{{ instance }}</code></span
-        >
-        <span v-if="latency !== null">latency: {{ latency.toFixed(1) }} ms</span>
-      </header>
-      <pre>{{ result !== null ? JSON.stringify(result, null, 2) : '' }}</pre>
-    </section>
+
+    <!-- Vertical split: editor on top, result panel below. Always
+         rendered — even before the first Run — so the operator sees
+         a clear "result lands here" affordance instead of having to
+         scroll down past the editor to find it. Drag the bar to
+         resize. -->
+    <Splitter layout="vertical" class="webui-console__split">
+      <SplitterPanel :size="60" :min-size="20">
+        <div class="webui-console__pane">
+          <CodeEditor v-model="code" :language="lang" height="100%" @submit="run()" />
+        </div>
+      </SplitterPanel>
+      <SplitterPanel :size="40" :min-size="15">
+        <div class="webui-console__pane webui-console__result-pane">
+          <header class="webui-console__result-head">
+            <h2>Result</h2>
+            <Tag v-if="instance" :value="`instance: ${instance}`" severity="info" />
+            <Tag
+              v-if="latency !== null"
+              :value="`latency: ${latency.toFixed(1)} ms`"
+              severity="secondary"
+            />
+          </header>
+          <Message
+            v-if="seqscanRequired"
+            severity="warn"
+            :closable="false"
+            class="webui-console__seqscan"
+          >
+            <strong>Sequence scan required.</strong>
+            Tarantool blocks full-scan SELECTs by default (<code>sql_seq_scan = false</code>).
+            Re-run with the toggle enabled for this call only — the session setting is restored
+            after the response.
+            <Button
+              label="Re-run with SEQSCAN"
+              icon="pi pi-refresh"
+              size="small"
+              severity="warn"
+              @click="run({ seqscanAllowed: true })"
+            />
+          </Message>
+          <Message v-if="errorMsg && !seqscanRequired" severity="error" :closable="false">
+            {{ errorMsg }}
+          </Message>
+          <div v-if="resultText !== ''" class="webui-console__result-viewer">
+            <CodeEditor :model-value="resultText" language="json" readonly height="100%" />
+          </div>
+          <p v-else-if="result === null && errorMsg === null" class="webui-console__result-empty">
+            Run a query (Ctrl/Cmd+Enter) — the result will appear here.
+          </p>
+        </div>
+      </SplitterPanel>
+    </Splitter>
   </section>
 </template>
 
@@ -168,6 +188,8 @@ const onKeydown = (ev: KeyboardEvent) => {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  flex: 1;
+  min-height: 0;
 }
 .webui-console__head {
   display: flex;
@@ -177,17 +199,57 @@ const onKeydown = (ev: KeyboardEvent) => {
 .webui-console__head h1 {
   margin: 0;
 }
-.webui-console__editor {
-  font-family: var(--webui-font-mono);
-  font-size: 0.9rem;
+/* The vertical splitter owns the remaining page height — top
+   panel holds the editor, bottom panel holds the result. Both
+   panes use `display: flex` so the CodeEditor inside them can
+   stretch to 100% on their own without per-pane size guesses. */
+.webui-console__split {
+  flex: 1;
+  min-height: 14rem;
+}
+/* PrimeVue Splitter ships its own surface (white background +
+   slate-200 border by default) — not bridged to the project's
+   dark theme. Vue forwards `webui-console__split` onto the same
+   `<div>` that carries `.p-splitter`, so we style directly here
+   (descendant `:deep` would not match, both classes live on the
+   same element). */
+.webui-console__split {
+  background: transparent;
+  border: none;
+}
+.webui-console__split :deep(.p-splitter-gutter) {
+  background: var(--p-content-border-color, var(--webui-border));
+}
+.webui-console__split :deep(.p-splitter-gutter-handle) {
+  background: var(--p-text-muted-color, var(--webui-text-muted));
+}
+.webui-console__pane {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+.webui-console__result-pane {
+  gap: 0.5rem;
+  padding: 0.5rem 0;
 }
 .webui-console__actions {
   display: flex;
   align-items: center;
   gap: 1rem;
+  flex-wrap: wrap;
+}
+.webui-console__option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--p-text-color, var(--webui-text));
+  cursor: pointer;
 }
 .webui-console__hint {
-  color: var(--webui-text-muted);
+  color: var(--p-text-muted-color, var(--webui-text-muted));
   font-size: 0.85rem;
 }
 .webui-console__seqscan :deep(.p-message-text) {
@@ -196,33 +258,28 @@ const onKeydown = (ev: KeyboardEvent) => {
   gap: 0.5rem;
   flex-wrap: wrap;
 }
-.webui-console__full-scan {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.85rem;
-  color: var(--webui-text-muted);
-  padding-left: 0.5rem;
-  border-left: 1px solid var(--webui-border);
-}
-.webui-console__output {
-  background: var(--webui-bg-elevated);
-  border: 1px solid var(--webui-border);
-  border-radius: var(--webui-radius);
-  padding: 1rem;
-}
-.webui-console__output-head {
+
+.webui-console__result-head {
   display: flex;
-  gap: 1.5rem;
-  color: var(--webui-text-muted);
-  font-size: 0.85rem;
-  padding-bottom: 0.5rem;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }
-.webui-console__output pre {
-  font-family: var(--webui-font-mono);
+.webui-console__result-head h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+/* The viewer fills whatever space the result pane's header +
+   message banners leave behind — splitter-managed, no fixed height. */
+.webui-console__result-viewer {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.webui-console__result-empty {
+  color: var(--p-text-muted-color, var(--webui-text-muted));
   font-size: 0.85rem;
   margin: 0;
-  max-height: 50vh;
-  overflow: auto;
 }
 </style>

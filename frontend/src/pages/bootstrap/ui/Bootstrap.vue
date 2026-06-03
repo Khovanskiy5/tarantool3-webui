@@ -15,7 +15,7 @@ import Dropdown from 'primevue/dropdown';
 import Card from 'primevue/card';
 
 import { getClient } from '@/shared/api/graphql';
-import { YamlEditor } from '@/widgets/yaml-editor';
+import { CodeEditor } from '@/widgets/code-editor';
 
 interface BootstrapStatus {
   needed: boolean;
@@ -225,7 +225,7 @@ onMounted(async () => {
         <template #title>Preview</template>
         <template #content>
           <Message v-if="renderError" severity="error" :closable="false">{{ renderError }}</Message>
-          <YamlEditor v-model="renderedYaml" :readonly="true" height="40vh" />
+          <CodeEditor v-model="renderedYaml" :readonly="true" height="40vh" />
         </template>
       </Card>
 

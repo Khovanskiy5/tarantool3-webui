@@ -6,7 +6,7 @@ import Tag from 'primevue/tag';
 
 import { getClient } from '@/shared/api/graphql';
 import { DestructiveActionDialog } from '@/shared/ui/destructive-action-dialog';
-import { YamlEditor } from '@/widgets/yaml-editor';
+import { CodeEditor } from '@/widgets/code-editor';
 import HistoryPanel from './HistoryPanel.vue';
 import DiffViewer from './DiffViewer.vue';
 
@@ -516,7 +516,7 @@ onMounted(load);
     <div class="webui-cfg__split">
       <!-- Editor stretches to fill the row height the grid gives it. -->
       <div class="webui-cfg__editor-slot">
-        <YamlEditor v-model="yaml" height="100%" />
+        <CodeEditor v-model="yaml" height="100%" />
       </div>
 
       <HistoryPanel
