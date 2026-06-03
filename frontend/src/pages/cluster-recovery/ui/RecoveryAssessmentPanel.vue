@@ -78,10 +78,7 @@ const canApply = computed(() => {
   const a = props.assessment;
   if (!a || props.busy) return false;
   if (!needsConfirm.value) return true;
-  return (
-    props.acknowledge === true &&
-    props.token.trim() === (a.confirm.token ?? '')
-  );
+  return props.acknowledge === true && props.token.trim() === (a.confirm.token ?? '');
 });
 
 function copyCommand(cmd: string) {
@@ -98,12 +95,7 @@ function copyCommand(cmd: string) {
       <span class="summary">{{ assessment.summary }}</span>
     </div>
 
-    <Message
-      v-if="assessment.dataLoss"
-      severity="error"
-      variant="simple"
-      size="small"
-    >
+    <Message v-if="assessment.dataLoss" severity="error" variant="simple" size="small">
       Data-loss risk: this action can lose committed data.
     </Message>
 
@@ -118,9 +110,7 @@ function copyCommand(cmd: string) {
       <h4>Preconditions</h4>
       <ul class="checks">
         <li v-for="(c, i) in assessment.preconditions" :key="i">
-          <i
-            :class="c.ok ? 'pi pi-check-circle ok' : 'pi pi-times-circle bad'"
-          />
+          <i :class="c.ok ? 'pi pi-check-circle ok' : 'pi pi-times-circle bad'" />
           <span>{{ c.label }}</span>
           <small v-if="c.detail" class="detail"> — {{ c.detail }}</small>
         </li>
@@ -146,11 +136,7 @@ function copyCommand(cmd: string) {
 
     <section v-if="assessment.failureCommands.length" class="block">
       <h4>If it fails</h4>
-      <div
-        v-for="(fc, i) in assessment.failureCommands"
-        :key="i"
-        class="cmd"
-      >
+      <div v-for="(fc, i) in assessment.failureCommands" :key="i" class="cmd">
         <div class="cmd-title">{{ fc.title }}</div>
         <div class="cmd-row">
           <code>{{ fc.command }}</code>

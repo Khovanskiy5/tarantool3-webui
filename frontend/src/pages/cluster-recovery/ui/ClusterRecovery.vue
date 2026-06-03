@@ -30,9 +30,7 @@ import Dialog from 'primevue/dialog';
 import InputText from 'primevue/inputtext';
 import InputNumber from 'primevue/inputnumber';
 import Fluid from 'primevue/fluid';
-import RecoveryAssessmentPanel, {
-  type Assessment,
-} from './RecoveryAssessmentPanel.vue';
+import RecoveryAssessmentPanel, { type Assessment } from './RecoveryAssessmentPanel.vue';
 
 import { getClient } from '@/shared/api/graphql';
 
@@ -199,7 +197,9 @@ function newIdempotencyKey(): string {
 async function runPreflight(): Promise<boolean> {
   assessError.value = null;
   const res = await getClient()
-    .query<{ recoveryPreflight: Assessment }>(
+    .query<{
+      recoveryPreflight: Assessment;
+    }>(
       PREFLIGHT_Q,
       { action: assessAction, payload: assessPayload },
       { requestPolicy: 'network-only' },
@@ -627,11 +627,7 @@ function quarantineWal(row: WalRow) {
     <!-- One-click apply of the snapshot's recommended SAFE action.
          Shown only when the backend computed a safe auto-target; goes
          through preflight + the assessment panel like any action. -->
-    <Message
-      v-if="snapshot && snapshot.recommended_action"
-      severity="info"
-      :closable="false"
-    >
+    <Message v-if="snapshot && snapshot.recommended_action" severity="info" :closable="false">
       A recommended recovery action is available.
       <Button
         label="Apply recommended"
@@ -744,17 +740,10 @@ function quarantineWal(row: WalRow) {
       header="Recovery — risk assessment"
       :style="{ width: '34rem' }"
     >
-      <Message
-        v-if="assessError"
-        severity="error"
-        :closable="false"
-        class="mb-2"
-      >
+      <Message v-if="assessError" severity="error" :closable="false" class="mb-2">
         {{ assessError }}
       </Message>
-      <div v-if="assessBusy && !assessment" class="webui-recovery__muted">
-        Assessing…
-      </div>
+      <div v-if="assessBusy && !assessment" class="webui-recovery__muted">Assessing…</div>
       <RecoveryAssessmentPanel
         v-else
         v-model:acknowledge="assessAck"
@@ -865,12 +854,7 @@ function quarantineWal(row: WalRow) {
       </div>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="orOpen = false" />
-        <Button
-          label="Review…"
-          icon="pi pi-link"
-          :disabled="!orTarget"
-          @click="executeOrphan"
-        />
+        <Button label="Review…" icon="pi pi-link" :disabled="!orTarget" @click="executeOrphan" />
       </template>
     </Dialog>
 
@@ -929,12 +913,7 @@ function quarantineWal(row: WalRow) {
       </div>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="qOpen = false" />
-        <Button
-          label="Review…"
-          icon="pi pi-bolt"
-          :disabled="!qTarget"
-          @click="executeQuorum"
-        />
+        <Button label="Review…" icon="pi pi-bolt" :disabled="!qTarget" @click="executeQuorum" />
       </template>
     </Dialog>
 
