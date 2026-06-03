@@ -147,6 +147,25 @@ function M.install()
         }
     end)
 
+    -- Graceful restart (FO-12): drain the synchro queue (no-op on a
+    -- follower) and exit so Docker's restart policy respins a fresh
+    -- process that rejoins as a follower. Unlike rebootstrap this does
+    -- NOT wipe WAL/snap — it is an ordinary restart used by the rolling
+    -- orchestrator. The exit is deferred a beat so this RPC reply flushes
+    -- to the coordinator before the connection drops.
+    rawset(_G, 'webui_graceful_restart_remote', function()
+        local fiber = require('fiber')
+        fiber.create(function()
+            fiber.self():name('webui_graceful_restart', { truncate = true })
+            fiber.sleep(0.3)
+            pcall(function()
+                require('webui.failover.drain').drain_synchro_queue(3)
+            end)
+            os.exit(0)
+        end)
+        return { ok = true, message = 'graceful restart scheduled' }
+    end)
+
     -- Mirror the committed cluster YAML to the on-disk file on this
     -- peer. The two-phase commit pipeline fans this call out to every
     -- instance after the etcd put lands so the file (recovery snapshot)

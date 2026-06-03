@@ -205,6 +205,22 @@ etcd хранит cluster-wide config И lease failover-координатора
 
 **Восстановление:** вернуть кворум (поднять член etcd) → координатор переизбирается, лидер re-promote'ится, issue гаснет автоматически.
 
+## Безопасные рестарты (rolling / demote-first / majority-guard)
+
+Резкий рестарт большинства или внезапная гибель лидера — частая причина split-brain. Оркестратор (`lifecycle/orchestrator.lua`) делает рестарты безопасными:
+
+- **Majority-guard.** Любой стоп/рестарт, который оставит `< N/2+1` живых инстансов, **блокируется** (`ETCD_QUORUM`-аналог для DB-слоя). Видно через `rollingRestartPlan.blocked` и в ошибке `safeRestartInstance`.
+- **Rolling — по одному.** Рестарт идёт по одному инстансу; следующий — только после того как предыдущий вернулся и его репликация сошлась (`upstream.status ∈ {follow, sync}`).
+- **Demote-first.** Перед рестартом лидера лидерство передаётся здоровому фолловеру (manual appointment + ожидание нового RW-лидера), и только потом гасится старый — теперь уже фолловер.
+- **Orphan-adoption.** Инстанс после рестарта может побыть в `orphan`, пока догоняет реплику: Tarantool держит его RO и сам доводит до `running`, а агент не назначает orphan лидером (`score_candidate`). Залипший orphan виден как WARNING-issue.
+- **Restart-lock.** Операции рестарта сериализуются кластерным lock'ом (etcd-ключ `<prefix>/lifecycle/restart_lock`, привязан к lease). Два параллельных `safeRestartInstance`/rolling-прогона не могут оба пройти majority-guard по одному снапшоту и снять кворум вместе; крашнувшийся держатель освобождает lock по TTL. Demote-first промоутит самого догнавшего (min lag) электабельного фолловера.
+
+**API:**
+- `query rollingRestartPlan` (viewer) — порядок безопасного rolling-рестарта (фолловеры → лидер последним) + флаг `blocked`.
+- `mutation safeRestartInstance(alias)` (admin) — безопасно рестартит один инстанс: majority-guard → demote-first если лидер → graceful-restart (drain + exit, Docker respin'ит фолловером). Это строительный блок: вызывать по одному инстансу, дожидаясь возврата каждого.
+
+Механизм рестарта — `webui_graceful_restart_remote` (дренаж synchro-очереди + `os.exit(0)`, **без** очистки WAL/snap — в отличие от `rebootstrapInstance`).
+
 ## State reporter — liveness в etcd
 
 Open-source аналог верхнеуровневого блока `stateboard.*` из Tarantool Enterprise. Каждый инстанс с включённым reporter'ом пишет в etcd небольшой JSON со своим живым `box.info`. Запись привязана к etcd lease, поэтому:

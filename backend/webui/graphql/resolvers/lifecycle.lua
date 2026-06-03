@@ -217,4 +217,62 @@ function M.mutation_rebootstrap_instance(root, args)
     }
 end
 
+-- ── Safe restart orchestration (FO-12) ──────────────────────────────
+
+-- rollingRestartPlan — read-only. Returns the order a rolling restart
+-- would follow (followers first, leader last with demote-first) and
+-- whether a single stop would break the write majority.
+function M.query_rolling_restart_plan(root, _)
+    require_role(root, 'rollingRestartPlan')
+    local orch  = require('webui.lifecycle.orchestrator')
+    local state = require('webui.cluster.state')
+    local plan  = orch.plan_rolling_restart(state.snapshot().servers or {})
+    local steps = {}
+    for _, s in ipairs(plan.steps or {}) do
+        table.insert(steps, {
+            instance     = s.alias,
+            is_leader    = s.is_leader == true,
+            demote_first = s.demote_first == true,
+        })
+    end
+    return {
+        steps   = steps,
+        leader  = plan.leader,
+        total   = tonumber(plan.total) or 0,
+        blocked = plan.blocked == true,
+        reason  = plan.reason,
+    }
+end
+
+-- safeRestartInstance(alias) — restart one instance the safe way:
+-- majority-guard, demote-first if it is the leader, then dispatch a
+-- graceful restart. Returns after dispatch (the instance rejoins as a
+-- follower under Docker's restart policy). The building block for a
+-- rolling restart — call it per instance, waiting for each to rejoin.
+function M.mutation_safe_restart_instance(root, args)
+    require_role(root, 'safeRestartInstance')
+    if args == nil or type(args.alias) ~= 'string' or args.alias == '' then
+        error('VALIDATION_ERROR: alias is required')
+    end
+    local orch = require('webui.lifecycle.orchestrator')
+    local r = orch.safe_restart_instance(args.alias, {
+        by_user = root and root.user,
+    })
+    if r.ok ~= true then
+        if r.blocked then
+            error('FORBIDDEN: ' .. tostring(r.err))
+        end
+        error('UNAVAILABLE: ' .. tostring(r.err))
+    end
+    logger.warn('safe restart dispatched', {
+        alias = r.alias, new_leader = r.new_leader, user = root and root.user,
+    })
+    return {
+        ok         = true,
+        alias      = r.alias,
+        new_leader = r.new_leader,
+        message    = r.message or 'restarting',
+    }
+end
+
 return M

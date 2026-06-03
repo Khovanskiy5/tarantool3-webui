@@ -564,6 +564,35 @@ function M.check_failover_transition_rate(_, _, now)
     return out
 end
 
+-- Orphan instance (FO-12). After a restart an instance can sit in
+-- `orphan` while it reconnects and replays from peers: Tarantool keeps
+-- it read-only and recovers it to `running` on its own, and the failover
+-- agent already refuses to appoint an orphan (score_candidate). We only
+-- surface it as a WARNING so a peer STUCK orphan (replication wedged)
+-- is visible instead of silently never rejoining.
+function M.check_orphan(snapshot, _, now)
+    now = now or fiber.clock()
+    local out = {}
+    for alias, server in pairs((snapshot and snapshot.servers) or {}) do
+        if server.reachable == true and server.status == 'orphan' then
+            table.insert(out, make_issue {
+                id = M.make_id('replication', 'instance', alias, 'orphan'),
+                category = M.CATEGORIES.REPLICATION,
+                severity = M.SEVERITY.WARNING,
+                scope    = M.SCOPE.INSTANCE,
+                instance = alias,
+                message  = string.format(
+                    'instance %q is orphan — reconnecting / replaying from '
+                    .. 'peers (kept read-only, not eligible for promotion). '
+                    .. 'If it persists, replication is wedged; check the '
+                    .. 'upstream status.', alias),
+                now = now,
+            })
+        end
+    end
+    return out
+end
+
 -- etcd control-plane quorum lost (FO-8). etcd holds the cluster config
 -- and the failover coordinator lease; without a quorum no config commit
 -- can land and no new leader can be appointed (the coordinator cannot
@@ -697,7 +726,7 @@ function M.scan(snapshot, opts)
         M.check_clock, M.check_config,
         M.check_synchro_quorum, M.check_failover_coordinator,
         M.check_failover_suppressed, M.check_failover_transition_rate,
-        M.check_etcd_quorum,
+        M.check_etcd_quorum, M.check_orphan,
         M.check_two_rw, M.check_alien,
     }) do
         local rule_issues = fn(snapshot, thresholds, now)

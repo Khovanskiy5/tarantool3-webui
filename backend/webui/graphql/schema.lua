@@ -310,6 +310,30 @@ local Query = types.object {
                 .. 'that crashed or lost its etcd lease.',
             resolve = cluster_liveness_resolver.query,
         },
+        rollingRestartPlan = {
+            kind = types.object({
+                name = 'RollingRestartPlan',
+                fields = {
+                    leader  = types.string,
+                    total   = types.int.nonNull,
+                    blocked = types.boolean.nonNull,
+                    reason  = types.string,
+                    steps   = types.list(types.object({
+                        name = 'RollingRestartStep',
+                        fields = {
+                            instance     = types.string.nonNull,
+                            is_leader    = types.boolean.nonNull,
+                            demote_first = types.boolean.nonNull,
+                        },
+                    })),
+                },
+            }).nonNull,
+            description = 'Order a safe rolling restart would follow: '
+                .. 'healthy followers first, the leader last (demote-first). '
+                .. '`blocked` is true when even a single stop would break '
+                .. 'the write majority (1- or 2-node clusters).',
+            resolve = lifecycle_resolver.query_rolling_restart_plan,
+        },
         failoverStateProviderStatus = {
             kind = types.object({
                 name = 'FailoverStateProviderStatus',
@@ -1056,6 +1080,25 @@ local Mutation = types.object {
                 'the synchro queue (would lose uncommitted txns); ' ..
                 'promote another peer first.',
             resolve = lifecycle_resolver.mutation_rebootstrap_instance,
+        },
+        safeRestartInstance = {
+            kind = types.object({
+                name = 'SafeRestartResult',
+                fields = {
+                    ok         = types.boolean.nonNull,
+                    alias      = types.string.nonNull,
+                    new_leader = types.string,
+                    message    = types.string,
+                },
+            }).nonNull,
+            arguments = { alias = types.string.nonNull },
+            description = 'Safely restart one instance (FO-12): refuses if '
+                .. 'it would break the write majority, demotes the leader '
+                .. 'first (promotes a healthy follower and waits), then '
+                .. 'dispatches a graceful restart. The instance rejoins as '
+                .. 'a follower. Building block for a rolling restart — call '
+                .. 'per instance, waiting for each to rejoin. Admin only.',
+            resolve = lifecycle_resolver.mutation_safe_restart_instance,
         },
         -- Phase 5 atomic cluster operator controls (Cartridge-pattern).
         -- editTopology is the primary mutation; the three alias

@@ -143,6 +143,9 @@ M.GRAPHQL_FIELD = {
     setFailoverMode       = 'admin',
     pauseFailover         = 'admin',
     resumeFailover        = 'admin',
+    -- FO-12 safe restart orchestration.
+    rollingRestartPlan    = 'viewer',
+    safeRestartInstance   = 'admin',
     -- Phase 2 Task 2.3 data-explorer tuple mutations.
     tupleInsert           = 'admin',
     tupleReplace          = 'admin',

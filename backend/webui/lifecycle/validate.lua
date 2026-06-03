@@ -14,6 +14,18 @@ local version = require('webui.version')
 
 local M = {}
 
+-- Runtime majority-guard (FO-12). Given the live cluster snapshot's
+-- `servers` map and the aliases an operation would stop, return
+-- (true, nil) when a write majority (N/2+1) survives, or (false, reason)
+-- otherwise. Thin wrapper over the orchestrator's pure check so the
+-- GraphQL layer has one obvious place to gate destructive operations.
+function M.majority_guard(servers, stop_aliases)
+    local orch = require('webui.lifecycle.orchestrator')
+    local verdict = orch.majority_after_stop(servers or {}, stop_aliases)
+    if verdict.ok then return true end
+    return false, verdict.reason
+end
+
 -- Split out of validate() to keep its cyclomatic complexity below
 -- the project luacheck cap. Returns (true, nil) on success or
 -- (false, message) on rejection. Accepts nil (unset → no-op).
