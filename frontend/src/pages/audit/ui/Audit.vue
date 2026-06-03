@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { onMounted, reactive } from 'vue';
+import { onMounted, reactive, ref } from 'vue';
 import { storeToRefs } from 'pinia';
 import DataTable from 'primevue/datatable';
 import Column from 'primevue/column';
 import InputText from 'primevue/inputtext';
 import Button from 'primevue/button';
 import Tag from 'primevue/tag';
+import Message from 'primevue/message';
 
 import { useAuditStore } from '@/entities/audit-entry';
 import { downloadExportedAudit } from '@/features/audit-export';
@@ -93,6 +94,12 @@ const setPreset = (preset: ActionPreset) => {
   }
   store.load(buildFilter());
 };
+const isPresetActive = (preset: ActionPreset): boolean =>
+  ('exact' in preset && filter.action === preset.exact) ||
+  ('prefix' in preset && filter.action_prefix === preset.prefix);
+
+const hasAnyFilter = (): boolean =>
+  filter.user !== '' || filter.action !== '' || filter.action_prefix !== '' || filter.scope !== '';
 
 const fmtTs = (us: number) => new Date(Math.floor(us / 1000)).toISOString();
 
@@ -104,9 +111,6 @@ const fmtTs = (us: number) => new Date(Math.floor(us / 1000)).toISOString();
 // red Tag — that's the cue to investigate (corruption was
 // inserted between the chain's last seal and the first broken
 // row).
-
-import { ref } from 'vue';
-
 const VERIFY_Q = /* GraphQL */ `
   query AuditChainVerify {
     verifyAuditChain {
@@ -156,17 +160,17 @@ onMounted(() => {
   <section class="webui-audit">
     <header class="webui-audit__head">
       <h1>Audit log</h1>
+      <Tag :value="`${entries.length} entries`" severity="secondary" />
+      <Tag
+        v-if="verifyResult"
+        :severity="verifyResult.ok ? 'success' : 'danger'"
+        :value="
+          verifyResult.ok
+            ? `chain OK — ${verifyResult.scanned} rows, ${verifyResult.seals} seal(s)`
+            : `chain BROKEN — ${verifyResult.reason ?? 'see broken_at'}`
+        "
+      />
       <div class="webui-audit__head-actions">
-        <Tag
-          v-if="verifyResult"
-          :severity="verifyResult.ok ? 'success' : 'danger'"
-          :value="
-            verifyResult.ok
-              ? `chain OK — ${verifyResult.scanned} rows, ${verifyResult.seals} seal(s)`
-              : `chain BROKEN — ${verifyResult.reason ?? 'see broken_at'}`
-          "
-          class="webui-audit__chain-badge"
-        />
         <Button
           size="small"
           icon="pi pi-shield"
@@ -180,47 +184,75 @@ onMounted(() => {
       </div>
     </header>
 
-    <div class="webui-audit__presets">
-      <span class="webui-audit__presets-label">Quick filters:</span>
-      <button
+    <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
+
+    <!-- Quick-filter chip row. Buttons themed as text-pill so the
+         active preset is visually distinct without a bespoke `.preset`
+         class — `severity="primary"` is PrimeVue's "selected" cue. -->
+    <fieldset class="webui-audit__bar webui-audit__bar--presets">
+      <legend class="webui-audit__legend">Quick filters</legend>
+      <Button
         v-for="preset in actionPresets"
         :key="preset.label"
-        type="button"
-        :class="[
-          'webui-audit__preset',
-          {
-            'webui-audit__preset--active':
-              ('exact' in preset && filter.action === preset.exact) ||
-              ('prefix' in preset && filter.action_prefix === preset.prefix),
-          },
-        ]"
+        :label="preset.label"
+        :severity="isPresetActive(preset) ? 'primary' : 'secondary'"
+        :outlined="!isPresetActive(preset)"
+        size="small"
         :title="
           'exact' in preset
             ? `Filter by action ${preset.exact}`
             : `Filter by action prefix ${preset.prefix}`
         "
         @click="setPreset(preset)"
-      >
-        {{ preset.label }}
-      </button>
-      <button
-        v-if="filter.user || filter.action || filter.action_prefix || filter.scope"
-        type="button"
-        class="webui-audit__reset"
+      />
+      <Button
+        v-if="hasAnyFilter()"
+        label="Reset"
+        icon="pi pi-times"
+        severity="secondary"
+        text
+        size="small"
         @click="resetFilters"
-      >
-        Reset
-      </button>
-    </div>
+      />
+    </fieldset>
 
-    <form class="webui-audit__filters" @submit.prevent="apply">
-      <InputText v-model="filter.user" placeholder="user" />
-      <InputText v-model="filter.action" placeholder="action (e.g. auth.login)" />
-      <InputText v-model="filter.scope" placeholder="scope" />
-      <Button type="submit" size="small" label="Apply" />
+    <!-- Per-column text filters with explicit r-field labels so the
+         operator does not have to guess what each input narrows. -->
+    <form class="webui-audit__bar webui-audit__bar--filters" @submit.prevent="apply">
+      <div class="webui-audit__field">
+        <label for="audit-user">User</label>
+        <InputText
+          id="audit-user"
+          v-model="filter.user"
+          size="small"
+          placeholder="alice"
+          @keyup.enter="apply"
+        />
+      </div>
+      <div class="webui-audit__field">
+        <label for="audit-action">Action</label>
+        <InputText
+          id="audit-action"
+          v-model="filter.action"
+          size="small"
+          placeholder="e.g. auth.login"
+          @keyup.enter="apply"
+        />
+      </div>
+      <div class="webui-audit__field">
+        <label for="audit-scope">Scope</label>
+        <InputText
+          id="audit-scope"
+          v-model="filter.scope"
+          size="small"
+          placeholder="session"
+          @keyup.enter="apply"
+        />
+      </div>
+      <div class="webui-audit__apply">
+        <Button type="submit" size="small" icon="pi pi-filter" label="Apply" />
+      </div>
     </form>
-
-    <p v-if="error" class="webui-audit__error">{{ error }}</p>
 
     <DataTable
       :value="entries"
@@ -259,64 +291,77 @@ onMounted(() => {
 }
 .webui-audit__head {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-}
-.webui-audit__presets {
-  display: flex;
+  gap: 0.75rem;
   flex-wrap: wrap;
-  gap: 0.4rem;
+}
+.webui-audit__head h1 {
+  margin: 0;
+}
+.webui-audit__head-actions {
+  display: inline-flex;
   align-items: center;
-  font-size: 0.8rem;
-}
-.webui-audit__presets-label {
-  color: var(--webui-text-muted, #8a93a6);
-  margin-right: 0.25rem;
-}
-.webui-audit__preset {
-  font-size: 0.75rem;
-  padding: 0.2rem 0.6rem;
-  border-radius: 999px;
-  border: 1px solid var(--webui-border, #2a2f3a);
-  background: var(--webui-bg-elevated, #161a23);
-  color: inherit;
-  cursor: pointer;
-  font-family: var(--webui-font-mono, monospace);
-}
-.webui-audit__preset:hover {
-  border-color: var(--webui-accent, #4ea8de);
-}
-.webui-audit__preset--active {
-  background: var(--webui-accent, #4ea8de);
-  color: var(--webui-bg, #11141d);
-  border-color: var(--webui-accent, #4ea8de);
-}
-.webui-audit__reset {
-  font-size: 0.75rem;
-  padding: 0.2rem 0.6rem;
-  border-radius: 999px;
-  background: transparent;
-  border: 1px dashed var(--webui-border, #2a2f3a);
-  color: var(--webui-text-muted, #8a93a6);
-  cursor: pointer;
-}
-.webui-audit__reset:hover {
-  border-color: var(--webui-danger, #c0392b);
-  color: var(--webui-danger, #c0392b);
-}
-.webui-audit__filters {
-  display: flex;
   gap: 0.5rem;
+  /* Push action buttons to the right edge of the wrapped header. */
+  margin-left: auto;
 }
-.webui-audit__error {
-  color: var(--p-message-error-color, #d83535);
+
+/* Shared bar surface for the two control rows (presets + filters).
+   Painted from PrimeVue tokens so the theme picker stays in charge. */
+.webui-audit__bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.6rem 0.8rem;
+  background: var(--p-content-background);
+  border: 1px solid var(--p-content-border-color);
+  border-radius: var(--p-content-border-radius, 6px);
+  margin: 0;
 }
+.webui-audit__bar--presets {
+  align-items: center;
+}
+.webui-audit__legend {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--p-text-muted-color);
+  padding: 0 0.4rem;
+}
+
+/* Same r-field shape used by the other pages — uppercase label on
+   top, control underneath. Keeps the audit filter row consistent
+   with the issues / logs / config-editor toolbars. */
+.webui-audit__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 12rem;
+}
+.webui-audit__field > label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--p-text-muted-color);
+}
+.webui-audit__field > :deep(input.p-inputtext) {
+  width: 100%;
+}
+.webui-audit__apply {
+  display: inline-flex;
+  align-items: flex-end;
+  margin-left: auto;
+}
+
 .webui-audit__payload {
   font-family: var(--webui-font-mono);
   font-size: 0.8rem;
 }
 .webui-audit__muted {
-  color: var(--webui-text-muted);
+  color: var(--p-text-muted-color, var(--webui-text-muted));
 }
 .webui-audit__footer {
   display: flex;
