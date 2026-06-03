@@ -50,4 +50,26 @@ function M.should_fence(state)
     return nil
 end
 
+-- Is an appointment stale (from an older coordinator) and must be
+-- ignored? (Task FO-4 control-plane fencing token.)
+--
+-- `appt_term` is the failover term carried by the appointment — the
+-- etcd mod_revision of the coordinator key when the writing
+-- coordinator claimed it. etcd revisions are strictly monotonic, so a
+-- higher term means a newer coordinator. `last_applied` is the highest
+-- term we have already acted on.
+--
+-- Reject only when `appt_term < last_applied`: a coordinator legitimately
+-- writes many appointments under the SAME term (leadership can change
+-- within one coordinator's reign), so equal terms are accepted. A nil
+-- term means a manual/legacy override (M.appoint_manually) — never
+-- treated as stale, so operator overrides are always honoured.
+function M.appointment_is_stale(appt_term, last_applied)
+    if appt_term == nil then return false end
+    local t = tonumber(appt_term)
+    local last = tonumber(last_applied)
+    if t == nil or last == nil then return false end
+    return t < last
+end
+
 return M

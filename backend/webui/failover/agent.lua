@@ -278,6 +278,13 @@ local function write_appointment(client, rs_name, leader_alias, previous,
         coordinator = STATE.self_alias, previous = previous,
         manual_override_until = manual_override_until,
         by_user = by_user,
+        -- Failover term (FO-4 control-plane fencing token): the
+        -- mod_revision of OUR coordinator key. etcd revisions are
+        -- strictly monotonic, so a newer coordinator stamps a higher
+        -- term; the watcher rejects appointments whose term is lower
+        -- than the highest it has applied (defense-in-depth on top of
+        -- the CAS below).
+        term = STATE.coordinator_revision,
     })
     -- CAS-bind the write to OUR coordinator key revision. If our
     -- lease has expired and another peer claimed coordinator (new

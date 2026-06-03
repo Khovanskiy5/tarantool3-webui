@@ -55,6 +55,7 @@ local STATE = {
     -- Self-fencing bookkeeping (monotonic clock):
     last_leader_confirm_mono = nil, -- last successful self-as-leader read
     last_etcd_ok = false,
+    last_applied_term = 0,          -- FO-4: highest appointment term applied
     -- Guards against the watcher loop and the fencing loop calling
     -- box.ctl.promote/demote at the same time (Tarantool rejects
     -- "simultaneous invocations"). A plain boolean is safe: fibers only
@@ -87,6 +88,7 @@ local function read_appointment(client)
         leader = parsed.leader,
         ts     = tonumber(parsed.ts),
         coordinator = parsed.coordinator,
+        term   = tonumber(parsed.term),  -- FO-4 fencing token (nil for manual)
         revision = kv.revision,
     }
 end
@@ -216,15 +218,31 @@ local function react_once()
     else
         STATE.last_error = nil
         STATE.last_etcd_ok = true
-        -- A successful read naming us leader re-confirms our RW lease
-        -- on OUR monotonic clock. This is the heartbeat the self-fence
-        -- watches: once the gap exceeds renew_deadline we step down.
-        if appt.leader == STATE.self_alias then
-            STATE.last_leader_confirm_mono = fiber.clock()
-        end
-        local ok, ap_err = pcall(apply_appointment, appt)
-        if not ok then
-            STATE.last_error = 'apply: ' .. tostring(ap_err)
+        if fencing.appointment_is_stale(appt.term, STATE.last_applied_term) then
+            -- An older coordinator's decision raced in (lower term).
+            -- Ignore it; do NOT apply and do NOT treat it as a
+            -- leadership confirmation. The current coordinator will
+            -- re-stamp the right appointment at its (higher) term.
+            logger.warn('ignoring stale appointment (lower failover term)', {
+                appt_term = appt.term,
+                last_applied_term = STATE.last_applied_term,
+                leader = appt.leader,
+            })
+        else
+            if appt.term ~= nil then
+                STATE.last_applied_term =
+                    math.max(STATE.last_applied_term or 0, appt.term)
+            end
+            -- A fresh (non-stale) read naming us leader re-confirms our
+            -- RW lease on OUR monotonic clock — the heartbeat the
+            -- self-fence watches.
+            if appt.leader == STATE.self_alias then
+                STATE.last_leader_confirm_mono = fiber.clock()
+            end
+            local ok, ap_err = pcall(apply_appointment, appt)
+            if not ok then
+                STATE.last_error = 'apply: ' .. tostring(ap_err)
+            end
         end
     end
 end
@@ -313,6 +331,7 @@ function M.start(opts)
     -- fenced before its first successful appointment read.
     STATE.last_leader_confirm_mono = fiber.clock()
     STATE.last_etcd_ok = false
+    STATE.last_applied_term = 0
     STATE.fiber = fiber.create(loop)
     STATE.fencing_fiber = fiber.create(fencing_loop)
     -- React immediately on every config apply/reload. In supervised
@@ -378,6 +397,7 @@ function M._reset()
     STATE.fencing_fiber = nil
     STATE.last_leader_confirm_mono = nil
     STATE.last_etcd_ok = false
+    STATE.last_applied_term = 0
     STATE.last_seen = nil
     STATE.last_applied = nil
     STATE.last_error = nil

@@ -54,3 +54,27 @@ g.test_bad_inputs_never_fence = function()
         last_confirm_mono = 100, renew_deadline = 0,
     }), nil, 'non-positive deadline → never fence')
 end
+
+-- ── appointment_is_stale (FO-4 fencing token) ──────────────────────
+
+g.test_lower_term_is_stale = function()
+    t.assert_equals(fencing.appointment_is_stale(5, 7), true,
+        'term 5 < applied 7 → stale')
+end
+
+g.test_equal_term_not_stale = function()
+    t.assert_equals(fencing.appointment_is_stale(7, 7), false,
+        'same coordinator re-writes at the same term → not stale')
+end
+
+g.test_higher_term_not_stale = function()
+    t.assert_equals(fencing.appointment_is_stale(9, 7), false,
+        'newer coordinator term → not stale')
+end
+
+g.test_nil_term_never_stale = function()
+    t.assert_equals(fencing.appointment_is_stale(nil, 7), false,
+        'manual/legacy appointment (no term) is always honoured')
+    t.assert_equals(fencing.appointment_is_stale(5, nil), false,
+        'no baseline yet → accept')
+end
