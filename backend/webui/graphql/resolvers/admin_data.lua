@@ -531,6 +531,77 @@ function M.query_space_stats(root, args)
     }
 end
 
+-- ── sequence info (DE-1.3) ────────────────────────────────────────
+--
+-- Reads `_sequence` for the static metadata and `_sequence_data`
+-- for the current value. The current value is nullable: Tarantool
+-- only writes a `_sequence_data` row after the first `:next()` /
+-- `:set()`, so a fresh sequence reports `current=null` until used.
+--
+-- `attached_to` walks `_space_sequence` and resolves space ids to
+-- names so the SPA can warn before drop: "this sequence drives
+-- two indexes; detach first".
+
+local function sequence_attached_to(seq_id)
+    if box.space._space_sequence == nil then return {} end
+    local out = {}
+    for _, row in box.space._space_sequence:pairs() do
+        -- Format: {space_id, sequence_id, is_generated, field, path}
+        if row[2] == seq_id then
+            local space_tuple
+            pcall(function() space_tuple = box.space._space:get({ row[1] }) end)
+            local space_name = space_tuple and space_tuple[3] or tostring(row[1])
+            table.insert(out, {
+                space = space_name,
+                field = row[4],
+                path  = row[5] ~= '' and row[5] or nil,
+            })
+        end
+    end
+    return out
+end
+
+function M.query_sequence_info(root, args)
+    require_role(root, 'sequenceInfo')
+    if type(args.name) ~= 'string' or args.name == '' then
+        error('VALIDATION_ERROR: name is required')
+    end
+    if rawget(_G, 'box') == nil or box.space == nil
+        or box.space._sequence == nil then
+        error('UNAVAILABLE: _sequence not initialised')
+    end
+    local seq_tuple = box.space._sequence.index.name:get({ args.name })
+    if seq_tuple == nil then
+        error('NOT_FOUND: sequence ' .. args.name .. ' does not exist')
+    end
+    -- `_sequence` tuple format:
+    -- {id, owner, name, step, min, max, start, cache, cycle}
+    local id = seq_tuple[1]
+    local seq = box.sequence[args.name]
+    local current
+    if seq ~= nil then
+        local ok, val = pcall(seq.current, seq)
+        if ok then current = val end
+    end
+    logger.debug('sequenceInfo', {
+        name = args.name, id = id,
+        user = root and root.user,
+        request_id = root and root.request_id,
+    })
+    return {
+        id          = id,
+        name        = seq_tuple[3],
+        step        = seq_tuple[4],
+        min         = seq_tuple[5],
+        max         = seq_tuple[6],
+        start       = seq_tuple[7],
+        cache       = seq_tuple[8],
+        cycle       = seq_tuple[9],
+        current     = current,
+        attached_to = sequence_attached_to(id),
+    }
+end
+
 -- ── users ──────────────────────────────────────────────────────────
 
 function M.query_users(root)

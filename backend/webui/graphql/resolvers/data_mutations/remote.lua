@@ -10,10 +10,11 @@
 -- the request from the operator.
 --
 
-local common = require('webui.graphql.resolvers.data_mutations.common')
-local tuple  = require('webui.graphql.resolvers.data_mutations.tuple')
-local space  = require('webui.graphql.resolvers.data_mutations.space')
-local index  = require('webui.graphql.resolvers.data_mutations.index')
+local common   = require('webui.graphql.resolvers.data_mutations.common')
+local tuple    = require('webui.graphql.resolvers.data_mutations.tuple')
+local space    = require('webui.graphql.resolvers.data_mutations.space')
+local index    = require('webui.graphql.resolvers.data_mutations.index')
+local sequence = require('webui.graphql.resolvers.data_mutations.sequence')
 
 local M = {}
 
@@ -59,6 +60,8 @@ function M.space_remote_entry(op, payload, ctx)
         impl = space.local_apply
     elseif op:sub(1, 6) == 'index_' then
         impl = index.local_apply
+    elseif op:sub(1, 9) == 'sequence_' then
+        impl = sequence.local_apply
     else
         return { _error = 'INTERNAL: unknown DDL op ' .. tostring(op) }
     end

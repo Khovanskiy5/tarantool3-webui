@@ -274,6 +274,78 @@ M.SpaceStats = types.object({
     },
 })
 
+-- ── sequences (DE-1.3) ────────────────────────────────────────────
+
+M.SequenceAttachment = types.object({
+    name = 'SequenceAttachment',
+    description = 'Where a sequence is attached. Populated from ' ..
+        '`_space_sequence`. A standalone sequence has an empty list.',
+    fields = {
+        space = types.string.nonNull,
+        field = types.long,
+        path  = types.string,
+    },
+})
+
+M.SequenceInfo = types.object({
+    name = 'SequenceInfo',
+    description = 'A `_sequence` row plus its current value and the ' ..
+        'spaces it is attached to. `current` is nullable: Tarantool ' ..
+        'only records a value after the first `:next()` / `:set()`, ' ..
+        'so a fresh sequence reports null until used.',
+    fields = {
+        id           = types.long.nonNull,
+        name         = types.string.nonNull,
+        step         = types.long.nonNull,
+        min          = types.long.nonNull,
+        max          = types.long.nonNull,
+        start        = types.long.nonNull,
+        cache        = types.long.nonNull,
+        cycle        = types.boolean.nonNull,
+        current      = types.long,
+        attached_to  = types.list(M.SequenceAttachment.nonNull).nonNull,
+    },
+})
+
+M.SequenceMutationResult = types.object({
+    name = 'SequenceMutationResult',
+    fields = {
+        ok        = types.boolean.nonNull,
+        name      = types.string.nonNull,
+        id        = types.long,
+        current   = types.long,
+        forwarded = types.boolean,
+        leader    = types.string,
+    },
+})
+
+M.SequenceCreateInput = types.inputObject({
+    name = 'SequenceCreateInput',
+    fields = {
+        name          = types.string.nonNull,
+        step          = types.long,
+        min           = types.long,
+        max           = types.long,
+        start         = types.long,
+        cache         = types.long,
+        cycle         = types.boolean,
+        if_not_exists = types.boolean,
+    },
+})
+
+M.SequenceAlterInput = types.inputObject({
+    name = 'SequenceAlterInput',
+    fields = {
+        name  = types.string.nonNull,
+        step  = types.long,
+        min   = types.long,
+        max   = types.long,
+        start = types.long,
+        cache = types.long,
+        cycle = types.boolean,
+    },
+})
+
 M.TupleMutationResult = types.object({
     name = 'TupleMutationResult',
     fields = {

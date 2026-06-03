@@ -161,6 +161,15 @@ M.GRAPHQL_FIELD = {
     collations            = 'viewer',
     -- DE-1.7 read-only per-space memory / disk metrics.
     spaceStats            = 'viewer',
+    -- DE-1.3 sequence panel. Info is `viewer` (operator browses
+    -- without picking up a write capability); every mutation is
+    -- `admin` like the other DDL surfaces.
+    sequenceInfo          = 'viewer',
+    sequenceCreate        = 'admin',
+    sequenceAlter         = 'admin',
+    sequenceSet           = 'admin',
+    sequenceReset         = 'admin',
+    sequenceDrop          = 'admin',
     -- Phase 3 Task 3.4 — SQL workbench snippet library.
     saveQuery             = 'operator',
     deleteSavedQuery      = 'operator',

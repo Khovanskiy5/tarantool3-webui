@@ -29,6 +29,7 @@ import { DestructiveActionDialog } from '@/shared/ui/destructive-action-dialog';
 import TupleForm from './TupleForm.vue';
 import SpaceForm from './SpaceForm.vue';
 import SpaceStatsPanel from './SpaceStatsPanel.vue';
+import SequencePanel from './SequencePanel.vue';
 
 // ── types mirroring the backend GraphQL schema ─────────────────────
 
@@ -700,6 +701,16 @@ watch(includeSystem, () => {
       <SpaceStatsPanel
         v-if="selectedSpace && !selectedSpace.name.startsWith('_')"
         :space-name="selectedSpace.name"
+      />
+
+      <!-- Sequence: rendered only when the space has an attached
+           sequence (per `_space_sequence`). Hidden otherwise — the
+           "Attach sequence" affordance needs `alterIndex` and lands
+           with DE-1.4. -->
+      <SequencePanel
+        v-if="selectedSpace && !selectedSpace.name.startsWith('_') && selectedSpace.sequence"
+        :space-name="selectedSpace.name"
+        :sequence-name="selectedSpace.sequence"
       />
 
       <!-- Filter bar — every control rendered at PrimeVue's

@@ -16,15 +16,17 @@
 --   * tuple_insert / tuple_replace / tuple_update / tuple_delete
 --   * create_space / drop_space / alter_space / truncate_space
 --   * create_index / drop_index
+--   * sequence_create / alter / set / reset / drop
 --   * remote_entry        – peer-bound DML receiver
 --   * space_remote_entry  – peer-bound DDL receiver
 --
 
-local common = require('webui.graphql.resolvers.data_mutations.common')
-local tuple  = require('webui.graphql.resolvers.data_mutations.tuple')
-local space  = require('webui.graphql.resolvers.data_mutations.space')
-local index  = require('webui.graphql.resolvers.data_mutations.index')
-local remote = require('webui.graphql.resolvers.data_mutations.remote')
+local common   = require('webui.graphql.resolvers.data_mutations.common')
+local tuple    = require('webui.graphql.resolvers.data_mutations.tuple')
+local space    = require('webui.graphql.resolvers.data_mutations.space')
+local index    = require('webui.graphql.resolvers.data_mutations.index')
+local sequence = require('webui.graphql.resolvers.data_mutations.sequence')
+local remote   = require('webui.graphql.resolvers.data_mutations.remote')
 
 local M = {}
 
@@ -42,6 +44,12 @@ M.truncate_space = space.truncate_space
 
 M.create_index  = index.create_index
 M.drop_index    = index.drop_index
+
+M.sequence_create = sequence.sequence_create
+M.sequence_alter  = sequence.sequence_alter
+M.sequence_set    = sequence.sequence_set
+M.sequence_reset  = sequence.sequence_reset
+M.sequence_drop   = sequence.sequence_drop
 
 M.remote_entry        = remote.remote_entry
 M.space_remote_entry  = remote.space_remote_entry

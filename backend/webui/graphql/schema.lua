@@ -546,6 +546,16 @@ local Query = types.object {
                 'collapsible panel. `NOT_FOUND` when the space is absent.',
             resolve = admin_data_resolver.query_space_stats,
         },
+        sequenceInfo = {
+            kind = data_explorer_types.SequenceInfo.nonNull,
+            arguments = { name = types.string.nonNull },
+            description = 'Read `_sequence` for a named sequence plus its ' ..
+                'current value (nullable — Tarantool only persists a row ' ..
+                'in `_sequence_data` after the first `:next()` / `:set()`) ' ..
+                'and the list of spaces it is attached to. `NOT_FOUND` ' ..
+                'when the sequence is absent.',
+            resolve = admin_data_resolver.query_sequence_info,
+        },
         audit = {
             kind = audit_types.AuditPage.nonNull,
             description = 'Paginated audit log filtered by user/action/scope/time. '
@@ -1324,6 +1334,73 @@ local Mutation = types.object {
             resolve = function(root, args)
                 return require('webui.graphql.resolvers.data_mutations')
                     .drop_index(root, args)
+            end,
+        },
+        -- DE-1.3 — sequence CRUD.
+        sequenceCreate = {
+            kind = data_explorer_types.SequenceMutationResult.nonNull,
+            arguments = {
+                input = data_explorer_types.SequenceCreateInput.nonNull,
+            },
+            description = 'Create a standalone sequence (`box.schema.' ..
+                'sequence.create`). The result `current` is null because ' ..
+                'a fresh sequence has no `_sequence_data` row until first ' ..
+                'use.',
+            resolve = function(root, args)
+                return require('webui.graphql.resolvers.data_mutations')
+                    .sequence_create(root, args)
+            end,
+        },
+        sequenceAlter = {
+            kind = data_explorer_types.SequenceMutationResult.nonNull,
+            arguments = {
+                input = data_explorer_types.SequenceAlterInput.nonNull,
+            },
+            description = 'Alter a sequence (`seq:alter`). Absent fields ' ..
+                'keep their current value.',
+            resolve = function(root, args)
+                return require('webui.graphql.resolvers.data_mutations')
+                    .sequence_alter(root, args)
+            end,
+        },
+        sequenceSet = {
+            kind = data_explorer_types.SequenceMutationResult.nonNull,
+            arguments = {
+                name  = types.string.nonNull,
+                value = types.long.nonNull,
+            },
+            description = 'Force the next-issued value of a sequence ' ..
+                '(`seq:set`). The next `:next()` returns `value + step`.',
+            resolve = function(root, args)
+                return require('webui.graphql.resolvers.data_mutations')
+                    .sequence_set(root, args)
+            end,
+        },
+        sequenceReset = {
+            kind = data_explorer_types.SequenceMutationResult.nonNull,
+            arguments = {
+                name = types.string.nonNull,
+            },
+            description = 'Drop the sequence\'s `_sequence_data` row so ' ..
+                'the next `:next()` restarts from `start`. The result ' ..
+                '`current` is null after reset.',
+            resolve = function(root, args)
+                return require('webui.graphql.resolvers.data_mutations')
+                    .sequence_reset(root, args)
+            end,
+        },
+        sequenceDrop = {
+            kind = data_explorer_types.SequenceMutationResult.nonNull,
+            arguments = {
+                name = types.string.nonNull,
+            },
+            description = 'Drop a sequence. Fails with ' ..
+                '`SEQUENCE_HAS_REFERENCES` (Tarantool error) when the ' ..
+                'sequence is still attached to an index — detach via ' ..
+                '`alterIndex({sequence: false})` first (DE-1.4).',
+            resolve = function(root, args)
+                return require('webui.graphql.resolvers.data_mutations')
+                    .sequence_drop(root, args)
             end,
         },
         -- Phase 3 Task 3.4 — SQL workbench snippet save / delete.
