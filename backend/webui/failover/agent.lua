@@ -164,6 +164,11 @@ end
 --   * already-RW instance (stability over flapping)
 function M.score_candidate(probe, max_lag_sec)
     if probe == nil or not probe.reachable then return -math.huge end
+    -- Anonymous replicas (FO-20) are read-only observers: they don't
+    -- vote, aren't in the synchro quorum, and box.ctl.promote() is
+    -- rejected on them. Never appoint one — a promote would just fail
+    -- and leave the replicaset leaderless.
+    if probe.anon == true then return -math.huge end
     if probe.status ~= 'running' then return -math.huge end
     if probe.ro_reason == 'orphan' then return -math.huge end
     local lag = tonumber(probe.lag) or 0
@@ -188,6 +193,7 @@ local function probe_peer(conn)
                 status = i.status, lag = i.replication_lag,
                 lsn = i.lsn,
                 vclock = i.vclock,
+                anon = box.cfg.replication_anon == true,
             }
         ]], {}, { timeout = M.DEFAULTS.probe_timeout_sec })
     end)
@@ -213,6 +219,7 @@ local function probe_replicasets()
         lag        = 0,
         lsn        = box.info.lsn,
         vclock     = box.info.vclock,
+        anon       = box.cfg.replication_anon == true,
     }
     if self_probe.replicaset ~= nil then
         out[self_probe.replicaset] = out[self_probe.replicaset] or {}
