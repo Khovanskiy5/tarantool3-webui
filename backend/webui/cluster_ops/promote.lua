@@ -60,6 +60,34 @@ local function classify(parsed)
     return 'unknown'
 end
 
+-- After apply_edit_topology lands a new RW lock in cluster YAML
+-- (either via `database.mode = rw` in mode `off` or via
+-- `replicasets.<rs>.leader` in mode `manual`), Tarantool's
+-- cfg:reload() flips `box.cfg.read_only` on each peer but does
+-- NOT call `box.ctl.promote()`. Without the explicit promote the
+-- synchro queue stays without an owner and the next sync write
+-- deadlocks on "queue doesn't belong to any instance". The
+-- Cartridge failover module does the same dance:
+--   box.cfg{ read_only = not is_rw }
+--   box.ctl.promote()
+-- The preemptive read_only=false covers the race window between
+-- the etcd commit and the target's config_watcher catching up.
+local function take_queue_on(alias)
+    local self_alias
+    if box.info and box.info.name then self_alias = box.info.name end
+    if alias == self_alias then
+        pcall(function() box.cfg({ read_only = false }) end)
+        pcall(function() box.ctl.promote() end)
+        return
+    end
+    local rpc_ok, rpc = pcall(require, 'webui.cluster.rpc')
+    if not rpc_ok then return end
+    local expr = 'pcall(box.cfg, { read_only = false });'
+        .. ' pcall(function() box.ctl.promote() end);'
+        .. ' return { ok = true }'
+    pcall(rpc.map_eval, expr, {}, { timeout = 5, peers = { alias } })
+end
+
 -- Issue `box.ctl.promote()` on a remote peer over net.box. The
 -- supervised + election modes both end up calling this when the
 -- operator wants the queue-owner side-effect immediately.
@@ -129,7 +157,10 @@ function M.promote(ctx)
         }
     end
 
-    -- off (no agent): RW only on target, RO on the rest.
+    -- off (no agent): RW only on target, RO on the rest, then
+    -- take the synchro queue on the target. See `take_queue_on`
+    -- for why the explicit promote is mandatory even after the
+    -- topology edit lands.
     if mode == 'off' then
         local server_edits = {}
         table.insert(server_edits, { alias = ctx.alias, mode = 'rw' })
@@ -140,47 +171,21 @@ function M.promote(ctx)
         end
         local res = ctx.apply_edit_topology({ servers = server_edits },
             'cluster.promote')
+        take_queue_on(ctx.alias)
         res.mode = mode
         return res
     end
 
-    -- manual: declare leader inside the replicaset AND drive the
-    -- promote on the target. Tarantool 3.x cfg:reload() sets
-    -- box.cfg.read_only based on `replicasets.<rs>.leader` BUT
-    -- does NOT call `box.ctl.promote()` automatically — without
-    -- the explicit promote the synchro queue stays without an
-    -- owner and the next sync write deadlocks on "queue doesn't
-    -- belong to any instance". The Cartridge failover module
-    -- does the same dance:
-    --   box.cfg{ read_only = not is_rw }
-    --   box.ctl.promote()
-    -- We mirror it: editTopology lands the new leader field
-    -- (which makes Tarantool flip ro on every peer via reload),
-    -- and then we explicitly call box.cfg{read_only=false} +
-    -- box.ctl.promote() on the target.
+    -- manual: declare leader inside the replicaset and then take
+    -- the synchro queue on the target. See `take_queue_on` for
+    -- the rationale behind the explicit promote.
     if mode == 'manual' then
         local res = ctx.apply_edit_topology({
             replicasets = { {
                 name = rsname, group = gname, leader = ctx.alias,
             } },
         }, 'cluster.promote')
-        do
-            local self_alias
-            if box.info and box.info.name then self_alias = box.info.name end
-            local expr = 'pcall(box.cfg, { read_only = false });'
-                .. ' pcall(function() box.ctl.promote() end);'
-                .. ' return { ok = true }'
-            if ctx.alias == self_alias then
-                pcall(function() box.cfg({ read_only = false }) end)
-                pcall(function() box.ctl.promote() end)
-            else
-                local rpc_ok, rpc = pcall(require, 'webui.cluster.rpc')
-                if rpc_ok then
-                    pcall(rpc.map_eval, expr, {},
-                        { timeout = 5, peers = { ctx.alias } })
-                end
-            end
-        end
+        take_queue_on(ctx.alias)
         res.mode = mode
         return res
     end
@@ -324,5 +329,9 @@ end
 
 M._locate = locate
 M._classify = classify
+-- Exported so set_failover_mode can drive the same Cartridge-style
+-- queue handoff (cfg{read_only=false} + box.ctl.promote()) on mode
+-- transitions. See `cluster_ops.lua` for the call sites.
+M.take_queue_on = take_queue_on
 
 return M

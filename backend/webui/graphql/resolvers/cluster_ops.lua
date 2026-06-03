@@ -1001,6 +1001,86 @@ local function count_instances(parsed)
     return n
 end
 
+-- Snapshot the current leader per replicaset so failover-mode
+-- transitions can carry the intent across the strip blocks.
+-- Resolution order matches how each source-mode encodes
+-- leadership: `database.mode: rw` (off / supervised), then
+-- `rs.leader` (manual). Election leaves no static marker.
+local function snapshot_prior_leader(parsed)
+    local out = {}
+    for _, group in pairs(parsed.groups or {}) do
+        for rs_name, rs in pairs(group.replicasets or {}) do
+            local picked
+            for alias, inst in pairs(rs.instances or {}) do
+                if type(inst.database) == 'table'
+                    and inst.database.mode == 'rw' then
+                    picked = alias
+                    break
+                end
+            end
+            out[rs_name] = picked or rs.leader
+        end
+    end
+    return out
+end
+
+-- Re-materialise the prior leader as `database.mode: rw` so the
+-- writer survives a transition OUT of manual (where `database.mode`
+-- was stripped on entry). No-op if the replicaset already has a
+-- RW instance — operator edits during the same mutation win.
+local function restore_prior_leader_rw(new_parsed, prior_leader)
+    for _, group in pairs(new_parsed.groups or {}) do
+        for rs_name, rs in pairs(group.replicasets or {}) do
+            local has_rw = false
+            for _, inst in pairs(rs.instances or {}) do
+                if type(inst.database) == 'table'
+                    and inst.database.mode == 'rw' then
+                    has_rw = true
+                    break
+                end
+            end
+            if not has_rw and prior_leader[rs_name]
+                and rs.instances
+                and rs.instances[prior_leader[rs_name]] ~= nil then
+                local inst = rs.instances[prior_leader[rs_name]]
+                inst.database = inst.database or {}
+                inst.database.mode = 'rw'
+            end
+        end
+    end
+end
+
+-- Pick the leader for `rs` when entering manual mode and no
+-- explicit leader was supplied. Sources in priority order:
+--   1. prior_leader (operator's leader from the previous mode)
+--   2. agent's last appointment for this replicaset
+--   3. self if currently RW
+--   4. first alphabetical alias — deterministic placeholder
+local function pick_manual_leader(rs, rs_name, prior_leader,
+                                  agent_last, self_alias, self_is_writer)
+    if prior_leader[rs_name]
+        and rs.instances
+        and rs.instances[prior_leader[rs_name]] ~= nil then
+        return prior_leader[rs_name]
+    end
+    if agent_last and agent_last[rs_name]
+        and rs.instances
+        and rs.instances[agent_last[rs_name]] ~= nil then
+        return agent_last[rs_name]
+    end
+    if self_is_writer and self_alias
+        and rs.instances
+        and rs.instances[self_alias] ~= nil then
+        return self_alias
+    end
+    local aliases = {}
+    for alias in pairs(rs.instances or {}) do
+        table.insert(aliases, alias)
+    end
+    table.sort(aliases)
+    return aliases[1]
+end
+
 function M.mutation_set_failover_mode(root, args)
     require_role(root, 'setFailoverMode')
     args = args or {}
@@ -1083,16 +1163,22 @@ function M.mutation_set_failover_mode(root, args)
         end
     end
 
+    -- Capture the operator's current leader BEFORE the strip
+    -- blocks below wipe per-instance `database.mode` or per-
+    -- replicaset `rs.leader`. Reused by the manual / off /
+    -- supervised branches to carry the intent across the
+    -- transition. Read from `parsed`, not `new_parsed`, so the
+    -- agent-toggle block above cannot perturb the snapshot.
+    local prior_leader = snapshot_prior_leader(parsed)
+
     -- Schema rule: native `replication.failover: election | manual`
     -- is mutually exclusive with per-instance `database.mode`. The
     -- moment we flip into one of those, Tarantool refuses to
     -- (re)load the cluster YAML if any instance still carries an
     -- explicit `database.mode`. Strip it cluster-wide here so the
-    -- commit lands cleanly. Flipping back to `off` does NOT
-    -- re-introduce `database.mode: rw` — the operator can do that
-    -- via editTopology / setInstanceState when they actually want
-    -- a per-instance override; the more conservative default is
-    -- "no override" (instance follows replicaset semantics).
+    -- commit lands cleanly. The intent encoded by the stripped
+    -- `database.mode: rw` is preserved in `prior_leader` above and
+    -- re-materialised as `rs.leader` in the manual block below.
     --
     -- The `supervised` mode here is the WebUI alias that the
     -- branch above rewrites to `failover: off + agent: true`, NOT
@@ -1140,13 +1226,15 @@ function M.mutation_set_failover_mode(root, args)
     -- (audit log on the current commit!) deadlocks on a queue
     -- without an owner. When the operator switches off → manual
     -- without naming a leader, pre-populate each replicaset's
-    -- `leader` with whoever currently owns the synchro queue
-    -- locally (us if we are the writer, otherwise the alias the
-    -- agent last appointed). Falls back to the first alphabetical
-    -- instance alias when nothing better is known — manual mode
-    -- requires SOME leader; "first alpha" is a deterministic
-    -- placeholder the operator will normally override via the
-    -- promoteInstance flow within seconds.
+    -- `leader`. Resolution order:
+    --   1. `prior_leader` — the leader the operator selected in
+    --      the previous failover mode (RW instance under off/
+    --      supervised, or rs.leader under manual). This is what
+    --      makes mode toggles round-trip without losing the
+    --      writer.
+    --   2. agent's last appointment in etcd.
+    --   3. self if this instance currently owns the synchro queue.
+    --   4. first alphabetical alias — deterministic placeholder.
     if args.mode == 'manual' then
         local self_alias
         if box.info and box.info.name then self_alias = box.info.name end
@@ -1169,29 +1257,22 @@ function M.mutation_set_failover_mode(root, args)
         for _, group in pairs(new_parsed.groups or {}) do
             for rs_name, rs in pairs(group.replicasets or {}) do
                 if rs.leader == nil then
-                    local picked
-                    if agent_last and agent_last[rs_name]
-                        and rs.instances
-                        and rs.instances[agent_last[rs_name]] ~= nil then
-                        picked = agent_last[rs_name]
-                    elseif self_is_writer and self_alias
-                        and rs.instances
-                        and rs.instances[self_alias] ~= nil then
-                        picked = self_alias
-                    else
-                        -- Last resort: alphabetical first instance
-                        -- in the replicaset.
-                        local aliases = {}
-                        for alias in pairs(rs.instances or {}) do
-                            table.insert(aliases, alias)
-                        end
-                        table.sort(aliases)
-                        picked = aliases[1]
-                    end
-                    if picked ~= nil then rs.leader = picked end
+                    rs.leader = pick_manual_leader(rs, rs_name,
+                        prior_leader, agent_last,
+                        self_alias, self_is_writer)
                 end
             end
         end
+    end
+
+    -- Off / supervised re-materialise the prior leader as
+    -- `database.mode: rw` so the writer survives the transition
+    -- OUT of manual (where `database.mode` was stripped on entry).
+    -- Without this re-emit a manual → off toggle lands with no
+    -- RW instance and the next sync write hits "synchro queue
+    -- doesn't belong to any instance".
+    if args.mode == 'off' or args.mode == 'supervised' then
+        restore_prior_leader_rw(new_parsed, prior_leader)
     end
 
     -- Apply the rest of the knobs only when explicitly supplied —
@@ -1343,30 +1424,40 @@ function M.mutation_set_failover_mode(root, args)
         end
     end
 
+    -- Drive the Cartridge-style queue handoff
+    -- (cfg{read_only=false} + box.ctl.promote()) on the new leader.
+    -- Tarantool 3.x cfg:reload() flips `box.cfg.read_only` based
+    -- on the new YAML but does NOT take the synchro queue — see
+    -- tarantool-3.7.0/src/box/lua/config/applier/box_cfg.lua:1208-1212
+    -- where the authors explicitly leave queue-handoff to the
+    -- orchestrator for every failover mode except `election`. So:
+    --   * manual:       drive promote on each rs.leader.
+    --   * off/supervised: drive promote on `prior_leader` — the
+    --                   instance we just re-emitted `database.mode:
+    --                   rw` for via `restore_prior_leader_rw`. Without
+    --                   this step the YAML has the right RW peer
+    --                   but the queue stays orphaned and the next
+    --                   sync write hangs on "queue doesn't belong
+    --                   to any instance".
+    --   * election:     raft owns the term; do nothing here. The
+    --                   demote block above released the previous
+    --                   owner, which is sufficient for raft to
+    --                   start a fresh round.
     if args.mode == 'manual' then
-        -- Cartridge-style two-step handoff for the named leader of
-        -- every replicaset: flip `box.cfg.read_only = false` AND
-        -- call `box.ctl.promote()`. Tarantool 3.x cfg:reload()
-        -- only does the first half — the second is on us (see
-        -- cartridge-2.17.1/cartridge/failover.lua synchro_promote
-        -- for the original).
-        local rpc_ok, rpc = pcall(require, 'webui.cluster.rpc')
-        local self_alias
-        if box.info and box.info.name then self_alias = box.info.name end
         for _, group in pairs(new_parsed.groups or {}) do
             for _, rs in pairs(group.replicasets or {}) do
-                local leader_alias = rs.leader
-                if type(leader_alias) == 'string' and leader_alias ~= '' then
-                    if leader_alias == self_alias then
-                        pcall(function() box.cfg({ read_only = false }) end)
-                        pcall(function() box.ctl.promote() end)
-                    elseif rpc_ok then
-                        pcall(rpc.map_eval,
-                            'pcall(box.cfg, { read_only = false });'
-                            .. ' pcall(function() box.ctl.promote() end);'
-                            .. ' return { ok = true }',
-                            {}, { timeout = 5, peers = { leader_alias } })
-                    end
+                if type(rs.leader) == 'string' and rs.leader ~= '' then
+                    promote_module.take_queue_on(rs.leader)
+                end
+            end
+        end
+    elseif args.mode == 'off' or args.mode == 'supervised' then
+        for _, group in pairs(new_parsed.groups or {}) do
+            for rs_name, rs in pairs(group.replicasets or {}) do
+                local leader_alias = prior_leader[rs_name]
+                if leader_alias and rs.instances
+                    and rs.instances[leader_alias] ~= nil then
+                    promote_module.take_queue_on(leader_alias)
                 end
             end
         end
