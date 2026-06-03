@@ -18,7 +18,7 @@
  * shape is the canonical wire format the backend's `coerce_field`
  * accepts on insert / replace.
  */
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import SelectButton from 'primevue/selectbutton';
 import Button from 'primevue/button';
 import Tag from 'primevue/tag';
@@ -84,22 +84,30 @@ const sizeLabel = computed(() => {
 });
 
 const VIEW_OPTIONS = computed(() => {
-  const opts: { label: string; value: string; disabled?: boolean }[] = [
+  const opts: { label: string; value: string }[] = [
     { label: 'Hex',    value: 'hex' },
     { label: 'Base64', value: 'base64' },
   ];
-  // Drop the UTF-8 tab entirely when the caller asked to (msgpack
-  // view) — raw msgpack is never valid UTF-8, so a disabled tab is
-  // just noise there.
-  if (!props.hideUtf8) {
-    opts.push({
-      label: utf8Valid.value ? 'UTF-8' : 'UTF-8 (invalid)',
-      value: 'utf8',
-      disabled: !utf8Valid.value,
-    });
+  // Show the UTF-8 tab only when the bytes actually decode as UTF-8
+  // (an empty field counts as valid — the operator can type fresh
+  // text). We never render a disabled "UTF-8 (invalid)" tab: it was
+  // dead weight on binary payloads and the whole-tuple msgpack view
+  // alike. `hideUtf8` force-hides it regardless (msgpack view).
+  if (!props.hideUtf8 && utf8Valid.value) {
+    opts.push({ label: 'UTF-8', value: 'utf8' });
   }
   return opts;
 });
+
+// If the UTF-8 tab disappears (bytes stopped decoding as UTF-8, or
+// `hideUtf8` flipped) while it was selected, fall back to Hex so
+// `view` never strands on a tab that is no longer rendered.
+watch(
+  () => [utf8Valid.value, props.hideUtf8] as const,
+  ([valid, hidden]) => {
+    if (view.value === 'utf8' && (!valid || hidden)) view.value = 'hex';
+  },
+);
 
 // ─── hex render ──────────────────────────────────────────────────
 
@@ -264,8 +272,11 @@ function download() {
       @update:model-value="onBase64Input"
     />
 
+    <!-- The UTF-8 tab is only offered when the bytes decode as UTF-8
+         (see VIEW_OPTIONS), so reaching this branch always means a
+         valid decode — no "(invalid)" fallback needed. -->
     <Textarea
-      v-else-if="view === 'utf8' && utf8Valid"
+      v-else-if="view === 'utf8'"
       :model-value="utf8Decoded ?? ''"
       :disabled="disabled"
       :readonly="readonly"
@@ -275,11 +286,6 @@ function download() {
       class="dx-bf__textarea"
       @update:model-value="onUtf8Input"
     />
-
-    <Message v-else severity="warn" :closable="false">
-      Bytes are not valid UTF-8. Switch to Hex or Base64 to inspect or
-      edit them.
-    </Message>
   </div>
 </template>
 
