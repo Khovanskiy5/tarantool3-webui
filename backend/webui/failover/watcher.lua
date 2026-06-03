@@ -401,16 +401,14 @@ local function loop()
     end
 end
 
-function M.start(opts)
-    if STATE.enabled then return end
-    opts = opts or {}
+-- Build STATE.config from opts. renew_deadline = lease_ttl - safety,
+-- clamped so a too-small lease still leaves a positive window.
+local function build_config(opts)
     local lease_ttl = tonumber(opts.lease_ttl_sec) or M.DEFAULTS.lease_ttl_sec
     local safety = tonumber(opts.safety_margin) or M.DEFAULTS.safety_margin
-    -- renew_deadline = lease_ttl - safety_margin, clamped to a sane floor
-    -- so a misconfigured (too-small) lease still leaves a positive window.
     local renew_deadline = lease_ttl - safety
     if renew_deadline < 1 then renew_deadline = math.max(1, lease_ttl - 1) end
-    STATE.config = {
+    return {
         poll_interval_sec = tonumber(opts.poll_interval_sec)
             or M.DEFAULTS.poll_interval_sec,
         probe_interval = tonumber(opts.probe_interval)
@@ -425,6 +423,25 @@ function M.start(opts)
         -- FO-16 failsafe: opt-in (default off → safe CP demote on DCS loss).
         failsafe_enabled = opts.failsafe_enabled == true,
     }
+end
+
+-- (Re)start the dead-man watchdog fiber to match the current config.
+local function reconcile_watchdog()
+    pcall(function() watchdog.stop() end)
+    if STATE.config.watchdog_enabled then
+        watchdog.start({
+            is_leader = effectively_leader,
+            last_confirm = function() return STATE.last_leader_confirm_mono end,
+            hard_deadline = STATE.config.hard_deadline,
+            probe_interval = STATE.config.probe_interval,
+        })
+    end
+end
+
+function M.start(opts)
+    if STATE.enabled then return end
+    opts = opts or {}
+    STATE.config = build_config(opts)
     STATE.self_alias = box.info.name
     STATE.replicaset = box.info.replicaset and box.info.replicaset.name
     if STATE.self_alias == nil or STATE.replicaset == nil then
@@ -443,14 +460,7 @@ function M.start(opts)
     -- FO-15: dead-man switch as a backstop to self-fence. Watches the
     -- same monotonic confirm clock; forces process exit if a leader
     -- stays unconfirmed past the full lease (self-fence acts earlier).
-    if STATE.config.watchdog_enabled then
-        watchdog.start({
-            is_leader = effectively_leader,
-            last_confirm = function() return STATE.last_leader_confirm_mono end,
-            hard_deadline = STATE.config.hard_deadline,
-            probe_interval = STATE.config.probe_interval,
-        })
-    end
+    reconcile_watchdog()
     -- React immediately on every config apply/reload. In supervised
     -- mode the applier re-evaluates RO/RW on reload; the watch lets us
     -- re-assert the appointed state within the same tick instead of
@@ -476,6 +486,22 @@ function M.start(opts)
         interval_sec = STATE.config.poll_interval_sec,
         renew_deadline = STATE.config.renew_deadline,
         probe_interval = STATE.config.probe_interval,
+    })
+    return true
+end
+
+-- Live-reconfigure without restarting the poll/fencing fibers (they
+-- read STATE.config every tick). Only the watchdog fiber is restarted,
+-- because its hard_deadline/probe are captured at start — and that
+-- restart does not touch leadership. No-op if not running.
+function M.reconfigure(opts)
+    if not STATE.enabled then return false end
+    STATE.config = build_config(opts or {})
+    reconcile_watchdog()
+    logger.info('failover watcher reconfigured (live)', {
+        renew_deadline = STATE.config.renew_deadline,
+        failsafe_enabled = STATE.config.failsafe_enabled,
+        watchdog_enabled = STATE.config.watchdog_enabled,
     })
     return true
 end

@@ -585,14 +585,20 @@ end
 -- Public surface
 -- ─────────────────────────────────────────────────────────────────────
 
+-- Build STATE.config from opts (defaults for missing/invalid values).
+local function build_config(opts)
+    local cfg = {}
+    for k, default in pairs(M.DEFAULTS) do
+        local v = tonumber(opts[k])
+        cfg[k] = (v and v > 0) and v or default
+    end
+    return cfg
+end
+
 function M.start(opts)
     if STATE.enabled then return end
     opts = opts or {}
-    STATE.config = {}
-    for k, default in pairs(M.DEFAULTS) do
-        local v = tonumber(opts[k])
-        STATE.config[k] = (v and v > 0) and v or default
-    end
+    STATE.config = build_config(opts)
     STATE.self_alias = (rawget(_G, 'box') and box.info and box.info.name) or nil
     if STATE.self_alias == nil then
         return nil, 'box.info.name unavailable; refusing to start agent'
@@ -615,6 +621,20 @@ function M.start(opts)
         lease_ttl_sec = STATE.config.lease_ttl_sec,
         min_promotion_interval = STATE.config.min_promotion_interval,
         max_replication_lag_sec = STATE.config.max_replication_lag_sec,
+    })
+    return true
+end
+
+-- Live-reconfigure tunables without restarting the coordinator fiber.
+-- coordinator_loop reads STATE.config every tick, so new timings apply
+-- on the next iteration — no lease drop, no re-election. No-op if the
+-- agent is not running.
+function M.reconfigure(opts)
+    if not STATE.enabled then return false end
+    STATE.config = build_config(opts or {})
+    logger.info('failover agent reconfigured (live)', {
+        lease_ttl_sec = STATE.config.lease_ttl_sec,
+        keepalive_interval = STATE.config.keepalive_interval,
     })
     return true
 end

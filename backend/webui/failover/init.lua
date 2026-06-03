@@ -199,6 +199,31 @@ function M.start(opts)
     return true
 end
 
+-- Live-reconfigure the running agent + watcher from new role opts
+-- WITHOUT dropping the coordinator lease or re-electing (the loops read
+-- their config every tick; only the dead-man watchdog fiber is
+-- restarted, which does not touch leadership). Called on config:reload
+-- when failover tunables change. No-op if the agent isn't running.
+function M.reconfigure(opts)
+    opts = opts or {}
+    if opts.agent ~= true then return false end
+    local a = agent.reconfigure({
+        lease_ttl_sec        = opts.lease_ttl_sec,
+        keepalive_interval   = opts.keepalive_interval,
+        election_interval    = opts.election_interval,
+        appointment_interval = opts.appointment_interval,
+    })
+    local w = watcher.reconfigure({
+        poll_interval_sec = opts.watcher_poll_interval_sec,
+        lease_ttl_sec     = opts.lease_ttl_sec,
+        safety_margin     = opts.safety_margin,
+        probe_interval    = opts.probe_timeout_sec or opts.probe_interval,
+        watchdog_enabled  = opts.watchdog_enabled,
+        failsafe_enabled  = opts.failsafe_enabled,
+    })
+    return a == true and w == true
+end
+
 function M.stop()
     agent.stop()
     watcher.stop()

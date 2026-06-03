@@ -66,6 +66,26 @@ local function reconcile_state_reporter(STATE, opts)
     end
 end
 
+-- Stable fingerprint of the scalar failover opts, so a config reload
+-- can tell whether the agent's tunables actually changed and only then
+-- live-reconfigure it (avoiding needless churn when nothing changed).
+local function failover_opts_fingerprint(cfg)
+    cfg = cfg or {}
+    local keys = {}
+    for k, v in pairs(cfg) do
+        local tv = type(v)
+        if tv == 'string' or tv == 'number' or tv == 'boolean' then
+            keys[#keys + 1] = k
+        end
+    end
+    table.sort(keys)
+    local parts = {}
+    for _, k in ipairs(keys) do
+        parts[#parts + 1] = k .. '=' .. tostring(cfg[k])
+    end
+    return table.concat(parts, ';')
+end
+
 local M = {}
 
 function M.start(opts)
@@ -316,9 +336,11 @@ function M.start(opts)
     if fo_ok then
         local fo_cfg = opts.failover or {}
         local want_agent = fo_cfg.agent == true
+        local fp = failover_opts_fingerprint(fo_cfg)
         if STATE.failover ~= nil and not want_agent then
             pcall(function() STATE.failover.stop() end)
             STATE.failover = nil
+            STATE.failover_fp = nil
             logger.info('failover agent stopped via config reload',
                 { reason = 'roles_cfg.webui.failover.agent != true' })
         end
@@ -326,10 +348,18 @@ function M.start(opts)
             local fo_started, fo_err = fo.start(fo_cfg)
             if fo_started == true then
                 STATE.failover = fo
+                STATE.failover_fp = fp
             elseif fo_err ~= nil and fo_err ~= 'disabled' then
                 logger.warn('failover agent not started',
                     { reason = fo_err })
             end
+        elseif want_agent and STATE.failover ~= nil and STATE.failover_fp ~= fp then
+            -- Tunables changed on reload — apply them live (no lease
+            -- drop / re-election; only the dead-man watchdog restarts).
+            local ok_rc = pcall(function() return fo.reconfigure(fo_cfg) end)
+            STATE.failover_fp = fp
+            logger.info('failover agent reconfigured via config reload',
+                { applied = ok_rc })
         end
     end
 
