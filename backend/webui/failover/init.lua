@@ -97,6 +97,37 @@ local function check_preconditions()
     return true
 end
 
+-- Resolved version-guard state, populated on M.start and exposed via
+-- M.status() so the failover UI / diagnostics can show whether the
+-- recommended supervised mode is in effect or the legacy fallback is.
+local version_guard_state = nil
+
+-- Does THIS Tarantool build accept `replication.failover: supervised`?
+-- Checked against the live config jsonschema (the schema always matches
+-- the running binary). Returns true / false / nil(unknown — schema
+-- shape unexpected). There is intentionally no runtime auto-degrade:
+-- the cluster config is validated by the platform at box.cfg time, so
+-- a build that rejected `supervised` would never have booted this
+-- instance. The guard's job is therefore detection + visibility:
+-- surface a loud WARN + a status flag so operators switch deliberately.
+function M.supervised_supported()
+    local cfg_ok, cfg = pcall(require, 'config')
+    if not cfg_ok then return nil end
+    local ok, schema = pcall(function() return cfg:jsonschema() end)
+    if not ok or type(schema) ~= 'table' then return nil end
+    local props = schema.properties
+    local node = props and props.replication
+        and props.replication.properties
+        and props.replication.properties.failover
+    if type(node) ~= 'table' or type(node.enum) ~= 'table' then
+        return nil
+    end
+    for _, v in ipairs(node.enum) do
+        if v == 'supervised' then return true end
+    end
+    return false
+end
+
 function M.start(opts)
     opts = opts or {}
     if opts.agent ~= true then
@@ -108,20 +139,34 @@ function M.start(opts)
         logger.warn('agent precondition failed', { reason = why })
         return false, why
     end
-    -- Version/mode transparency: surface which failover mode the agent
-    -- is running under. `off` means the supervised fallback is active
-    -- (e.g. a build that rejected `supervised`); operators should see
-    -- this in the log rather than guess.
+    -- Version-guard: detect mode + whether supervised is supported, log
+    -- loudly when the legacy fallback is active, and stash the verdict
+    -- for M.status().
     do
         local cfg_ok, cfg = pcall(require, 'config')
         local mode = cfg_ok and (cfg:get('replication') or {}).failover or 'off'
+        local supported = M.supervised_supported()
+        version_guard_state = {
+            mode = mode,
+            supervised_supported = supported,
+            fallback_active = (mode == 'off'),
+        }
         if mode == 'off' then
-            logger.warn('failover agent running in legacy "off" mode '
-                .. '(supervised recommended); RO-on-restart guarantees are '
-                .. 'weaker — ensure critical spaces are is_sync')
+            if supported == true then
+                logger.warn('failover agent in legacy "off" mode while this '
+                    .. 'build SUPPORTS supervised — switch '
+                    .. 'replication.failover to supervised for '
+                    .. 'RO-on-restart safety; until then critical spaces '
+                    .. 'must be is_sync')
+            else
+                logger.warn('failover agent in legacy "off" fallback '
+                    .. '(supervised unsupported/unknown on this build); '
+                    .. 'ensure critical spaces are is_sync',
+                    { supervised_supported = supported })
+            end
         else
             logger.info('failover agent running under replication.failover',
-                { mode = mode })
+                { mode = mode, supervised_supported = supported })
         end
     end
     local watch_ok, watch_err = watcher.start({
@@ -151,8 +196,9 @@ end
 
 function M.status()
     return {
-        agent   = agent.status(),
-        watcher = watcher.status(),
+        agent         = agent.status(),
+        watcher       = watcher.status(),
+        version_guard = version_guard_state,
     }
 end
 
