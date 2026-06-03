@@ -234,18 +234,19 @@ Tarantool Community Edition не предоставляет «supervised» failo
 | **Hysteresis** | Не более одной смены лидера за `min_promotion_interval` секунд — защищает от flapping на borderline-healthy кандидате. |
 | **Fencing** | Кандидат должен быть `box.info.status == 'running'` с ограниченным replication lag. Stale/orphan peers отвергаются. |
 | **Idempotency** | Appointment не переписывается, если payload не изменился; lease keepalive работает даже при «тихом» периоде. |
-| **Single-writer lock** | Каждый инстанс декларирует `database.mode: rw`, но synchronous queue ownership (`box.ctl.promote/demote`) — единственный writer-lock. Все WebUI критичные спейсы синхронные → multi-master невозможен на них. |
+| **Single-writer lock** | Режим `replication.failover: supervised`: applier поднимает инстансы read-only (RW только у bootstrap-лидера без снапшота), а в рантайме writer-lock — это ownership synchronous queue (`box.ctl.promote/demote`), назначаемый агентом. `database.mode` не задаётся. Все WebUI критичные спейсы синхронные → multi-master на них невозможен; term-фильтр лимба отвергает записи старого лидера (data-plane fence). |
 
 ### Latency
 
-При TTL 3s + keepalive 1s + appointment 1s + watcher poll 1s:
+При TTL 15s + keepalive 5s + appointment 1s + watcher poll 1s:
 - **Soft failover** (graceful shutdown лидера): ~1–2 секунды.
 - **Hard failover** (kill -9 лидера, coordinator жив): ~2–3 секунды.
-- **Coordinator + leader одной командой**: 3–4 секунды (нужно дождаться lease expiry + новой elections + appointment).
+- **Coordinator + leader одной командой**: до ~TTL (нужно дождаться lease expiry + новой elections + appointment).
 
-### Переключение на raft
+### Переключение режимов
 
-Один edit в cluster YAML: `replication.failover: election`, убрать `database.mode: rw` overrides, выставить `roles_cfg.webui.failover.agent: false`. Агент отказывается стартовать когда `replication.failover ≠ off`, double-leadership невозможен на transition.
+- **Fallback `off`** (legacy): агент по-прежнему стартует при `replication.failover: off`; запасной путь, если сборка Tarantool отвергает `supervised` на CE. Гарантии RO-при-рестарте слабее.
+- **Встроенный raft:** `replication.failover: election` + `roles_cfg.webui.failover.agent: false`. Агент отказывается стартовать при `failover ∈ {election, manual}`, double-leadership на transition исключён.
 
 ## Synchronous spaces
 

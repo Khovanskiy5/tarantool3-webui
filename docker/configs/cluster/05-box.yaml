@@ -1,0 +1,9 @@
+# Shared box-level defaults.
+#
+# MVCC is required for correct transactional isolation of synchronous
+# transactions: without it, concurrent reads can observe rows that are
+# still waiting for quorum confirmation (and may yet be rolled back).
+# Enable it cluster-wide. Maps to box_cfg.memtx_use_mvcc_engine
+# (non-dynamic — takes effect on instance start).
+database:
+  use_mvcc_engine: true

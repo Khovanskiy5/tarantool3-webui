@@ -115,8 +115,10 @@ roles_cfg:
   webui:
     failover:
       agent: true
-      lease_ttl_sec: 3            # default 10; ниже = быстрее failover, выше = меньше нагрузки на etcd
-      keepalive_interval: 1       # TTL/3 rule of thumb
+      # Тайминги по правилу Patroni: keepalive + 2*probe_timeout <= lease_ttl.
+      lease_ttl_sec: 15           # время жизни coordinator/RW-лизы
+      keepalive_interval: 5       # период цикла координатора / продления лизы
+      probe_timeout_sec: 2        # бюджет одного запроса к etcd
       appointment_interval: 1
       watcher_poll_interval_sec: 1
 ```
@@ -125,40 +127,33 @@ roles_cfg:
 
 ```yaml
 replication:
-  failover: off                   # обязательно: raft/supervised встроенные сломали бы агент
-  synchro_quorum: 'N/2 + 1'
-  synchro_timeout: 3
+  failover: supervised            # applier стартует инстансы RO; агент назначает писателя
+  bootstrap_strategy: auto        # минимально-именной инстанс бутстрапит реплизасет
+  synchro_quorum: 'N/2+1'
+  synchro_timeout: 5
+  timeout: 1
 ```
 
-И в `groups.default.replicasets.*.instances.*`:
+И на уровне box (любой инстанс):
 
 ```yaml
 database:
-  mode: rw                        # ВСЕ инстансы декларируют RW; synchro queue ownership — real lock
+  use_mvcc_engine: true           # обязателен для корректной изоляции synchro-транзакций
 ```
+
+`database.mode` **не задаётся** — в режиме `supervised` им управляет applier (RO везде, кроме первичного bootstrap-лидера), а писателя в рантайме назначает агент через synchro-очередь.
 
 ### Что нельзя делать
 
-- Не выставлять `database.mode: ro` на followers — Tarantool будет перезаписывать `box.cfg{read_only}` при каждом config reload, фигатя агенту.
-- Не выставлять `replication.failover: election` или `supervised` — агент откажется стартовать (`agent precondition failed`).
-- Не понижать `lease_ttl_sec` ниже `keepalive_interval × 3` — keepalive не успеет, coordinator потеряет lease на ровном месте.
+- Не задавать `database.mode` / `<rs>.leader` при `failover: supervised` — это запрещено режимом и переоткрывает окно RW при рестарте.
+- Не выставлять `failover.replicasets.<rs>.synchro_mode` при активном агенте — он включит `election_mode=manual`, и встроенный raft подерётся с агентом.
+- Не использовать `bootstrap_strategy: supervised`/`native` с агентом — они уводят box.cfg в externally-managed ветку; нужен `auto` (или `legacy`/`config`).
+- Не нарушать неравенство таймингов `keepalive_interval + 2*probe_timeout_sec ≤ lease_ttl_sec`.
 
-### Переключение на raft
+### Fallback и переключение режимов
 
-```yaml
-replication:
-  failover: election
-
-groups.default.replicasets.rs-1:
-  instances:
-    tt-1: { database: { mode: rw } }     # initial leader (опц.)
-    tt-2: { database: { mode: ro } }     # после election может стать rw
-    tt-3: { database: { mode: ro } }
-
-roles_cfg.webui.failover.agent: false
-```
-
-Агент откажется стартовать при `replication.failover ≠ off`, поэтому double-leadership на transition исключён.
+- **Fallback `off`.** Агент по-прежнему стартует при `replication.failover: off` (legacy). Это запасной путь на случай сборки Tarantool, отвергающей `supervised` на CE; гарантии RO-при-рестарте в нём слабее — критичные спейсы должны быть `is_sync`. В логе при старте: `failover agent running in legacy "off" mode`.
+- **Переключение на встроенный raft.** Один edit: `replication.failover: election` и `roles_cfg.webui.failover.agent: false`. Агент отказывается стартовать при `failover ∈ {election, manual}`, поэтому double-leadership на transition исключён.
 
 ## State reporter — liveness в etcd
 

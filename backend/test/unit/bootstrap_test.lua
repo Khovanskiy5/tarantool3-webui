@@ -16,18 +16,30 @@ local bootstrap = require('webui.config_store.bootstrap')
 
 -- ── templates catalog ──────────────────────────────────────────────
 
-g.test_three_templates_shipped = function()
+g.test_templates_shipped = function()
     local names = {}
     for _, tpl in ipairs(bootstrap.list_templates()) do
         table.insert(names, tpl.name)
     end
-    t.assert_equals(#names, 3, 'expected 3 templates shipped')
-    t.assert(table.concat(names, ','):find('single%-instance'),
+    t.assert_equals(#names, 4, 'expected 4 templates shipped')
+    local joined = table.concat(names, ',')
+    t.assert(joined:find('single%-instance'),
         'single-instance template missing')
-    t.assert(table.concat(names, ','):find('replicaset%-3'),
+    t.assert(joined:find('replicaset%-3,') or joined:find('replicaset%-3$'),
         'replicaset-3 template missing')
-    t.assert(table.concat(names, ','):find('vshard%-3x3'),
+    t.assert(joined:find('replicaset%-3%-supervised'),
+        'replicaset-3-supervised template missing')
+    t.assert(joined:find('vshard%-3x3'),
         'vshard-3x3 template missing')
+end
+
+g.test_supervised_template_renders_agent_and_mvcc = function()
+    local yaml = bootstrap.render('replicaset-3-supervised', 'demo')
+    t.assert_str_contains(yaml, 'failover: supervised')
+    t.assert_str_contains(yaml, 'bootstrap_strategy: auto')
+    t.assert_str_contains(yaml, 'use_mvcc_engine: true')
+    t.assert_str_contains(yaml, 'agent: true')
+    t.assert_str_contains(yaml, 'inst-3:')
 end
 
 g.test_each_template_has_title_and_description = function()

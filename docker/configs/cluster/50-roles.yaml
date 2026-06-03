@@ -8,17 +8,23 @@ roles_cfg:
     console_enabled: true
     failover:
       agent: true
-      keepalive_interval: 1
+      # Timing model (mirrors Patroni's rule loop_wait + 2*retry_timeout <= ttl):
+      #   lease_ttl_sec (ttl)        — lifetime of the coordinator/RW lease
+      #   keepalive_interval (loop)  — coordinator cycle / lease renew period
+      #   probe_timeout_sec (retry)  — per-etcd-request budget
+      # 5 + 2*2 = 9 <= 15, and ttl (15) >= 2*keepalive (10) for a future watchdog.
+      lease_ttl_sec: 15
+      keepalive_interval: 5
+      probe_timeout_sec: 2
       watcher_poll_interval_sec: 1
-      lease_ttl_sec: 3
       appointment_interval: 1
     # Liveness reporter: each instance publishes a JSON snapshot of
     # its box.info to `<prefix>/state/by-name/<alias>` in etcd, bound
     # to a lease so the key disappears on crash. Surfaced in the
     # Failover UI as "Liveness reports (etcd)" and via the
-    # `clusterLiveness` GraphQL query. Defaults are tuned for the
-    # 3-second failover budget already used by the agent above
-    # (renew every 1s, declare stale after 3s without a renew).
+    # `clusterLiveness` GraphQL query. Liveness telemetry is faster
+    # than the failover lease on purpose: renew every 1s, declare a
+    # peer stale after 3s without a renew.
     state_reporter:
       enabled: true
       renew_interval: 1

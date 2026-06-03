@@ -1,10 +1,33 @@
-# `failover: off` is mandatory for the WebUI's open-source supervised
-# agent — the built-in raft / supervised loops would fight the agent
-# over `box.cfg.read_only`. The agent acquires a coordinator lease in
-# etcd and promotes a leader by taking the synchro queue; every
-# instance is declared `database.mode: rw` (see `40-topology.yaml`),
-# so the queue owner is the real RW lock.
+# Replication & failover model.
+#
+# `failover: supervised` hands the per-instance RO/RW startup decision
+# to the platform (config applier), while leadership during normal
+# operation is assigned by the WebUI failover agent via etcd + the
+# synchronous queue (box.ctl.promote/demote).
+#
+# Why supervised (not off):
+#   * The applier starts every already-bootstrapped instance read-only
+#     and only the bootstrap leader (lexicographically smallest name,
+#     no local snapshot) comes up read-write to create the replicaset.
+#     Any restart with an existing snapshot starts read-only — so there
+#     is no read-write window on restart, which is the main split-brain
+#     cause when every instance is forced read-write.
+#   * RO/RW is left untouched on config reload, so the leader is not
+#     stomped back to read-only on every reload.
+#   * No built-in raft runs (election_mode stays off), so it does not
+#     fight the agent over leadership. The platform's synchro-queue term
+#     filter still rejects stale-term writes, which is the data-plane
+#     fence against a returning old leader.
+#
+# Requirements that go with this mode (enforced elsewhere):
+#   * No `database.mode` / `<replicaset>.leader` (see 40-topology.yaml).
+#   * No `failover.replicasets.<rs>.synchro_mode` (would switch
+#     election_mode to manual and interfere with the agent).
 replication:
-  synchro_quorum: N/2 + 1
-  failover: 'off'
-  synchro_timeout: 3
+  failover: supervised
+  bootstrap_strategy: auto
+  # N/2+1 = 2 of 3. Formula form auto-adjusts as membership changes;
+  # a lower value risks split-brain on a leader change.
+  synchro_quorum: 'N/2+1'
+  synchro_timeout: 5
+  timeout: 1

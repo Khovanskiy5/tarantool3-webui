@@ -2,18 +2,18 @@
 # advertise URIs use the compose service names which the user-defined
 # network resolves to the right container IPs.
 #
-# `database.mode: rw` on every instance is required by the WebUI
-# failover agent: with `replication.failover: off` (see
-# `20-replication.yaml`), the real RW lock is owning the synchro
-# queue, which the agent promotes via etcd lease.
+# No `database.mode` here: with `replication.failover: supervised`
+# (see `20-replication.yaml`) the config applier decides RO/RW on
+# startup (read-only everywhere except the initial bootstrap leader),
+# and the WebUI failover agent assigns read-write during operation by
+# owning the synchronous queue. Setting `database.mode` is forbidden
+# in supervised mode and would reopen the read-write-on-restart window.
 groups:
   default:
     replicasets:
       rs-1:
         instances:
           tt-1:
-            database:
-              mode: rw
             iproto:
               listen:
               - uri: 0.0.0.0:3301
@@ -21,8 +21,6 @@ groups:
                 peer:
                   uri: tt-1:3301
           tt-2:
-            database:
-              mode: rw
             iproto:
               listen:
               - uri: 0.0.0.0:3301
@@ -30,8 +28,6 @@ groups:
                 peer:
                   uri: tt-2:3301
           tt-3:
-            database:
-              mode: rw
             iproto:
               listen:
               - uri: 0.0.0.0:3301
