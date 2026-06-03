@@ -43,8 +43,6 @@
 
 ## Developer reference
 
-Не для оператора, а для разработчика, который трогает соответствующий backend-модуль.
+Документация по подсистемам для разработчиков вынесена из этой папки:
 
-| Документ | Когда читать |
-|---|---|
-| [data-explorer-architecture.md](data-explorer-architecture.md) | Прежде чем добавлять resolver в `data_mutations/` — структура модулей, dependency rules, deny-list, forward-to-leader, контракт фасада. |
+- [`../data-explorer/index.md`](../data-explorer/index.md) — data-explorer (обзор/мутации спейсов, индексы, коллации, бинарные поля).
