@@ -28,6 +28,138 @@ local function require_role(root, field)
     end
 end
 
+-- Tarantool's etcd config source does NOT poll automatically — it only
+-- re-reads on `config:reload()`. After a successful etcd commit we must
+-- trigger a reload everywhere, including the local instance.
+--
+-- `peers.list()` is already filtered to exclude self (see
+-- `cluster/peers.lua:filter_self`), so a pure fan-out misses the
+-- receiver. When the receiver is also the RW leader (failover hands
+-- the queue around), credential / DDL changes never reach
+-- `box.space._user` and the new user is "in etcd but invisible".
+--
+-- Order: reload self first so the leader applies DDL, then fan out to
+-- peers which replicate it.
+local function reload_self_and_peers(action)
+    local outcome
+    local self_t0 = require('fiber').clock()
+    local self_ok, self_err = pcall(function()
+        require('config'):reload()
+    end)
+    local self_ms = (require('fiber').clock() - self_t0) * 1000
+    if self_ok then
+        logger.info('fanout_reload self ok', {
+            action = action, elapsed_ms = self_ms,
+        })
+        outcome = ' Reloaded self.'
+    else
+        logger.warn('fanout_reload self failed', {
+            action = action, err = tostring(self_err),
+        })
+        outcome = ' Self reload failed: ' .. tostring(self_err) .. '.'
+    end
+
+    local rpc_ok, rpc = pcall(require, 'webui.cluster.rpc')
+    local peers_ok, peers = pcall(require, 'webui.cluster.peers')
+    if not (rpc_ok and peers_ok) then
+        return outcome
+    end
+
+    local all = {}
+    for name in pairs(peers.list() or {}) do
+        table.insert(all, name)
+    end
+    if #all == 0 then
+        return outcome
+    end
+
+    -- 15s budget per peer. `config:reload()` re-runs role start, which
+    -- can coincide with a raft re-election (credentials/replicaset/iproto
+    -- changes all force one). 5s was too tight: the peer that wins the
+    -- election always reported as a timeout even though it recovered
+    -- seconds later.
+    local PEER_TIMEOUT_SEC = 15
+
+    -- Retry policy for transient `not connected`. The peers pool is
+    -- refreshed by the cluster poller fiber, so right after a fresh
+    -- cluster boot (or after a commit that toppled raft) the net.box
+    -- conn state is briefly 'initial'/'error_reconnect'. A handful of
+    -- short retries lets the pool warm up without forcing the operator
+    -- to manually re-run /forceReapplyConfig. The retry budget is
+    -- intentionally short — terminal errors (validation, eval crash)
+    -- are NOT retried; we only retry the literal 'not connected'.
+    local RETRY_DELAYS = { 0.25, 0.5, 1.0 }
+
+    local function run_map_eval(targets)
+        local ok_call, res_each = pcall(rpc.map_eval,
+            'require("config"):reload(); return true',
+            {}, { timeout = PEER_TIMEOUT_SEC, peers = targets })
+        if not ok_call then
+            return nil, tostring(res_each)
+        end
+        return res_each, nil
+    end
+
+    local merged = {}
+    local pending = all
+    local res_each, err = run_map_eval(pending)
+    if err ~= nil then
+        logger.warn('fanout_reload map_eval errored', {
+            action = action, err = err,
+        })
+        return outcome .. ' Peer reload fan-out errored: ' .. err .. '.'
+    end
+    for name, r in pairs(res_each) do merged[name] = r end
+
+    local fiber = require('fiber')
+    for attempt, delay in ipairs(RETRY_DELAYS) do
+        local retry_list = {}
+        for _, name in ipairs(pending) do
+            local r = merged[name]
+            if r and (not r.ok) and r.err == 'not connected' then
+                table.insert(retry_list, name)
+            end
+        end
+        if #retry_list == 0 then break end
+
+        logger.info('fanout_reload retry not_connected', {
+            action = action, attempt = attempt,
+            delay_sec = delay, peers = retry_list,
+        })
+        fiber.sleep(delay)
+
+        local retry_res, retry_err = run_map_eval(retry_list)
+        if retry_err ~= nil then
+            logger.warn('fanout_reload retry errored', {
+                action = action, attempt = attempt, err = retry_err,
+            })
+            break
+        end
+        for name, r in pairs(retry_res) do merged[name] = r end
+        pending = retry_list
+    end
+
+    local failed = {}
+    for name, r in pairs(merged) do
+        if not (r and r.ok) then
+            table.insert(failed, name .. '='
+                .. tostring(r and r.err or 'unknown'))
+        end
+    end
+    if #failed == 0 then
+        logger.info('fanout_reload peers ok', {
+            action = action, peers = #all,
+        })
+        return outcome .. ' Reloaded on '
+            .. tostring(#all) .. ' peer(s).'
+    end
+    logger.warn('fanout_reload peers partial', {
+        action = action, failed = failed,
+    })
+    return outcome .. ' Peer reload partial: failed on '
+        .. table.concat(failed, ', ') .. '.'
+end
+
 -- The local config source path is taken from the env (set by the
 -- entrypoint script that boots Tarantool 3.x). Used as a fallback
 -- when etcd is unwired or empty — operators get a starting point
@@ -243,53 +375,7 @@ function M.mutation_commit(root, args)
 
     local revision = (result and result.revision) or 0
 
-    -- Tarantool's etcd source does NOT poll automatically — it only
-    -- re-reads on `config:reload()`. Fan-out a reload to every peer
-    -- so the new YAML becomes effective immediately instead of
-    -- waiting for the next manual `forceReapplyConfig`. Best-effort;
-    -- partial failures land in the response message so the operator
-    -- can re-run the reload on stragglers.
-    local reload_outcome = ''
-    do
-        local rpc_ok, rpc = pcall(require, 'webui.cluster.rpc')
-        local peers_ok, peers = pcall(require, 'webui.cluster.peers')
-        if rpc_ok and peers_ok then
-            local all = {}
-            for name in pairs(peers.list() or {}) do table.insert(all, name) end
-            if #all > 0 then
-                -- 15s budget per peer. `config:reload()` re-runs role
-                -- start, which can coincide with a raft re-election
-                -- (credentials/replicaset/iproto changes all force one).
-                -- 5s was too tight: the peer that wins the election
-                -- always reported as a timeout even though it
-                -- recovered seconds later. 15s comfortably covers a
-                -- re-election plus role re-init on the local hardware
-                -- the dev cluster runs on.
-                local ok_call, res_each = pcall(rpc.map_eval,
-                    'require("config"):reload(); return true',
-                    {}, { timeout = 15, peers = all })
-                if ok_call then
-                    local failed = {}
-                    for name, r in pairs(res_each) do
-                        if not (r and r.ok) then
-                            table.insert(failed, name .. '=' ..
-                                tostring(r and r.err or 'unknown'))
-                        end
-                    end
-                    if #failed == 0 then
-                        reload_outcome = ' Reloaded on '
-                            .. tostring(#all) .. ' peer(s).'
-                    else
-                        reload_outcome = ' Reload partial: failed on '
-                            .. table.concat(failed, ', ') .. '.'
-                    end
-                else
-                    reload_outcome = ' Reload fan-out errored: '
-                        .. tostring(res_each) .. '.'
-                end
-            end
-        end
-    end
+    local reload_outcome = reload_self_and_peers('commit')
 
     local mirror_outcome = ''
     if result and result.file_mirror then
@@ -413,37 +499,7 @@ function M.mutation_rollback(root, args)
         })
     end)
 
-    local reload_outcome = ''
-    do
-        local rpc_ok, rpc = pcall(require, 'webui.cluster.rpc')
-        local peers_ok, peers = pcall(require, 'webui.cluster.peers')
-        if rpc_ok and peers_ok then
-            local all = {}
-            for name in pairs(peers.list() or {}) do
-                table.insert(all, name)
-            end
-            if #all > 0 then
-                local ok_call, res_each = pcall(rpc.map_eval,
-                    'require("config"):reload(); return true',
-                    {}, { timeout = 15, peers = all })
-                if ok_call then
-                    local failed = {}
-                    for name, r in pairs(res_each) do
-                        if not (r and r.ok) then
-                            table.insert(failed, name)
-                        end
-                    end
-                    if #failed == 0 then
-                        reload_outcome = ' Reloaded on '
-                            .. tostring(#all) .. ' peer(s).'
-                    else
-                        reload_outcome = ' Reload partial: failed on '
-                            .. table.concat(failed, ', ') .. '.'
-                    end
-                end
-            end
-        end
-    end
+    local reload_outcome = reload_self_and_peers('rollback')
 
     logger.info('config rollback ok', {
         user          = root and root.user,
