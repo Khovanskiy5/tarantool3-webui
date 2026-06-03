@@ -149,39 +149,33 @@ local function passes_search(line, needle)
     return line:lower():find(needle:lower(), 1, true) ~= nil
 end
 
--- Handler: GET /api/logs?tail=200&level=W&search=foo
-function M.handler_tail(req)
-    local request_id = req.request_id or 'req:logs'
+-- Local tail core. Returns a plain table that the HTTP handler
+-- wraps into a JSON response and that `webui_logs_tail_remote`
+-- forwards verbatim to the calling peer. Splitting this out lets
+-- the page query *any* instance's log via the peer pool without
+-- duplicating the level / search filtering loop.
+--
+-- Returns one of:
+--   { ok = true, instance, path, file_size, lines = {…} }
+--   { ok = false, code = 'NOT_CONFIGURED' | 'TAIL_FAILED', message }
+function M.tail(query)
     local path = resolve_log_path()
     if path == nil then
         return {
-            status = 503,
-            headers = { ['content-type'] = 'application/json' },
-            body = json.encode({ error = {
-                code = 'NOT_CONFIGURED',
-                message = 'Tarantool log is not a file (configure '
-                    .. '`log.to: file` in cluster YAML to enable tail).',
-                request_id = request_id,
-            } }),
+            ok = false, code = 'NOT_CONFIGURED',
+            message = 'Tarantool log is not a file (configure '
+                .. '`log.to: file` in cluster YAML to enable tail).',
         }
     end
 
-    local q = (type(req.query) == 'table' and req.query) or {}
+    local q = (type(query) == 'table' and query) or {}
     local tail_n = tonumber(q.tail) or 200
     local level  = q.level
     local needle = q.search
 
     local raw, err, file_size = tail_lines(path, tail_n)
     if raw == nil then
-        return {
-            status = 500,
-            headers = { ['content-type'] = 'application/json' },
-            body = json.encode({ error = {
-                code = 'TAIL_FAILED',
-                message = tostring(err),
-                request_id = request_id,
-            } }),
-        }
+        return { ok = false, code = 'TAIL_FAILED', message = tostring(err) }
     end
 
     local out = {}
@@ -191,22 +185,131 @@ function M.handler_tail(req)
         end
     end
 
-    logger.info('logs.tail', {
-        path = path, returned = #out, scanned = #raw,
-        level = level, search = needle,
-        request_id = request_id,
-    })
+    return {
+        ok = true,
+        instance = (rawget(_G, 'box') and box.info and box.info.name) or nil,
+        path = path,
+        file_size = file_size,
+        lines = out,
+    }
+end
+
+-- Forward a tail request to a peer instance. Returns the same
+-- table shape as `M.tail` so callers handle both paths uniformly.
+-- A nil / unreachable peer surfaces as `code = 'PEER_UNREACHABLE'`.
+local function tail_remote(alias, query)
+    local ok_peers, peers = pcall(require, 'webui.cluster.peers')
+    if not ok_peers then
+        return { ok = false, code = 'PEER_UNREACHABLE',
+                 message = 'peer pool unavailable' }
+    end
+    local peer = peers.get(alias)
+    if peer == nil or peer.conn == nil then
+        return { ok = false, code = 'PEER_UNREACHABLE',
+                 message = 'no connection to ' .. alias }
+    end
+    local call_ok, res = pcall(function()
+        return peer.conn:call('webui_logs_tail_remote', { query },
+            { timeout = 5 })
+    end)
+    if not call_ok then
+        return { ok = false, code = 'PEER_UNREACHABLE',
+                 message = 'net.box call failed: ' .. tostring(res) }
+    end
+    if type(res) ~= 'table' then
+        return { ok = false, code = 'PEER_UNREACHABLE',
+                 message = 'peer returned non-table response' }
+    end
+    return res
+end
+
+-- Map an `M.tail` result table to an HTTP response.
+local function reply(result, request_id)
+    if not result.ok then
+        local status = result.code == 'NOT_CONFIGURED' and 503
+            or result.code == 'PEER_UNREACHABLE' and 502
+            or 500
+        return {
+            status = status,
+            headers = { ['content-type'] = 'application/json' },
+            body = json.encode({ error = {
+                code = result.code or 'UNKNOWN',
+                message = result.message,
+                request_id = request_id,
+            } }),
+        }
+    end
     return {
         status = 200,
         headers = { ['content-type'] = 'application/json' },
         body = json.encode({
             ok = true,
-            instance = (rawget(_G, 'box') and box.info and box.info.name) or nil,
-            path = path,
-            file_size = file_size,
-            lines = out,
+            instance = result.instance,
+            path = result.path,
+            file_size = result.file_size,
+            lines = result.lines,
         }),
     }
+end
+
+-- Read a query-string parameter regardless of which http rock
+-- API the request exposes. Tarantool's bundled http rock provides
+-- `req:query_param(name)`; older / lower-level setups give a
+-- string (`req.query`) or rarely a pre-parsed table. Logs page
+-- used to read `req.query` as a table and silently got nil
+-- everywhere → search / tail / level filters were ignored.
+local function get_param(req, name)
+    if type(req.query_param) == 'function' then
+        local ok, v = pcall(req.query_param, req, name)
+        if ok and v ~= nil then return v end
+    end
+    if type(req.query) == 'string' then
+        -- Anchor with `?` or `&` so name 'tail' doesn't match
+        -- inside 'detail=…'. URL-decode the match before returning
+        -- so spaces / non-ASCII in `search` survive transport.
+        local pat = '[?&]' .. name .. '=([^&]*)'
+        local m = ('?' .. req.query):match(pat)
+        if m == nil then return nil end
+        local ok_uri, uri = pcall(require, 'uri')
+        if ok_uri and uri.unescape then
+            local ok_dec, dec = pcall(uri.unescape, m)
+            if ok_dec then return dec end
+        end
+        return m
+    end
+    if type(req.query) == 'table' then return req.query[name] end
+    return nil
+end
+
+-- Handler: GET /api/logs?tail=200&level=W&search=foo&instance=tt-2
+function M.handler_tail(req)
+    local request_id = req.request_id or 'req:logs'
+    local q = {
+        tail     = get_param(req, 'tail'),
+        level    = get_param(req, 'level'),
+        search   = get_param(req, 'search'),
+        instance = get_param(req, 'instance'),
+    }
+    local target = q.instance
+    local self_alias = (rawget(_G, 'box') and box.info and box.info.name) or nil
+
+    local result
+    if type(target) == 'string' and target ~= '' and target ~= self_alias then
+        result = tail_remote(target, q)
+    else
+        result = M.tail(q)
+    end
+
+    if result.ok then
+        logger.info('logs.tail', {
+            path = result.path,
+            returned = #(result.lines or {}),
+            instance = result.instance,
+            level = q.level, search = q.search,
+            request_id = request_id,
+        })
+    end
+    return reply(result, request_id)
 end
 
 return M

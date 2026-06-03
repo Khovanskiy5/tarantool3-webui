@@ -87,6 +87,21 @@ function M.install()
         return sq.remote_entry(op, payload, ctx)
     end)
 
+    -- Log tail forwarder. The /api/logs handler on instance A
+    -- proxies through this shim when the operator asks for instance
+    -- B's log via `?instance=B` — keeps a single HTTP entry point
+    -- and reuses the peer pool's connections instead of opening a
+    -- fresh one per request. The receiver runs `api.logs.tail`
+    -- locally and returns the plain result table.
+    rawset(_G, 'webui_logs_tail_remote', function(query)
+        local ok_mod, logs_api = pcall(require, 'webui.api.logs')
+        if not ok_mod then
+            return { ok = false, code = 'INTERNAL',
+                     message = 'api.logs module unavailable' }
+        end
+        return logs_api.tail(query)
+    end)
+
     -- Expose the dead-letter truncate over net.box. clearDeadLetter
     -- from the SPA lands on a random instance through round-robin;
     -- the leader is the only one that can actually truncate the
