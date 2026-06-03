@@ -531,6 +531,96 @@ function M.query_space_stats(root, args)
     }
 end
 
+-- ── index utility actions (DE-1.5) ────────────────────────────────
+--
+-- Single read-only resolver that dispatches over the 6 read-only
+-- methods exposed by `space_object.index[name]`. The SPA opens a
+-- per-index menu that calls this one resolver — six round-trips
+-- per index would be too much network chatter for what amounts to
+-- "show me a number".
+
+local INDEX_ACTIONS = {
+    min = true, max = true, random = true,
+    count = true, stat = true, bsize = true,
+}
+
+local COUNT_ITERATORS = {
+    EQ = true, GT = true, GE = true,
+    LT = true, LE = true, REQ = true, ALL = true,
+}
+
+-- Map a Tarantool tuple to a list of GraphQL-Json-safe scalars.
+-- Pulled inline (rather than reused via data_mutations.common) so
+-- the read-only resolver does not depend on the mutation module.
+local function tuple_fields(tuple)
+    if tuple == nil then return nil end
+    local out = {}
+    for i = 1, #tuple do out[i] = de_types.encode_field(tuple[i]) end
+    return out
+end
+
+function M.query_index_action(root, args)
+    require_role(root, 'indexAction')
+    if type(args.space) ~= 'string' or args.space == '' then
+        error('VALIDATION_ERROR: space is required')
+    end
+    if type(args.index) ~= 'string' or args.index == '' then
+        error('VALIDATION_ERROR: index is required')
+    end
+    local action = tostring(args.action or '')
+    if not INDEX_ACTIONS[action] then
+        error('VALIDATION_ERROR: unsupported action ' .. action)
+    end
+    local s = box.space[args.space]
+    if s == nil then
+        error('NOT_FOUND: space ' .. args.space .. ' does not exist')
+    end
+    local idx = s.index[args.index]
+    if idx == nil then
+        error('NOT_FOUND: index ' .. args.index ..
+            ' does not exist on ' .. args.space)
+    end
+    local key = args.key
+
+    local res = { action = action }
+    if action == 'min' or action == 'max' then
+        local t = idx[action](idx, key)
+        res.tuple = tuple_fields(t)
+    elseif action == 'random' then
+        -- `idx:random(seed)` requires a numeric seed. We mix in
+        -- `clock.realtime()` because Math.random's state is not
+        -- per-request reproducible — the operator clicking
+        -- RANDOM twice in a row should not get the same row.
+        local seed
+        if key ~= nil and type(key[1]) == 'number' then
+            seed = key[1]
+        else
+            local clock = require('clock')
+            seed = math.floor(clock.realtime() * 1e6) % (2 ^ 31)
+        end
+        res.tuple = tuple_fields(idx:random(seed))
+    elseif action == 'count' then
+        local iter = args.iterator
+        if iter ~= nil and not COUNT_ITERATORS[iter] then
+            error('VALIDATION_ERROR: unsupported iterator ' .. tostring(iter))
+        end
+        if iter == nil then
+            iter = key ~= nil and 'EQ' or 'ALL'
+        end
+        res.count = idx:count(key, { iterator = iter })
+    elseif action == 'stat' then
+        res.stat = idx:stat()
+    elseif action == 'bsize' then
+        res.bytes = idx:bsize()
+    end
+    logger.debug('indexAction', {
+        space = args.space, index = args.index,
+        action = action, user = root and root.user,
+        request_id = root and root.request_id,
+    })
+    return res
+end
+
 -- ── sequence info (DE-1.3) ────────────────────────────────────────
 --
 -- Reads `_sequence` for the static metadata and `_sequence_data`

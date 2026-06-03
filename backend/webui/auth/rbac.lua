@@ -170,6 +170,10 @@ M.GRAPHQL_FIELD = {
     sequenceSet           = 'admin',
     sequenceReset         = 'admin',
     sequenceDrop          = 'admin',
+    -- DE-1.5 read-only index utility actions (min/max/random/
+    -- count/stat/bsize). Same `viewer` gate as the other read
+    -- surfaces — operators inspect numbers, they do not write.
+    indexAction           = 'viewer',
     -- Phase 3 Task 3.4 — SQL workbench snippet library.
     saveQuery             = 'operator',
     deleteSavedQuery      = 'operator',

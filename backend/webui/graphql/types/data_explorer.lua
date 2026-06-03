@@ -274,6 +274,55 @@ M.SpaceStats = types.object({
     },
 })
 
+-- ── index utility actions (DE-1.5) ────────────────────────────────
+
+M.IndexActionKind = types.enum({
+    name = 'IndexActionKind',
+    description = 'Read-only index inspection actions: ' ..
+        'MIN/MAX return the boundary tuple, RANDOM hands back ' ..
+        'one tuple via Tarantool\'s seeded RNG, COUNT runs ' ..
+        ':count with an optional key + iterator, STAT mirrors ' ..
+        ':stat(), BSIZE reports the in-memory size of the index.',
+    values = {
+        MIN    = { value = 'min' },
+        MAX    = { value = 'max' },
+        RANDOM = { value = 'random' },
+        COUNT  = { value = 'count' },
+        STAT   = { value = 'stat' },
+        BSIZE  = { value = 'bsize' },
+    },
+})
+
+M.IndexCountIterator = types.enum({
+    name = 'IndexCountIterator',
+    description = 'Iterator hint for the COUNT action. The default ' ..
+        'is EQ when a key is supplied and ALL otherwise.',
+    values = {
+        EQ  = { value = 'EQ' },
+        GT  = { value = 'GT' },
+        GE  = { value = 'GE' },
+        LT  = { value = 'LT' },
+        LE  = { value = 'LE' },
+        REQ = { value = 'REQ' },
+        ALL = { value = 'ALL' },
+    },
+})
+
+M.IndexActionResult = types.object({
+    name = 'IndexActionResult',
+    description = 'Polymorphic result envelope. Exactly one of ' ..
+        '`tuple` / `count` / `bytes` / `stat` is populated for ' ..
+        'each action; the rest stay null so the SPA can branch ' ..
+        'off `action`.',
+    fields = {
+        action = types.string.nonNull,
+        tuple  = types.list(M.Json),
+        count  = types.long,
+        bytes  = types.long,
+        stat   = M.Json,
+    },
+})
+
 -- ── sequences (DE-1.3) ────────────────────────────────────────────
 
 M.SequenceAttachment = types.object({

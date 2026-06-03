@@ -30,6 +30,7 @@ import TupleForm from './TupleForm.vue';
 import SpaceForm from './SpaceForm.vue';
 import SpaceStatsPanel from './SpaceStatsPanel.vue';
 import SequencePanel from './SequencePanel.vue';
+import IndexesPanel from './IndexesPanel.vue';
 
 // ── types mirroring the backend GraphQL schema ─────────────────────
 
@@ -711,6 +712,16 @@ watch(includeSystem, () => {
         v-if="selectedSpace && !selectedSpace.name.startsWith('_') && selectedSpace.sequence"
         :space-name="selectedSpace.name"
         :sequence-name="selectedSpace.sequence"
+      />
+
+      <!-- Indexes: read-only inspection surface for DE-1.5 utility
+           actions (min/max/random/count/stat/bsize). Add/edit/drop
+           land in DE-1.4. Hidden for system spaces — operators do
+           not need to inspect `_space.index[0]` etc. -->
+      <IndexesPanel
+        v-if="selectedSpace && !selectedSpace.name.startsWith('_')"
+        :space-name="selectedSpace.name"
+        :indexes="selectedSpace.indexes ?? []"
       />
 
       <!-- Filter bar — every control rendered at PrimeVue's

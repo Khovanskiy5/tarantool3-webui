@@ -556,6 +556,23 @@ local Query = types.object {
                 'when the sequence is absent.',
             resolve = admin_data_resolver.query_sequence_info,
         },
+        indexAction = {
+            kind = data_explorer_types.IndexActionResult.nonNull,
+            arguments = {
+                space    = types.string.nonNull,
+                index    = types.string.nonNull,
+                action   = data_explorer_types.IndexActionKind.nonNull,
+                key      = types.list(data_explorer_types.Json),
+                iterator = data_explorer_types.IndexCountIterator,
+            },
+            description = 'Read-only utility actions on a single index. ' ..
+                'Dispatches over `idx:min`, `:max`, `:random`, `:count`, ' ..
+                '`:stat`, `:bsize`. `NOT_FOUND` when the space or index ' ..
+                'is absent. `key` is the optional prefix passed straight ' ..
+                'to Tarantool — it accepts a list of Json scalars ' ..
+                'matching the leading parts of the index.',
+            resolve = admin_data_resolver.query_index_action,
+        },
         audit = {
             kind = audit_types.AuditPage.nonNull,
             description = 'Paginated audit log filtered by user/action/scope/time. '
