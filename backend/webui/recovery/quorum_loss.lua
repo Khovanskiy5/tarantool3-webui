@@ -20,6 +20,7 @@
 --
 
 local audit    = require('webui.audit.log')
+local assess   = require('webui.recovery.assess')
 local log_util = require('webui.log_util')
 local logger   = log_util.with_tag('recovery.quorum_loss')
 
@@ -27,6 +28,55 @@ local M = {}
 
 local DEFAULT_WINDOW_SEC = 300
 local MAX_WINDOW_SEC     = 3600
+
+-- assess(payload, root) → Assessment (read-only). Lowering synchro_quorum
+-- to 1 is ALWAYS dangerous (the window allows a WAL fork). The
+-- precondition mirrors Patroni's failsafe double-check: every registered
+-- peer must be reachable AND none may claim queue ownership, otherwise
+-- lowering quorum manufactures the split-brain it is meant to escape.
+function M.assess(payload, _root, snap)
+    payload = payload or {}
+    local target = payload.target_alias
+    snap = snap or require('webui.recovery.snapshot').build()
+    local fp = assess.fingerprint(snap, target and { target } or {})
+
+    -- Failsafe peers check: all reachable AND no foreign owner besides the
+    -- target.
+    local all_reachable, foreign_owner = true, nil
+    for _, p in ipairs((snap and snap.peers) or {}) do
+        if not p.reachable then all_reachable = false end
+        if p.queue_owner == true and p.alias ~= target then
+            foreign_owner = p.alias
+        end
+    end
+    local peers_safe = all_reachable and foreign_owner == nil
+
+    local b = assess.new('quorum_loss_escape')
+        .risk(assess.DANGEROUS).data_loss(true)
+        .summary('Lower synchro_quorum to 1 on ' .. tostring(target)
+            .. ' for a bounded window')
+        .with_docs('runbooks/recovery-overview.md')
+        .effect('Sets _session_settings.synchro_quorum = 1 on ' .. tostring(target)
+            .. ', auto-restoring after the window.')
+        .warning('During the quorum=1 window a partition can fork the WAL.')
+        .manual('Prefer restoring the real quorum (bring peers back) over '
+            .. 'lowering it; stay read-only and wait for quorum to re-form.')
+        .precondition(peers_safe,
+            'All peers reachable and none claims queue ownership',
+            (not all_reachable and 'a peer is unreachable')
+                or (foreign_owner and ('peer ' .. foreign_owner .. ' owns the queue'))
+                or nil)
+        .failure_cmd('restore quorum manually',
+            'box.space._session_settings:update(\'synchro_quorum\', '
+                .. '{{\'=\', \'value\', <N>}})')
+        .confirm('QUORUM ' .. tostring(target),
+            'I accept the split-brain risk during the window')
+    for _, pc in ipairs(assess.universal_preconditions()) do
+        b.precondition(pc.ok, pc.label, pc.detail)
+    end
+    logger.debug('quorum_loss.assess', { target = target, peers_safe = peers_safe })
+    return b.build(fp)
+end
 
 local function self_alias()
     if not (rawget(_G, 'box') and box.info) then return nil end

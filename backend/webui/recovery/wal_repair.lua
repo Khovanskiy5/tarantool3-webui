@@ -29,10 +29,65 @@ local fio = require('fio')
 local xlog = require('xlog')
 
 local audit    = require('webui.audit.log')
+local assess   = require('webui.recovery.assess')
 local log_util = require('webui.log_util')
 local logger   = log_util.with_tag('recovery.wal_repair')
 
 local M = {}
+
+-- assess(payload, root) → Assessment (read-only). Quarantining the LAST
+-- xlog (tail corruption) loses only the un-acked tail (caution);
+-- quarantining a file with good xlogs after it truncates the chain
+-- (dangerous). Snapshot / system-space corruption is NOT force-recoverable
+-- and must go through rebootstrap.
+function M.assess(payload, _root)
+    payload = payload or {}
+    local file = payload.file
+    local diag = M.diagnose()
+    local files = diag.files or {}
+    local idx, is_tail = nil, false
+    for i, f in ipairs(files) do
+        if f.path:gsub('^.*/', '') == tostring(file) then idx = i end
+    end
+    if idx ~= nil then is_tail = (idx == #files) end
+    local fp = assess.fingerprint({ peers = {} }, {})
+
+    local b = assess.new('wal_quarantine')
+        .summary('Quarantine corrupt xlog ' .. tostring(file))
+        .with_docs('runbooks/wal-repair.md')
+        .effect('Renames ' .. tostring(file) .. ' to .corrupt so the next '
+            .. 'boot skips it.')
+        .precondition(idx ~= nil, 'File present in the local wal_dir',
+            'diagnose/quarantine see ONLY this instance\'s wal_dir — target '
+                .. 'the corrupt node.')
+        .manual('Make a separate byte copy of the file (and wal_dir) BEFORE '
+            .. 'quarantine — a rename is not a backup.')
+        .manual('Prefer wipe+rejoin from a healthy peer (zero loss) over local '
+            .. 'quarantine when a peer with an equal-or-greater vclock exists.')
+        .manual('After a forced boot: write + box.snapshot(), then turn '
+            .. 'force_recovery back off. Snapshot/system-space corruption is '
+            .. 'NOT force-recoverable — use rebootstrap.')
+        .failure_cmd('inspect the good prefix',
+            'tarantoolctl cat <wal_dir>/' .. tostring(file))
+        .failure_cmd('boot past the bad record', 'force_recovery = true (then '
+            .. 'box.snapshot() and disable it)')
+
+    if is_tail then
+        b.risk(assess.CAUTION)
+            .effect('Tail corruption — only the un-acked tail is lost.')
+    else
+        b.risk(assess.DANGEROUS).data_loss(true)
+            .warning('Mid-chain corruption — the WAL chain after this file '
+                .. 'is truncated; committed data is lost.')
+            .confirm('WAL ' .. tostring(file),
+                'I accept truncating the WAL chain')
+        for _, pc in ipairs(assess.universal_preconditions()) do
+            b.precondition(pc.ok, pc.label, pc.detail)
+        end
+    end
+    logger.debug('wal_repair.assess', { file = file, is_tail = is_tail })
+    return b.build(fp)
+end
 
 local function wal_dir()
     if rawget(_G, 'box') == nil or type(box.cfg) ~= 'table' then

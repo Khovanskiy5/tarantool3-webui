@@ -52,6 +52,12 @@ function M.classify(servers)
             if type(synchro) == 'table' and type(synchro.queue) == 'table' then
                 entry.queue_owner_id = synchro.queue.owner
                 entry.queue_owner = synchro.queue.owner == info.id
+                -- `busy` => a PROMOTE/CONFIRM/ROLLBACK is in flight; the
+                -- assessment layer must not act on it (retry instead).
+                -- `term` is the synchro-queue term (may lag election.term
+                -- between an election round and the next PROMOTE).
+                entry.queue_busy = synchro.queue.busy == true
+                entry.queue_term = synchro.queue.term
             end
             local vclock = info.vclock
             if type(vclock) == 'table' then

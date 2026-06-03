@@ -23,10 +23,39 @@
 
 local yaml = require('yaml')
 
+local assess   = require('webui.recovery.assess')
 local log_util = require('webui.log_util')
 local logger   = log_util.with_tag('recovery.topology')
 
 local M = {}
+
+-- assess(payload, root) → Assessment (read-only). Fixing replication URIs
+-- never touches tuple data, so it is `caution` (a config reload / restart
+-- is the only effect), not `dangerous`.
+function M.assess(payload, _root, snap)
+    payload = payload or {}
+    local fixes = payload.fixes or {}
+    local aliases = {}
+    for alias in pairs(type(fixes) == 'table' and fixes or {}) do
+        aliases[#aliases + 1] = tostring(alias)
+    end
+    table.sort(aliases)
+    snap = snap or require('webui.recovery.snapshot').build()
+    local fp = assess.fingerprint(snap, aliases)
+    local b = assess.new('topology_fix')
+        .risk(assess.CAUTION)
+        .summary('Fix replication URIs for ' .. tostring(#aliases) .. ' instance(s)')
+        .with_docs('runbooks/topology-fix.md')
+        .effect('Rewrites declared URIs in the cluster config via the '
+            .. 'two-phase commit; no tuple data is changed.')
+        .effect('Triggers a config reload / instance restart to take effect.')
+        .precondition(#aliases > 0, 'At least one URI fix supplied')
+    for _, alias in ipairs(aliases) do
+        b.effect(alias .. ' -> ' .. tostring(fixes[alias]))
+    end
+    logger.debug('topology_fix.assess', { count = #aliases })
+    return b.build(fp)
+end
 
 -- Walk `cfg.groups.<g>.replicasets.<rs>.instances.<alias>.iproto
 -- .advertise.peer.uri` for every instance. Returns a flat list

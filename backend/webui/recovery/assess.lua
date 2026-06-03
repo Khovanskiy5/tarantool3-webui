@@ -127,6 +127,51 @@ function M.fingerprint(snapshot, targets)
     return digest.sha256_hex(table.concat(parts, '|'))
 end
 
+-- Index the snapshot's peer array by alias and find the queue owner.
+-- Returns { peers, by_alias, owner } where `owner` is the owning peer
+-- entry or nil.
+function M.index_peers(snapshot)
+    local peers = (type(snapshot) == 'table' and snapshot.peers) or {}
+    local by_alias, owner = {}, nil
+    for _, p in ipairs(peers) do
+        if type(p) == 'table' and p.alias ~= nil then
+            by_alias[p.alias] = p
+            if p.queue_owner == true then owner = p end
+        end
+    end
+    return { peers = peers, by_alias = by_alias, owner = owner }
+end
+
+-- Is a PROMOTE/CONFIRM/ROLLBACK in flight on any reachable peer? Acting
+-- while the synchro queue is busy races the in-flight system request, so
+-- the assessment marks a precondition for it.
+function M.any_queue_busy(snapshot)
+    for _, p in ipairs((type(snapshot) == 'table' and snapshot.peers) or {}) do
+        if type(p) == 'table' and p.queue_busy == true then return true end
+    end
+    return false
+end
+
+-- The three universal preconditions every DANGEROUS data-plane action
+-- must satisfy (invariant 11). These are declarative requirements; the
+-- enforcement gate (Task RC-2) recomputes the live `ok` for the pause
+-- check and the action records pre-state on apply. Returned as plain
+-- precondition tables ready to splice into an assessment.
+function M.universal_preconditions()
+    return {
+        { ok = false, label = 'Failover paused',
+          detail = 'Pause the failover agent (pauseFailover) so automation '
+              .. 'cannot re-promote or fight the manual action; this also '
+              .. 'suspends the watchdog and DCS-loss self-demote.' },
+        { ok = false, label = 'Snapshot / backup taken before any wipe',
+          detail = 'box.snapshot() (and a byte copy of the WAL files for '
+              .. 'wal repair) before any data-erasing step.' },
+        { ok = true,  label = 'Pre-state recorded',
+          detail = 'vclock / term / box.info.synchro of the targets are '
+              .. 'written to the audit log on apply.' },
+    }
+end
+
 -- ── Assessment builder ───────────────────────────────────────────────
 --
 -- Closure-based builder (no metatables). Every mutator returns the

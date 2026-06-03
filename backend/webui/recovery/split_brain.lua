@@ -21,10 +21,69 @@
 --
 
 local audit = require('webui.audit.log')
+local assess = require('webui.recovery.assess')
 local log_util = require('webui.log_util')
 local logger   = log_util.with_tag('recovery.split_brain')
 
 local M = {}
+
+-- assess(payload, root) → Assessment (read-only). `manual` only writes an
+-- audit row (safe); `rebootstrap_losing` wipes the losers and
+-- `force_promote_winner` rolls back the winner's unconfirmed transactions
+-- — both dangerous.
+function M.assess(payload, _root, snap)
+    payload = payload or {}
+    local action = payload.action
+    local winner = payload.winner_alias
+    local losers = payload.losing_aliases or {}
+    local targets = {}
+    if winner then targets[#targets + 1] = winner end
+    for _, l in ipairs(type(losers) == 'table' and losers or {}) do
+        targets[#targets + 1] = l
+    end
+    snap = snap or require('webui.recovery.snapshot').build()
+    local fp = assess.fingerprint(snap, targets)
+    local b = assess.new('split_brain_resolve')
+        .with_docs('runbooks/split-brain-recovery.md')
+
+    if action == 'manual' then
+        b.risk(assess.SAFE)
+            .summary('Record that the operator resolves the split-brain manually')
+            .effect('Writes an audit row only; no cluster state is changed.')
+    elseif action == 'rebootstrap_losing' then
+        b.risk(assess.DANGEROUS).data_loss(true)
+            .summary('Rebootstrap losing peers from winner ' .. tostring(winner))
+            .effect('Wipes WAL/snap on the losing peers; they re-join the winner.')
+            .warning('Diverged commits on the losing peers are discarded.')
+            .manual('Dump the diverged rows on each losing peer BEFORE wiping.')
+            .failure_cmd('inspect divergence',
+                'box.info.replication on each loser')
+            .confirm('SPLIT BRAIN ' .. tostring(winner),
+                'I accept discarding the losing peers\' diverged data')
+        for _, pc in ipairs(assess.universal_preconditions()) do
+            b.precondition(pc.ok, pc.label, pc.detail)
+        end
+    elseif action == 'force_promote_winner' then
+        b.risk(assess.DANGEROUS).data_loss(true)
+            .summary('Force-promote winner ' .. tostring(winner))
+            .effect('Flips synchro_quorum to 1 and promotes ' .. tostring(winner) .. '.')
+            .warning('Unconfirmed transactions on ' .. tostring(winner)
+                .. ' are rolled back.')
+            .manual('Dump box.info.synchro.queue on ' .. tostring(winner)
+                .. ' before promoting.')
+            .confirm('SPLIT BRAIN ' .. tostring(winner),
+                'I accept rolling back unconfirmed transactions')
+        for _, pc in ipairs(assess.universal_preconditions()) do
+            b.precondition(pc.ok, pc.label, pc.detail)
+        end
+    else
+        b.risk(assess.DANGEROUS)
+            .summary('Unsupported split-brain action ' .. tostring(action))
+            .warning('Unknown action.')
+    end
+    logger.debug('split_brain.assess', { action = action, winner = winner })
+    return b.build(fp)
+end
 
 local function find_rpc_module()
     local ok, rpc = pcall(require, 'webui.cluster.rpc')

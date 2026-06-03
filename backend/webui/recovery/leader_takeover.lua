@@ -16,10 +16,91 @@
 --
 
 local audit    = require('webui.audit.log')
+local assess   = require('webui.recovery.assess')
 local log_util = require('webui.log_util')
 local logger   = log_util.with_tag('recovery.takeover')
 
 local M = {}
+
+-- assess(payload, root) → Assessment (read-only). Classifies a leader
+-- takeover by vclock dominance: promoting a candidate that already
+-- applied everything the queue owner confirmed loses nothing (safe);
+-- promoting a laggard rolls back the owner's un-replicated tail
+-- (dangerous). With NO queue owner the candidate must dominate every
+-- reachable peer instead.
+function M.assess(payload, _root, snap)
+    payload = payload or {}
+    local target = payload.target_alias
+    snap = snap or require('webui.recovery.snapshot').build()
+    local idx = assess.index_peers(snap)
+    local cand = target and idx.by_alias[target] or nil
+    local fp = assess.fingerprint(snap, target and { target } or {})
+
+    local b = assess.new('leader_takeover')
+        .with_docs('runbooks/leader-takeover.md')
+        .effect('Calls box.ctl.promote() on ' .. tostring(target)
+            .. ' (bumps the synchro term and claims the queue).')
+        .effect('promote waits for quorum/catch-up and FAILS on timeout — '
+            .. 'a failed promote means leadership was NOT transferred.')
+        .precondition(not assess.any_queue_busy(snap),
+            'Synchro queue not busy',
+            'A PROMOTE/CONFIRM/ROLLBACK in flight (queue.busy) means retry '
+                .. 'instead of acting.')
+
+    if type(target) ~= 'string' or target == '' then
+        return b.summary('target_alias is required').risk(assess.DANGEROUS)
+            .warning('No target selected.').build(fp)
+    end
+
+    local owner = idx.owner
+    local dangerous, laggard
+    if owner ~= nil then
+        b.summary('Take over leadership from current queue owner '
+            .. tostring(owner.alias) .. ' onto ' .. tostring(target))
+        b.precondition(true, 'Compared against queue owner ' .. tostring(owner.alias))
+        dangerous = not (cand and assess.dominates(cand.vclock, owner.vclock))
+        if dangerous then laggard = owner.alias end
+    else
+        -- No owner: the candidate must dominate every reachable peer.
+        b.summary('Nominate ' .. tostring(target)
+            .. ' as queue owner (no owner currently)')
+        dangerous = (cand == nil)
+        for _, p in ipairs(idx.peers) do
+            if p.reachable and p.alias ~= target
+                and not assess.dominates(cand and cand.vclock, p.vclock) then
+                dangerous, laggard = true, p.alias
+                break
+            end
+        end
+        b.precondition(not dangerous,
+            'Candidate dominates all reachable peers',
+            laggard and ('peer ' .. laggard .. ' is more advanced') or nil)
+    end
+
+    if dangerous then
+        b.risk(assess.DANGEROUS).data_loss(true)
+            .warning('Candidate ' .. tostring(target) .. ' does not dominate '
+                .. tostring(laggard) .. ' — its un-replicated tail is lost.')
+            .manual('Prefer a graceful switchover: drive ' .. tostring(laggard)
+                .. ' to read-only, let ' .. tostring(target)
+                .. ' catch up to its LSN, then promote (no loss).')
+            .manual('Or read box.info.synchro.queue on ' .. tostring(laggard)
+                .. ' and replay it before promoting.')
+            .failure_cmd('check promotion state',
+                'box.info.election; box.info.synchro')
+            .confirm('TAKEOVER ' .. tostring(target),
+                'I accept losing the un-replicated tail of ' .. tostring(laggard))
+        for _, pc in ipairs(assess.universal_preconditions()) do
+            b.precondition(pc.ok, pc.label, pc.detail)
+        end
+    else
+        b.risk(assess.CAUTION)
+            .effect('Candidate dominates the confirmed state — no committed '
+                .. 'data is lost.')
+    end
+    logger.debug('leader_takeover.assess', { target = target, danger = dangerous })
+    return b.build(fp)
+end
 
 local function self_alias()
     if not (rawget(_G, 'box') and box.info) then return nil end

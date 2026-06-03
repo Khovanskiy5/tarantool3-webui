@@ -23,6 +23,7 @@
 --
 
 local audit    = require('webui.audit.log')
+local assess   = require('webui.recovery.assess')
 local log_util = require('webui.log_util')
 local logger   = log_util.with_tag('recovery.orphan')
 
@@ -61,6 +62,58 @@ local function fanout(expr, alias)
         return false, tostring(r.value.err)
     end
     return true, 'dispatched on ' .. alias
+end
+
+-- assess(payload, root) → Assessment (read-only). force_reconnect never
+-- loses commits (safe) but cannot heal a diverged orphan; rebootstrap
+-- wipes the node (dangerous); solo_promote forks a partitioned node
+-- (dangerous).
+function M.assess(payload, _root, snap)
+    payload = payload or {}
+    local action = payload.action or 'force_reconnect'
+    local target = payload.target_alias
+    snap = snap or require('webui.recovery.snapshot').build()
+    local fp = assess.fingerprint(snap, target and { target } or {})
+    local b = assess.new('orphan_resolve')
+        .with_docs('runbooks/recovery-overview.md')
+        .summary('Resolve orphan ' .. tostring(target) .. ' via ' .. tostring(action))
+
+    if action == 'force_reconnect' then
+        b.risk(assess.SAFE)
+            .effect('Detaches and re-attaches replication on ' .. tostring(target)
+                .. ' — no committed data is touched.')
+            .precondition(true, 'Reconnect does not erase data')
+            .effect('Will NOT heal a diverged orphan; if it fails, rebootstrap '
+                .. '(dangerous) is required.')
+    elseif action == 'rebootstrap' then
+        b.risk(assess.DANGEROUS).data_loss(true)
+            .effect('Wipes WAL/snap on ' .. tostring(target)
+                .. ' and re-joins it from a healthy peer.')
+            .warning('All local data on ' .. tostring(target) .. ' is erased.')
+            .manual('Dump any local-only spaces on ' .. tostring(target)
+                .. ' before rebootstrap; keep instance_uuid stable.')
+            .failure_cmd('inspect replication',
+                'box.info.replication; box.info.status')
+            .confirm('ORPHAN ' .. tostring(target),
+                'I accept wiping ' .. tostring(target))
+        for _, pc in ipairs(assess.universal_preconditions()) do
+            b.precondition(pc.ok, pc.label, pc.detail)
+        end
+    elseif action == 'solo_promote' then
+        b.risk(assess.DANGEROUS).data_loss(true)
+            .effect('Promotes the isolated orphan to writable.')
+            .warning('A partitioned writable node diverges from the cluster.')
+            .manual('Confirm the orphan is truly isolated; dump its data first.')
+            .confirm('ORPHAN ' .. tostring(target),
+                'I accept divergence risk')
+        for _, pc in ipairs(assess.universal_preconditions()) do
+            b.precondition(pc.ok, pc.label, pc.detail)
+        end
+    else
+        b.risk(assess.DANGEROUS).warning('Unsupported action ' .. tostring(action))
+    end
+    logger.debug('orphan.assess', { target = target, action = action })
+    return b.build(fp)
 end
 
 -- resolve(payload, root) → { ok, action, results }
