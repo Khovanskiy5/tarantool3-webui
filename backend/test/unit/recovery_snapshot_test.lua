@@ -138,3 +138,49 @@ g.test_split_brain_groups_groups_by_divergent_from = function()
     t.assert_equals(groups[1].divergent_from, 'wins-uuid')
     t.assert_equals(groups[1].members, { 'tt-1', 'tt-2' })
 end
+
+local json = require('json')
+
+g.test_recommend_action_orphan_force_reconnect = function()
+    local classified = {
+        ['tt-2'] = { alias = 'tt-2', role = 'orphan', reachable = true,
+            vclock = { [1] = 5 } },
+    }
+    local ra = snap.recommend_action(classified, 'orphan_resolve')
+    t.assert_equals(ra.action, 'orphan_resolve')
+    local p = json.decode(ra.payload)
+    t.assert_equals(p.action, 'force_reconnect')
+    t.assert_equals(p.target_alias, 'tt-2')
+end
+
+g.test_recommend_action_takeover_dominating_candidate = function()
+    local classified = {
+        ['tt-2'] = { alias = 'tt-2', role = 'follower', reachable = true,
+            vclock = { [1] = 12 } },
+        ['tt-3'] = { alias = 'tt-3', role = 'follower', reachable = true,
+            vclock = { [1] = 10 } },
+    }
+    local ra = snap.recommend_action(classified, 'leader_takeover')
+    t.assert_equals(ra.action, 'leader_takeover')
+    t.assert_equals(json.decode(ra.payload).target_alias, 'tt-2')
+end
+
+g.test_recommend_action_takeover_no_dominator_is_nil = function()
+    -- Divergence: neither dominates the other.
+    local classified = {
+        ['tt-2'] = { alias = 'tt-2', role = 'follower', reachable = true,
+            vclock = { [1] = 12, [2] = 0 } },
+        ['tt-3'] = { alias = 'tt-3', role = 'follower', reachable = true,
+            vclock = { [1] = 10, [2] = 5 } },
+    }
+    t.assert_equals(snap.recommend_action(classified, 'leader_takeover'), nil)
+end
+
+g.test_recommend_action_split_brain_is_nil = function()
+    t.assert_equals(snap.recommend_action({}, 'split_brain_resolve'), nil)
+end
+
+g.test_recommend_action_degraded_and_healthy_are_nil = function()
+    t.assert_equals(snap.recommend_action({}, 'degraded'), nil)
+    t.assert_equals(snap.recommend_action({}, 'no_action_needed'), nil)
+end

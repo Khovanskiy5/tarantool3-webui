@@ -645,6 +645,16 @@ local Query = types.object {
                             members = types.list(types.string.nonNull).nonNull,
                         },
                     })).nonNull,
+                    -- A ready-to-apply SAFE action (orphan force-reconnect /
+                    -- leader takeover on a dominating candidate), or null when
+                    -- there is no safe auto-target. (Task RC-4.)
+                    recommended_action = types.object({
+                        name = 'RecoveryRecommendedAction',
+                        fields = {
+                            action  = types.string.nonNull,
+                            payload = types.string,
+                        },
+                    }),
                 },
             }).nonNull,
             description = 'Disaster-recovery diagnostic snapshot. ' ..

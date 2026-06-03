@@ -16,7 +16,9 @@
 -- handler.
 --
 
-local state = require('webui.cluster.state')
+local json    = require('json')
+local state   = require('webui.cluster.state')
+local fencing = require('webui.failover.fencing')
 
 local M = {}
 
@@ -144,6 +146,53 @@ function M.recommend(classified)
     return 'no_action_needed'
 end
 
+-- Pick a ready-to-apply SAFE action from the classified set, or nil.
+-- Only populated when the recommendation has a safe auto-target:
+--   * orphan_resolve  -> force_reconnect the orphan (safe).
+--   * leader_takeover -> a candidate that dominates ALL reachable peers.
+-- split_brain_resolve / degraded / no_action_needed have no safe auto
+-- action (the operator opens the wizard), so this returns nil for them.
+function M.recommend_action(classified, recommendation)
+    classified = classified or {}
+    if recommendation == 'orphan_resolve' then
+        local aliases = {}
+        for alias, e in pairs(classified) do
+            if e.role == 'orphan' then aliases[#aliases + 1] = alias end
+        end
+        table.sort(aliases)
+        if aliases[1] ~= nil then
+            return { action = 'orphan_resolve', payload = json.encode({
+                action = 'force_reconnect', target_alias = aliases[1] }) }
+        end
+        return nil
+    end
+    if recommendation == 'leader_takeover' then
+        local reachable = {}
+        for _, e in pairs(classified) do
+            if e.reachable then reachable[#reachable + 1] = e end
+        end
+        table.sort(reachable, function(a, b)
+            return (a.alias or '') < (b.alias or '')
+        end)
+        for _, cand in ipairs(reachable) do
+            local dominates_all = true
+            for _, other in ipairs(reachable) do
+                if other.alias ~= cand.alias
+                    and not fencing.vclock_dominates(cand.vclock, other.vclock) then
+                    dominates_all = false
+                    break
+                end
+            end
+            if dominates_all then
+                return { action = 'leader_takeover',
+                    payload = json.encode({ target_alias = cand.alias }) }
+            end
+        end
+        return nil
+    end
+    return nil
+end
+
 -- Group split-brain peers by who they diverged from (the peer
 -- whose UUID shows up in the stopped upstream message). The UI
 -- shows one card per group.
@@ -257,12 +306,14 @@ function M.build()
     table.sort(peers_arr, function(a, b)
         return (a.alias or '') < (b.alias or '')
     end)
+    local recommendation = M.recommend(classified)
     return {
         self_alias        = snap.self_alias,
         generation        = snap.generation,
         peers             = peers_arr,
         split_brain_groups = M.split_brain_groups(classified),
-        recommendation    = M.recommend(classified),
+        recommendation    = recommendation,
+        recommended_action = M.recommend_action(classified, recommendation),
     }
 end
 
