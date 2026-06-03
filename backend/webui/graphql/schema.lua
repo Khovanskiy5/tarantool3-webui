@@ -478,6 +478,11 @@ local Query = types.object {
                 limit            = types.int,
                 after            = types.string,
                 allow_full_scan  = types.boolean,
+                -- DE-1.6: opt in to the per-tuple base64 msgpack. Off
+                -- by default so the common browse path skips the
+                -- encode + base64 work; the SPA passes true only when
+                -- the operator wants the raw-msgpack view.
+                with_msgpack     = types.boolean,
             },
             description = 'Paged scan of a space. AND-combined filter; ' ..
                 '`pick_index` chooses the best-covering index; residual ' ..

@@ -86,9 +86,31 @@ A related NULL bug fell out of the same area:
   renames on save. We do not infer an extension because the field
   type carries no MIME hint.
 
+## Tuple msgpack view (DE-1.6)
+
+The tuple edit dialog has a **Show msgpack** toggle that reveals the
+row's raw msgpack representation through the same `BinaryField` in
+read-only mode (Upload hidden; hex / base64 / utf-8 views + Download
+stay). It is the on-disk byte layout, authoritative because the
+backend encodes the actual stored box tuple — not a client-side
+re-encode, which could differ in int width or ext types.
+
+* **Backend.** The `tuples` query takes a `with_msgpack: Boolean`
+  arg (default false). When true, `tuple_to_graphql` adds
+  `msgpack` = base64 of `msgpack.encode(tuple)` to each row. Off by
+  default so the common browse path skips the encode + base64 work;
+  the SPA opts in with `with_msgpack: true` because it wants the
+  feature, paying a few KB per page.
+* **Frontend.** `TupleRow.msgpack` flows into `TupleForm` (edit mode
+  only — create has no stored tuple). The toggle wraps the base64
+  into the envelope and feeds it to a read-only `BinaryField`.
+
+Example: a tuple `{1, "red"}` shows hex `92 01 a3 72 65 64`
+(`92` = 2-element array, `01` = int 1, `a3` = fixstr len 3, then
+`red`). UTF-8 view is disabled because raw msgpack is rarely valid
+UTF-8.
+
 ## Related
 
-* DE-1.6 (Tuple msgpack view) — reuses `BinaryField` in read-only
-  mode to show a tuple's raw msgpack.
 * `data_explorer/types.lua` — `encode_field` / `coerce_field`, the
   envelope producers / consumers.

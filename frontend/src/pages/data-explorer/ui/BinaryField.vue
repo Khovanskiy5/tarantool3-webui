@@ -37,6 +37,11 @@ import {
 const props = defineProps<{
   modelValue: BinaryEnvelope | string | null;
   disabled?: boolean;
+  // Read-only mode (DE-1.6 msgpack view): the base64 / utf-8
+  // textareas become non-editable and the Upload button is hidden.
+  // The view switch + Download stay so the operator can still
+  // inspect the bytes in any representation and export them.
+  readonly?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -201,6 +206,7 @@ function download() {
         @click="download"
       />
       <Button
+        v-if="!readonly"
         icon="pi pi-upload"
         size="small"
         severity="secondary"
@@ -235,6 +241,7 @@ function download() {
       v-else-if="view === 'base64'"
       :model-value="base64"
       :disabled="disabled"
+      :readonly="readonly"
       rows="3"
       autocomplete="off"
       spellcheck="false"
@@ -246,6 +253,7 @@ function download() {
       v-else-if="view === 'utf8' && utf8Valid"
       :model-value="utf8Decoded ?? ''"
       :disabled="disabled"
+      :readonly="readonly"
       rows="3"
       autocomplete="off"
       spellcheck="false"

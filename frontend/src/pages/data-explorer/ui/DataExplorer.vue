@@ -70,6 +70,10 @@ type FieldValue = unknown | { _binary_base64: string };
 interface TupleRow {
   fields: FieldValue[];
   pk_string: string;
+  // DE-1.6: base64 of the row's raw msgpack — present only because
+  // the query opts in with `with_msgpack: true`. Fed read-only into
+  // TupleForm's "Show msgpack" view.
+  msgpack: string | null;
 }
 
 interface TupleConnection {
@@ -135,6 +139,7 @@ const TUPLES_Q = /* GraphQL */ `
     $limit: Int
     $after: String
     $allow_full_scan: Boolean
+    $with_msgpack: Boolean
   ) {
     tuples(
       space: $space
@@ -143,10 +148,12 @@ const TUPLES_Q = /* GraphQL */ `
       limit: $limit
       after: $after
       allow_full_scan: $allow_full_scan
+      with_msgpack: $with_msgpack
     ) {
       items {
         fields
         pk_string
+        msgpack
       }
       next_cursor
       total
@@ -220,6 +227,10 @@ const newFilterValue = ref<string>('');
 const tupleFormOpen = ref(false);
 const tupleFormMode = ref<'create' | 'edit'>('create');
 const tupleFormInitial = ref<FieldValue[] | null>(null);
+// DE-1.6: base64 msgpack of the row being edited, passed to
+// TupleForm for the read-only "Show msgpack" view. Null in create
+// mode (no stored tuple yet).
+const tupleFormMsgpack = ref<string | null>(null);
 
 const spaceFormOpen = ref(false);
 const spaceFormMode = ref<'create' | 'alter'>('create');
@@ -315,6 +326,11 @@ async function loadTuples() {
         limit: pageSize.value,
         after: currentCursor.value,
         allow_full_scan: allowFullScan.value,
+        // DE-1.6: fetch the raw msgpack so the edit dialog can offer
+        // the "Show msgpack" view without a second round-trip. The
+        // per-page base64 overhead is a few KB — negligible for the
+        // admin surface.
+        with_msgpack: true,
       },
       { requestPolicy: 'network-only' },
     )
@@ -401,12 +417,14 @@ function prevPage() {
 function openCreate() {
   tupleFormMode.value = 'create';
   tupleFormInitial.value = null;
+  tupleFormMsgpack.value = null;
   tupleFormOpen.value = true;
 }
 
 function openEdit(row: TupleRow) {
   tupleFormMode.value = 'edit';
   tupleFormInitial.value = row.fields;
+  tupleFormMsgpack.value = row.msgpack;
   tupleFormOpen.value = true;
 }
 
@@ -898,6 +916,7 @@ watch(includeSystem, () => {
         :space="selectedSpace"
         :mode="tupleFormMode"
         :initial-fields="tupleFormInitial"
+        :msgpack="tupleFormMsgpack"
         @saved="onTupleFormSaved"
       />
       <SpaceForm

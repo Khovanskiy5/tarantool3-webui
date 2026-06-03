@@ -21,6 +21,7 @@ import { type BinaryEnvelope } from './binary-helpers';
 import Textarea from 'primevue/textarea';
 import Checkbox from 'primevue/checkbox';
 import Message from 'primevue/message';
+import ToggleSwitch from 'primevue/toggleswitch';
 
 import { getClient } from '@/shared/api/graphql';
 
@@ -46,6 +47,9 @@ interface Props {
   space: SpaceInfo;
   mode: 'create' | 'edit';
   initialFields: unknown[] | null;
+  // DE-1.6: base64 msgpack of the row (edit mode only). When set,
+  // a "Show msgpack" toggle reveals a read-only hex view.
+  msgpack?: string | null;
 }
 
 const props = defineProps<Props>();
@@ -108,6 +112,15 @@ function isBinaryEnvelope(v: unknown): v is BinaryEnvelope {
 const rows = ref<FieldState[]>([]);
 const submitting = ref(false);
 const error = ref<string | null>(null);
+// DE-1.6: "Show msgpack" toggle. Reset on every (re)open so the
+// view does not leak across rows.
+const showMsgpack = ref(false);
+
+// The read-only BinaryField wants the envelope shape; wrap the
+// row's base64 msgpack so the hex/base64 views render it.
+const msgpackEnvelope = computed<BinaryEnvelope>(() => ({
+  _binary_base64: props.msgpack ?? '',
+}));
 
 watch(
   () => [props.visible, props.space.id, props.mode],
@@ -115,6 +128,7 @@ watch(
     if (!props.visible) return;
     rebuildRows();
     error.value = null;
+    showMsgpack.value = false;
   },
   { immediate: true },
 );
@@ -263,6 +277,21 @@ function close() {
       </div>
     </div>
 
+    <!-- DE-1.6: raw msgpack view. Edit mode only (a row must exist
+         and carry its msgpack). Read-only hex/base64/utf-8 dump
+         through the shared BinaryField. -->
+    <div v-if="mode === 'edit' && msgpack" class="dx-tf__msgpack">
+      <label class="dx-tf__msgpack-toggle">
+        <ToggleSwitch v-model="showMsgpack" input-id="tf-show-msgpack" />
+        <span>Show msgpack</span>
+      </label>
+      <BinaryField
+        v-if="showMsgpack"
+        :model-value="msgpackEnvelope"
+        readonly
+      />
+    </div>
+
     <template #footer>
       <Button label="Cancel" severity="secondary" text @click="close" />
       <Button
@@ -281,6 +310,21 @@ function close() {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+.dx-tf__msgpack {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--p-content-border-color, var(--webui-border));
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.dx-tf__msgpack-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  cursor: pointer;
 }
 .dx-tf__row {
   display: grid;

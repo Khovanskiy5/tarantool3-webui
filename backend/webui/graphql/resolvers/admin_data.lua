@@ -13,6 +13,8 @@
 
 local rbac     = require('webui.auth.rbac')
 local log_util = require('webui.log_util')
+local msgpack  = require('msgpack')
+local digest   = require('digest')
 local logger   = log_util.with_tag('data_explorer')
 
 local de_types  = require('webui.data_explorer.types')
@@ -198,7 +200,7 @@ local function mask_sensitive(space_name, fields, format)
     return fields
 end
 
-local function tuple_to_graphql(tuple, pk_parts, space_name, format)
+local function tuple_to_graphql(tuple, pk_parts, space_name, format, with_msgpack)
     local fields = {}
     for i = 1, #tuple do
         -- Substitute the box.NULL sentinel for a stored NULL so the
@@ -216,11 +218,21 @@ local function tuple_to_graphql(tuple, pk_parts, space_name, format)
         local fn = part.fieldno or part.field
         pk[i] = tuple[fn]
     end
-    return {
+    local row = {
         fields    = fields,
         pk_string = de_types.format_pk(pk),
         _pk       = pk,
     }
+    -- DE-1.6: only encode the raw msgpack when the query opted in.
+    -- `tuple` is a box tuple cdata — `:totable()` would lose the
+    -- exact on-the-wire bytes, so we msgpack-encode the tuple
+    -- directly. msgpack.encode accepts a box tuple and emits the
+    -- same bytes Tarantool stores.
+    if with_msgpack then
+        local ok, packed = pcall(msgpack.encode, tuple)
+        if ok then row.msgpack = digest.base64_encode(packed) end
+    end
+    return row
 end
 
 function M.query_tuples(root, args)
@@ -340,7 +352,8 @@ function M.query_tuples(root, args)
         scanned = scanned + 1
         if de_filter.apply_post_filter(tuple, residual, lookup) then
             if #items >= limit then truncated = true; break end
-            local row = tuple_to_graphql(tuple, idx.parts, space_name, format_list)
+            local row = tuple_to_graphql(tuple, idx.parts, space_name,
+                format_list, args.with_msgpack == true)
             last_pk = row._pk
             row._pk = nil
             table.insert(items, row)

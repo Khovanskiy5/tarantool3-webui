@@ -91,6 +91,12 @@ M.Tuple = types.object({
     fields = {
         fields    = types.list(M.Json).nonNull,
         pk_string = types.string.nonNull,
+        -- DE-1.6: base64 of the tuple's raw msgpack representation.
+        -- Optional — only populated when the query asks for it, so
+        -- the common "browse rows" path does not pay the encode +
+        -- base64 cost for every tuple. The SPA shows it through the
+        -- read-only BinaryField hex dump.
+        msgpack   = types.string,
     },
 })
 
