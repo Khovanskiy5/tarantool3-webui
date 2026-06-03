@@ -12,10 +12,11 @@ roles_cfg:
       #   lease_ttl_sec (ttl)        — lifetime of the coordinator/RW lease
       #   keepalive_interval (loop)  — coordinator cycle / lease renew period
       #   probe_timeout_sec (retry)  — per-etcd-request budget
-      # 5 + 2*2 = 9 <= 15, and ttl (15) >= 2*keepalive (10) for a future watchdog.
-      lease_ttl_sec: 15
+      # 5 + 2*3 = 11 <= 20, and ttl (20) >= 2*keepalive (10) to arm the
+      # watchdog. Values are re-validated and auto-corrected at start.
+      lease_ttl_sec: 20
       keepalive_interval: 5
-      probe_timeout_sec: 2
+      probe_timeout_sec: 3
       watcher_poll_interval_sec: 1
       appointment_interval: 1
     # Liveness reporter: each instance publishes a JSON snapshot of

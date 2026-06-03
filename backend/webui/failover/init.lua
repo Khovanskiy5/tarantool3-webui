@@ -20,6 +20,7 @@
 
 local agent   = require('webui.failover.agent')
 local watcher = require('webui.failover.watcher')
+local timings = require('webui.failover.timings')
 
 local log_util = require('webui.log_util')
 local logger   = log_util.with_tag('failover')
@@ -169,13 +170,29 @@ function M.start(opts)
                 { mode = mode, supervised_supported = supported })
         end
     end
+    -- FO-5: validate + auto-correct the lease/keepalive/probe timings
+    -- against the canonical invariants before starting either loop. A
+    -- triple that cannot satisfy keepalive + 2*probe <= lease_ttl even at
+    -- the minimums is a hard stop — starting with degenerate timings is
+    -- worse than not starting at all.
+    local adj, warns, terr = timings.validate_and_adjust(opts)
+    if terr ~= nil then
+        logger.error('failover timing invariant violated; refusing to start',
+            { reason = terr })
+        return false, terr
+    end
+    for _, w in ipairs(warns) do
+        logger.warn('failover timing adjusted', { detail = w })
+    end
+
     local watch_ok, watch_err = watcher.start({
         poll_interval_sec = opts.watcher_poll_interval_sec,
         -- Self-fencing timings (FO-1). renew_deadline is derived inside
-        -- the watcher as lease_ttl_sec - safety_margin.
-        lease_ttl_sec  = opts.lease_ttl_sec,
-        safety_margin  = opts.safety_margin,
-        probe_interval = opts.probe_timeout_sec or opts.probe_interval,
+        -- the watcher as lease_ttl_sec - safety_margin. Corrected values
+        -- (FO-5) are forwarded so the watcher and agent agree.
+        lease_ttl_sec  = adj.ttl,
+        safety_margin  = adj.safety_margin,
+        probe_interval = adj.retry_timeout,
         -- FO-15 dead-man switch; on by default, operators may disable
         -- via roles_cfg.webui.failover.watchdog_enabled: false.
         watchdog_enabled = opts.watchdog_enabled,
@@ -186,8 +203,9 @@ function M.start(opts)
         return false, 'watcher: ' .. tostring(watch_err)
     end
     local agent_ok, agent_err = agent.start({
-        lease_ttl_sec      = opts.lease_ttl_sec,
-        keepalive_interval = opts.keepalive_interval,
+        lease_ttl_sec      = adj.ttl,
+        keepalive_interval = adj.loop_wait,
+        probe_timeout_sec  = adj.retry_timeout,
         election_interval  = opts.election_interval,
         appointment_interval = opts.appointment_interval,
     })
@@ -207,17 +225,30 @@ end
 function M.reconfigure(opts)
     opts = opts or {}
     if opts.agent ~= true then return false end
+    -- FO-5: re-validate on reload too. If the new timings are
+    -- unsatisfiable, keep the running config rather than applying a
+    -- degenerate one (the loops stay on their last valid STATE.config).
+    local adj, warns, terr = timings.validate_and_adjust(opts)
+    if terr ~= nil then
+        logger.error('failover timing invariant violated on reload; '
+            .. 'keeping previous timings', { reason = terr })
+        return false
+    end
+    for _, w in ipairs(warns) do
+        logger.warn('failover timing adjusted (reload)', { detail = w })
+    end
     local a = agent.reconfigure({
-        lease_ttl_sec        = opts.lease_ttl_sec,
-        keepalive_interval   = opts.keepalive_interval,
+        lease_ttl_sec        = adj.ttl,
+        keepalive_interval   = adj.loop_wait,
+        probe_timeout_sec    = adj.retry_timeout,
         election_interval    = opts.election_interval,
         appointment_interval = opts.appointment_interval,
     })
     local w = watcher.reconfigure({
         poll_interval_sec = opts.watcher_poll_interval_sec,
-        lease_ttl_sec     = opts.lease_ttl_sec,
-        safety_margin     = opts.safety_margin,
-        probe_interval    = opts.probe_timeout_sec or opts.probe_interval,
+        lease_ttl_sec     = adj.ttl,
+        safety_margin     = adj.safety_margin,
+        probe_interval    = adj.retry_timeout,
         watchdog_enabled  = opts.watchdog_enabled,
         failsafe_enabled  = opts.failsafe_enabled,
     })

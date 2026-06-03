@@ -47,12 +47,16 @@ local logger      = log_util.with_tag('failover.agent')
 local M = {}
 
 -- Tunable defaults. Operators override via roles_cfg.webui.failover.
+-- FO-5: defaults satisfy the canonical timing invariants on their own
+-- (keepalive + 2*probe = 5 + 6 = 11 <= lease_ttl 20, and 20 >= 2*5).
+-- failover/init.lua re-validates and auto-corrects operator overrides
+-- via failover/timings.lua before these reach build_config.
 M.DEFAULTS = {
-    lease_ttl_sec            = 10,
-    keepalive_interval       = 3,
+    lease_ttl_sec            = 20,
+    keepalive_interval       = 5,
     election_interval        = 5,
     appointment_interval     = 2,
-    probe_timeout_sec        = 1,
+    probe_timeout_sec        = 3,
     -- Operational fencing:
     max_replication_lag_sec  = 5,   -- candidate's lag ceiling
     min_promotion_interval   = 10,  -- no two promotions within N seconds

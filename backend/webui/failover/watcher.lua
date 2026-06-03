@@ -37,10 +37,12 @@ M.DEFAULTS = {
     poll_interval_sec = 1,
     -- Self-fencing (FO-1). renew_deadline = lease_ttl_sec - safety_margin
     -- and MUST be < lease_ttl_sec so a partitioned leader goes RO before
-    -- the coordinator lease can be regranted.
-    lease_ttl_sec  = 15,
+    -- the coordinator lease can be regranted. lease_ttl matches the
+    -- canonical FO-5 default (20) so a watcher started without a
+    -- validated opts table still satisfies the invariants.
+    lease_ttl_sec  = 20,
     safety_margin  = 5,
-    probe_interval = 2,
+    probe_interval = 3,
     -- FO-3: how long the new leader waits to catch up to the previous
     -- leader's vclock before promoting anyway (best-effort).
     waitlsn_timeout = 3,

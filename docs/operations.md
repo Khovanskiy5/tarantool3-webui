@@ -116,12 +116,26 @@ roles_cfg:
     failover:
       agent: true
       # Тайминги по правилу Patroni: keepalive + 2*probe_timeout <= lease_ttl.
-      lease_ttl_sec: 15           # время жизни coordinator/RW-лизы
-      keepalive_interval: 5       # период цикла координатора / продления лизы
-      probe_timeout_sec: 2        # бюджет одного запроса к etcd
+      lease_ttl_sec: 20           # время жизни coordinator/RW-лизы (ttl)
+      keepalive_interval: 5       # период цикла координатора / продления лизы (loop_wait)
+      probe_timeout_sec: 3        # бюджет одного запроса к etcd (retry_timeout)
       appointment_interval: 1
       watcher_poll_interval_sec: 1
 ```
+
+#### Дисциплина таймингов (валидация + авто-коррекция)
+
+Терминология выровнена с Patroni: `lease_ttl_sec` = `ttl`, `keepalive_interval` = `loop_wait`, `probe_timeout_sec` = `retry_timeout`. На старте агента (и на каждом `config:reload`) тайминги проверяются и при необходимости корректируются:
+
+- **Каноничные инварианты:**
+  - `keepalive_interval + 2*probe_timeout_sec ≤ lease_ttl_sec` — лидер получает два полных шанса продлить лизу до её истечения, поэтому короткий блип etcd не вызывает ложный failover;
+  - `lease_ttl_sec ≥ 2*keepalive_interval` — нужно для арминга watchdog'а.
+- **Минимумы (clamp вверх с WARN):** `keepalive_interval ≥ 1`, `probe_timeout_sec ≥ 3`.
+- **Рекомендуемый порог:** `lease_ttl_sec ≥ 20`. Меньше — WARN (без отказа): для быстрого LAN-кластера математика ещё сходится, но под нагрузкой ложные перевыборы вероятнее.
+- **Авто-коррекция (порядок Patroni):** при нарушении неравенства сперва ужимается `keepalive_interval`, затем `probe_timeout_sec` — до минимумов. Если даже на минимумах не помещается в `lease_ttl_sec` (слишком маленький ttl) — агент **отказывается стартовать** с понятной ошибкой; на `reload` сохраняется прежний валидный конфиг.
+- `renew_deadline = lease_ttl_sec − safety_margin` (по умолчанию `safety_margin: 5`) — на нём срабатывает self-fencing (FO-1), раньше истечения лизы.
+
+Все коррекции пишутся в лог как `failover timing adjusted` (WARN). Указывать значения, удовлетворяющие инвариантам сразу, — предпочтительно: меньше неожиданностей в проде.
 
 И в `replication`:
 
