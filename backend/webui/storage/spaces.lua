@@ -42,6 +42,7 @@ local M = {}
 M.NAMES = {
     META                = '_webui_meta',
     SESSIONS            = '_webui_sessions',
+    SESSIONS_LOCAL      = '_webui_sessions_local',
     AUDIT               = '_webui_audit',
     WEBHOOK_QUEUE       = '_webui_webhook_queue',
     WEBHOOK_DEAD_LETTER = '_webui_webhook_dead_letter',
@@ -91,7 +92,12 @@ M.NAMES = {
 --       be reproduced by the verifier. This step recomputes
 --       every row's prev_hash / current_hash from scratch in
 --       id-order using the new canonical form.
-M.CURRENT_SCHEMA_VERSION = 9
+--  10 — `_webui_sessions_local` (is_local, async) — a fallback session
+--       store that is writable even under read_only. Lets an operator
+--       log in to drive recovery when there is no durable+confirmable
+--       leader (all peers RO, or sync-quorum lost). HAProxy cookie
+--       stickiness keeps the degraded session pinned to its instance.
+M.CURRENT_SCHEMA_VERSION = 10
 
 local SCHEMA_VERSION_KEY = 'schema_version'
 
@@ -166,6 +172,42 @@ local function ensure_sessions()
     -- Secondary by expires_at lets the sweeper fiber drop expired
     -- rows in O(expired) without scanning the whole space.
     box.space[M.NAMES.SESSIONS]:create_index('by_expires_at', {
+        parts          = { 'expires_at' },
+        unique         = false,
+        if_not_exists  = true,
+    })
+    return true
+end
+
+-- Local fallback session space. `is_local = true` (and NOT sync) so a
+-- session row can be INSERTed even when the instance is read_only — i.e.
+-- when there is no durable+confirmable leader (all peers RO, or the
+-- leader cannot confirm a synchronous write because replication quorum
+-- is lost). This is the chicken-and-egg fix: the operator must be able to
+-- log in to DRIVE recovery on a broken cluster. The DDL replicates (like
+-- _webui_meta) so every instance has the space; the DATA stays local, and
+-- HAProxy's `webui_session` cookie stickiness keeps the operator pinned to
+-- the instance that issued the degraded session.
+local function ensure_sessions_local()
+    if box.space[M.NAMES.SESSIONS_LOCAL] ~= nil then return false end
+    box.schema.space.create(M.NAMES.SESSIONS_LOCAL, {
+        if_not_exists = true,
+        is_local      = true,
+        format = {
+            { name = 'id',          type = 'string' },
+            { name = 'user',        type = 'string' },
+            { name = 'created_at',  type = 'unsigned' },
+            { name = 'expires_at',  type = 'unsigned' },
+            { name = 'csrf',        type = 'string' },
+            { name = 'ip',          type = 'string',  is_nullable = true },
+            { name = 'user_agent',  type = 'string',  is_nullable = true },
+        },
+    })
+    box.space[M.NAMES.SESSIONS_LOCAL]:create_index('primary', {
+        parts          = { 'id' },
+        if_not_exists  = true,
+    })
+    box.space[M.NAMES.SESSIONS_LOCAL]:create_index('by_expires_at', {
         parts          = { 'expires_at' },
         unique         = false,
         if_not_exists  = true,
@@ -440,6 +482,7 @@ end
 local function bootstrap_as_leader()
     local created_meta     = ensure_meta()
     local created_sessions = ensure_sessions()
+    ensure_sessions_local()
     local created_audit    = ensure_audit()
     local created_webhook_queue       = ensure_webhook_queue()
     local created_webhook_dead_letter = ensure_webhook_dead_letter()
@@ -562,6 +605,7 @@ end
 
 function M.meta()         return box.space[M.NAMES.META]         end
 function M.sessions()     return box.space[M.NAMES.SESSIONS]     end
+function M.sessions_local() return box.space[M.NAMES.SESSIONS_LOCAL] end
 function M.audit()        return box.space[M.NAMES.AUDIT]        end
 function M.prepared()     return box.space[M.NAMES.PREPARED]     end
 function M.webhook_queue()       return box.space[M.NAMES.WEBHOOK_QUEUE]       end

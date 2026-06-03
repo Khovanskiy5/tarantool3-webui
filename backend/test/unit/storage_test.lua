@@ -24,6 +24,9 @@ local g = t.group('storage')
 g.test_space_names = function()
     t.assert_equals(storage.NAMES.META, '_webui_meta')
     t.assert_equals(storage.NAMES.SESSIONS, '_webui_sessions')
+    -- Local fallback session store (writable under read_only) — the
+    -- chicken-and-egg fix that lets an operator log in on a broken cluster.
+    t.assert_equals(storage.NAMES.SESSIONS_LOCAL, '_webui_sessions_local')
     t.assert_equals(storage.NAMES.AUDIT, '_webui_audit')
 end
 

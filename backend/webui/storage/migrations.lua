@@ -329,6 +329,31 @@ M.migrations = {
             string.format('migration 9: hash chain re-backfilled for %d audit row(s)',
                 count))
     end,
+    [10] = function(box)
+        -- Local fallback session store, writable even under read_only so
+        -- an operator can log in to drive recovery on a broken cluster.
+        -- is_local DDL replicates (like _webui_meta) so every instance
+        -- gets the space; the data stays per-instance.
+        if box.space._webui_sessions_local ~= nil then return end
+        box.schema.space.create('_webui_sessions_local', {
+            if_not_exists = true,
+            is_local      = true,
+            format = {
+                { name = 'id',          type = 'string' },
+                { name = 'user',        type = 'string' },
+                { name = 'created_at',  type = 'unsigned' },
+                { name = 'expires_at',  type = 'unsigned' },
+                { name = 'csrf',        type = 'string' },
+                { name = 'ip',          type = 'string',  is_nullable = true },
+                { name = 'user_agent',  type = 'string',  is_nullable = true },
+            },
+        })
+        box.space._webui_sessions_local:create_index('primary',
+            { parts = { 'id' }, if_not_exists = true })
+        box.space._webui_sessions_local:create_index('by_expires_at',
+            { parts = { 'expires_at' }, unique = false, if_not_exists = true })
+        require('log').info('migration 10: created _webui_sessions_local')
+    end,
 }
 
 -- ─────────────────────────────────────────────────────────────────────

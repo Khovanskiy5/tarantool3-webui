@@ -53,11 +53,45 @@ function M.create(opts)
     return tuple
 end
 
+-- Insert a session into the LOCAL fallback space. Writable even under
+-- read_only (the space is `is_local`), so login succeeds on a broken
+-- cluster with no durable+confirmable leader. Same tuple shape as the
+-- durable store; `get`/`delete`/sweep look in both. (Recovery
+-- chicken-and-egg fix.)
+function M.create_local(opts)
+    checks({
+        id         = 'string',
+        user       = 'string',
+        csrf       = 'string',
+        ttl_sec    = '?number',
+        ip         = '?string',
+        user_agent = '?string',
+    })
+    local space = storage.sessions_local()
+    assert(space ~= nil, 'local session storage is not bootstrapped')
+    local ttl = opts.ttl_sec or M.DEFAULT_TTL_SEC
+    local created = now()
+    local tuple = space:insert({
+        opts.id, opts.user, created, created + ttl,
+        opts.csrf, opts.ip, opts.user_agent,
+    })
+    logger.warn('degraded LOCAL session created (no durable leader)', {
+        id = opts.id, user = opts.user, ttl_sec = ttl,
+    })
+    return tuple
+end
+
 function M.get(id)
     checks('string')
     local space = storage.sessions()
-    if space == nil then return nil end
-    local tuple = space:get({ id })
+    local tuple = space ~= nil and space:get({ id }) or nil
+    if tuple == nil then
+        -- Fall back to the local degraded store (created when the cluster
+        -- had no durable leader). HAProxy stickiness keeps the operator on
+        -- the instance that issued it.
+        local lspace = storage.sessions_local()
+        tuple = lspace ~= nil and lspace:get({ id }) or nil
+    end
     if tuple == nil then return nil end
     if tuple.expires_at <= now() then
         logger.debug('session expired', { id = id })
@@ -68,14 +102,20 @@ end
 
 function M.delete(id)
     checks('string')
+    local deleted = false
     local space = storage.sessions()
-    if space == nil then return false end
-    local tuple = space:delete({ id })
-    if tuple ~= nil then
-        logger.debug('session deleted', { id = id })
-        return true
+    if space ~= nil then
+        local ok, tuple = pcall(function() return space:delete({ id }) end)
+        if ok and tuple ~= nil then deleted = true end
     end
-    return false
+    -- Always best-effort delete from the local store too.
+    local lspace = storage.sessions_local()
+    if lspace ~= nil then
+        local ok, tuple = pcall(function() return lspace:delete({ id }) end)
+        if ok and tuple ~= nil then deleted = true end
+    end
+    if deleted then logger.debug('session deleted', { id = id }) end
+    return deleted
 end
 
 -- Generate a fresh opaque session id (256-bit entropy, url-safe).
@@ -140,21 +180,27 @@ end
 -- Sweep expired sessions. Called from a periodic fiber once the
 -- cluster.poller layer is happy with another scheduler hop;
 -- exposed as a function so the caller can drive cadence.
-function M.sweep_expired(now_ts)
-    now_ts = now_ts or now()
-    local space = storage.sessions()
-    if space == nil then return 0 end
+local function sweep_space(space, now_ts)
+    if space == nil or space.index.by_expires_at == nil then return 0 end
     local removed = 0
-    local idx = space.index.by_expires_at
-    if idx == nil then return 0 end
-    for _, tuple in idx:pairs({ now_ts }, { iterator = 'LE' }) do
+    for _, tuple in space.index.by_expires_at:pairs({ now_ts },
+        { iterator = 'LE' }) do
         if tuple.expires_at <= now_ts then
-            space:delete({ tuple.id })
-            removed = removed + 1
+            local ok = pcall(function() space:delete({ tuple.id }) end)
+            if ok then removed = removed + 1 else break end
         else
             break
         end
     end
+    return removed
+end
+
+function M.sweep_expired(now_ts)
+    now_ts = now_ts or now()
+    -- Replicated store sweep runs on the leader; the local store sweep is
+    -- per-instance (its rows never replicate). Both are best-effort.
+    local removed = sweep_space(storage.sessions(), now_ts)
+        + sweep_space(storage.sessions_local(), now_ts)
     if removed > 0 then
         logger.info('session sweep', { removed = removed })
     end

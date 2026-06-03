@@ -186,66 +186,61 @@ function M.handler_login(req)
     -- the row back so the cookie we return is immediately valid
     -- against this instance's own `session.get(...)`.
     local sess_ok, sess_err = pcall(session.create, create_opts)
-    local sess_err_str = tostring(sess_err or '')
-    local is_readonly = (not sess_ok)
-        and (sess_err_str:find('read[- ]only', 1, false)
-            or sess_err_str:find('READONLY', 1, true))
-    if not sess_ok and is_readonly then
-        logger.info('login: local instance is read-only, forwarding to leader',
-            { user = body.user })
-        local ok_state, cluster_state = pcall(require, 'webui.cluster.state')
-        local ok_peers, peers         = pcall(require, 'webui.cluster.peers')
-        local leader_alias
-        if ok_state then leader_alias = cluster_state.find_leader() end
-        if leader_alias == nil or not ok_peers then
-            logger.warn('login forward failed: no leader available')
-            return json_response(503, {
-                error = { code = 'NO_LEADER',
-                    message = 'no cluster leader reachable; retry shortly' },
-            })
+    if not sess_ok then
+        local sess_err_str = tostring(sess_err or '')
+        local is_readonly = sess_err_str:find('read[- ]only', 1, false)
+            or sess_err_str:find('READONLY', 1, true)
+        -- Durable path: a follower's local INSERT raises READONLY, so
+        -- forward to the leader and wait for the row to replicate back.
+        local durable = false
+        if is_readonly then
+            logger.info('login: local instance read-only, forwarding to leader',
+                { user = body.user })
+            local ok_state, cluster_state = pcall(require, 'webui.cluster.state')
+            local ok_peers, peers         = pcall(require, 'webui.cluster.peers')
+            local leader_alias
+            if ok_state then leader_alias = cluster_state.find_leader() end
+            local peer = (leader_alias ~= nil and ok_peers)
+                and peers.get(leader_alias) or nil
+            if peer ~= nil and peer.conn ~= nil then
+                local call_ok, call_res = pcall(function()
+                    return peer.conn:call('webui_session_create_remote',
+                        { create_opts }, { timeout = 3 })
+                end)
+                if call_ok and call_res ~= nil then
+                    if session.wait_for_local(id, 2) ~= nil then
+                        durable = true
+                        logger.info('login forwarded ok',
+                            { user = body.user, leader = leader_alias })
+                    else
+                        logger.warn('login forward ok but replication lag '
+                            .. 'exceeded', { leader = leader_alias })
+                    end
+                else
+                    logger.error('login forward to leader failed',
+                        { leader = leader_alias, err = tostring(call_res) })
+                end
+            else
+                logger.warn('login forward: no reachable leader')
+            end
         end
-        local peer = peers.get(leader_alias)
-        if peer == nil or peer.conn == nil then
-            logger.warn('login forward failed: leader connection unavailable',
-                { leader = leader_alias })
-            return json_response(503, {
-                error = { code = 'NO_LEADER',
-                    message = 'leader connection unavailable; retry shortly' },
-            })
+        -- Last resort: a LOCAL session on THIS instance. The local store is
+        -- writable even under read_only, and HAProxy's webui_session cookie
+        -- stickiness pins the operator here, so the cookie stays valid. This
+        -- is what lets an operator log in to DRIVE recovery when there is no
+        -- durable+confirmable leader (all peers RO, or sync-quorum lost).
+        if not durable then
+            local fb_ok, fb_err = pcall(session.create_local, create_opts)
+            if not fb_ok then
+                logger.error('login: durable + local session both failed', {
+                    err = tostring(fb_err), durable_err = sess_err_str })
+                return json_response(503, {
+                    error = { code = 'UNAVAILABLE',
+                        message = 'session storage unavailable on a '
+                            .. 'degraded cluster' },
+                })
+            end
         end
-        local call_ok, call_res = pcall(function()
-            return peer.conn:call('webui_session_create_remote',
-                { create_opts }, { timeout = 3 })
-        end)
-        if not call_ok or call_res == nil then
-            logger.error('login forward to leader failed', {
-                leader = leader_alias, err = tostring(call_res),
-            })
-            return json_response(503, {
-                error = { code = 'UNAVAILABLE',
-                    message = 'leader rejected session create' },
-            })
-        end
-        -- Wait for the replicated row to be visible locally so the
-        -- cookie we just issued is immediately accepted.
-        local replicated = session.wait_for_local(id, 2)
-        if replicated == nil then
-            logger.warn('login forward ok but replication lag exceeded',
-                { leader = leader_alias })
-            return json_response(503, {
-                error = { code = 'REPLICATION_LAG',
-                    message = 'session not yet replicated; retry shortly' },
-            })
-        end
-        logger.info('login forwarded ok', {
-            user = body.user, leader = leader_alias,
-        })
-    elseif not sess_ok then
-        logger.error('session create failed', { err = sess_err_str })
-        return json_response(503, {
-            error = { code = 'UNAVAILABLE',
-                message = 'session storage unavailable' },
-        })
     end
 
     pcall(audit.record, {
