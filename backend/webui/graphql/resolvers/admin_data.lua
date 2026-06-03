@@ -418,6 +418,105 @@ function M.query_collations(root)
     return { collations = out }
 end
 
+-- ── space stats ────────────────────────────────────────────────────
+--
+-- Tarantool 3.7 exposes per-space numbers (`bsize`, `count`, memtx
+-- tuple memory) and engine-wide context (`box.slab.info()`,
+-- `box.stat.memtx().data`, `box.stat.vinyl()`). DE-1.7's "Stats"
+-- panel reads both — operators inspecting "this space" almost
+-- always want the slab quota gauge in the same view.
+
+-- The `box.slab.info()` payload prints ratios as `"30.08%"`. The
+-- SPA wants floats so it can drive a progress bar without
+-- re-parsing — strip the trailing `%` here.
+local function parse_pct(s)
+    if type(s) ~= 'string' then return 0 end
+    local n = tonumber((s:gsub('%%', '')))
+    return n or 0
+end
+
+local function slab_info_normalized()
+    local raw = box.slab.info()
+    return {
+        quota_size       = raw.quota_size or 0,
+        quota_used       = raw.quota_used or 0,
+        quota_used_ratio = parse_pct(raw.quota_used_ratio),
+        items_size       = raw.items_size or 0,
+        items_used       = raw.items_used or 0,
+        items_used_ratio = parse_pct(raw.items_used_ratio),
+        arena_size       = raw.arena_size or 0,
+        arena_used       = raw.arena_used or 0,
+        arena_used_ratio = parse_pct(raw.arena_used_ratio),
+    }
+end
+
+local function memtx_data_summary()
+    local data = box.stat.memtx() and box.stat.memtx().data or {}
+    return {
+        total      = data.total or 0,
+        garbage    = data.garbage or 0,
+        read_view  = data.read_view or 0,
+    }
+end
+
+local function memtx_tuple_for(s)
+    if s.engine ~= 'memtx' then return nil end
+    local stat = s:stat() or {}
+    local memtx = stat.tuple and stat.tuple.memtx or {}
+    return {
+        data_size      = memtx.data_size or 0,
+        header_size    = memtx.header_size or 0,
+        waste_size     = memtx.waste_size or 0,
+        field_map_size = memtx.field_map_size or 0,
+    }
+end
+
+local function vinyl_engine_summary(s)
+    if s.engine ~= 'vinyl' then return nil end
+    local v = box.stat.vinyl() or {}
+    local mem = v.memory or {}
+    local disk = v.disk or {}
+    return {
+        memory_tuple        = mem.tuple or 0,
+        memory_tuple_cache  = mem.tuple_cache or 0,
+        memory_level0       = mem.level0 or 0,
+        memory_page_index   = mem.page_index or 0,
+        memory_bloom_filter = mem.bloom_filter or 0,
+        disk_data_bytes     = disk.data or 0,
+        disk_data_compacted = disk.data_compacted or 0,
+        disk_index_bytes    = disk.index or 0,
+    }
+end
+
+function M.query_space_stats(root, args)
+    require_role(root, 'spaceStats')
+    if type(args.name) ~= 'string' or args.name == '' then
+        error('VALIDATION_ERROR: name is required')
+    end
+    if rawget(_G, 'box') == nil or box.space == nil then
+        error('UNAVAILABLE: box not initialised')
+    end
+    local s = box.space[args.name]
+    if s == nil then
+        error('NOT_FOUND: space ' .. args.name .. ' does not exist')
+    end
+    logger.debug('spaceStats', {
+        space = args.name, user = root and root.user,
+        request_id = root and root.request_id,
+    })
+    return {
+        name         = s.name,
+        id           = s.id,
+        engine       = s.engine,
+        byte_size    = s:bsize(),
+        row_count    = s:count(),
+        memtx_tuple  = memtx_tuple_for(s),
+        vinyl_engine = vinyl_engine_summary(s),
+        slab         = slab_info_normalized(),
+        memtx_data   = memtx_data_summary(),
+    }
+end
+
 -- ── users ──────────────────────────────────────────────────────────
 
 function M.query_users(root)

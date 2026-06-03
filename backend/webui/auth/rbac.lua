@@ -159,6 +159,8 @@ M.GRAPHQL_FIELD = {
     -- the dedicated mutations gate themselves; this query stays
     -- `viewer` because picking from the list is a read activity.
     collations            = 'viewer',
+    -- DE-1.7 read-only per-space memory / disk metrics.
+    spaceStats            = 'viewer',
     -- Phase 3 Task 3.4 — SQL workbench snippet library.
     saveQuery             = 'operator',
     deleteSavedQuery      = 'operator',

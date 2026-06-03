@@ -28,6 +28,7 @@ import { getClient } from '@/shared/api/graphql';
 import { DestructiveActionDialog } from '@/shared/ui/destructive-action-dialog';
 import TupleForm from './TupleForm.vue';
 import SpaceForm from './SpaceForm.vue';
+import SpaceStatsPanel from './SpaceStatsPanel.vue';
 
 // ── types mirroring the backend GraphQL schema ─────────────────────
 
@@ -682,6 +683,15 @@ watch(includeSystem, () => {
       </header>
 
       <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
+
+      <!-- Stats: collapsed by default so it stays out of the way and
+           the operator pays the GraphQL round-trip only when they
+           expand it. Hidden for system spaces because the slab gauge
+           and engine totals add no value on top of `_space` etc. -->
+      <SpaceStatsPanel
+        v-if="selectedSpace && !selectedSpace.name.startsWith('_')"
+        :space-name="selectedSpace.name"
+      />
 
       <!-- Filter bar — every control rendered at PrimeVue's
            `small` size so the dense toolbar reads as one

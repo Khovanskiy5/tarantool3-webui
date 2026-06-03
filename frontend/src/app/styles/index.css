@@ -227,4 +227,122 @@ a:hover {
   --p-tabs-tabpanel-background: transparent;
   --p-tabs-tabpanel-color: var(--p-text-color);
   --p-tabs-active-bar-background: var(--p-highlight-background);
+
+  /* Panel — toggleable container we use for collapsible regions
+   * (e.g. the Data Explorer "Stats" block). Aura's defaults
+   * paint header + body in light white; without the bridge the
+   * panel breaks the dark surface even when every neighbour
+   * around it is dark. */
+  --p-panel-background: var(--p-content-background);
+  --p-panel-color: var(--p-text-color);
+  --p-panel-border-color: var(--p-content-border-color);
+  --p-panel-header-background: var(--p-content-background);
+  --p-panel-header-color: var(--p-text-color);
+  --p-panel-header-border-color: var(--p-content-border-color);
+  --p-panel-content-background: var(--p-content-background);
+  --p-panel-content-color: var(--p-text-color);
+  --p-panel-footer-background: var(--p-content-background);
+  --p-panel-footer-color: var(--p-text-color);
+
+  /* Card — surface block similar to Panel but without toggling.
+   * Used by recovery / metrics dashboards. */
+  --p-card-background: var(--p-content-background);
+  --p-card-color: var(--p-text-color);
+  --p-card-border-color: var(--p-content-border-color);
+  --p-card-caption-color: var(--p-text-color);
+  --p-card-subtitle-color: var(--p-text-muted-color);
+  --p-card-body-background: var(--p-content-background);
+  --p-card-body-color: var(--p-text-color);
+
+  /* Fieldset — semantic group block. Same surface family as Panel. */
+  --p-fieldset-background: var(--p-content-background);
+  --p-fieldset-color: var(--p-text-color);
+  --p-fieldset-border-color: var(--p-content-border-color);
+  --p-fieldset-legend-background: var(--p-content-background);
+  --p-fieldset-legend-color: var(--p-text-color);
+  --p-fieldset-legend-border-color: var(--p-content-border-color);
+  --p-fieldset-legend-hover-background: var(--p-content-hover-background);
+  --p-fieldset-legend-hover-color: var(--p-text-color);
+
+  /* Accordion — used for collapsible groups in settings dialogs. */
+  --p-accordion-panel-border-color: var(--p-content-border-color);
+  --p-accordion-header-background: var(--p-content-background);
+  --p-accordion-header-color: var(--p-text-color);
+  --p-accordion-header-border-color: var(--p-content-border-color);
+  --p-accordion-header-hover-background: var(--p-content-hover-background);
+  --p-accordion-header-hover-color: var(--p-text-color);
+  --p-accordion-header-active-background: var(--p-content-background);
+  --p-accordion-header-active-color: var(--p-text-color);
+  --p-accordion-header-active-hover-background: var(--p-content-hover-background);
+  --p-accordion-content-background: var(--p-content-background);
+  --p-accordion-content-color: var(--p-text-color);
+  --p-accordion-content-border-color: var(--p-content-border-color);
+
+  /* ProgressBar — slab gauge in Data Explorer Stats. Aura paints
+   * the track white by default; the filled portion already pulls
+   * from the primary palette so we only need the empty track. */
+  --p-progressbar-background: var(--p-content-hover-background);
+  --p-progressbar-border-color: var(--p-content-border-color);
+  --p-progressbar-value-background: var(--p-primary-color);
+
+  /* Toast — global notification surface (errors, info banners). */
+  --p-toast-background: var(--p-content-background);
+  --p-toast-color: var(--p-text-color);
+  --p-toast-border-color: var(--p-content-border-color);
+
+  /* Menu / Menubar / ContextMenu — popup item lists (the cluster
+   * page row actions, /sql snippets, etc.). The overlay surface
+   * must follow content-background or it flashes white on open. */
+  --p-menu-background: var(--p-content-background);
+  --p-menu-color: var(--p-text-color);
+  --p-menu-border-color: var(--p-content-border-color);
+  --p-menu-item-color: var(--p-text-color);
+  --p-menu-item-focus-background: var(--p-content-hover-background);
+  --p-menu-item-focus-color: var(--p-text-color);
+  --p-menu-item-active-background: var(--p-highlight-background);
+  --p-menu-item-active-color: var(--p-highlight-color);
+  --p-menu-overlay-background: var(--p-content-background);
+  --p-menu-overlay-color: var(--p-text-color);
+  --p-menu-overlay-border-color: var(--p-content-border-color);
+
+  --p-menubar-background: var(--p-content-background);
+  --p-menubar-color: var(--p-text-color);
+  --p-menubar-border-color: var(--p-content-border-color);
+  --p-menubar-item-color: var(--p-text-color);
+  --p-menubar-item-focus-background: var(--p-content-hover-background);
+  --p-menubar-item-focus-color: var(--p-text-color);
+
+  --p-contextmenu-background: var(--p-content-background);
+  --p-contextmenu-color: var(--p-text-color);
+  --p-contextmenu-border-color: var(--p-content-border-color);
+
+  /* Tooltip — single-line popup label. Default Aura tooltip uses
+   * white-on-near-black which works on dark too, BUT contextual
+   * tooltips inside dialogs inherit dialog surface and clash. */
+  --p-tooltip-background: var(--p-content-background);
+  --p-tooltip-color: var(--p-text-color);
+  --p-tooltip-border-color: var(--p-content-border-color);
+
+  /* Skeleton — placeholder shimmer used while data loads. */
+  --p-skeleton-background: var(--p-content-hover-background);
+  --p-skeleton-animation-background: rgba(255, 255, 255, 0.06);
+
+  /* Divider — separator line. Aura's default is medium-gray that
+   * is barely visible against the dark surface. */
+  --p-divider-border-color: var(--p-content-border-color);
 }
+
+/*
+ * Project rule for adding NEW UI:
+ *
+ * If a Vue component you add uses a PrimeVue widget whose
+ * `--p-<component>-*` tokens are NOT listed above, the widget
+ * WILL render with Aura's light-mode defaults (white background,
+ * dark gray text) inside the dark Data Explorer / Failover /
+ * Audit pages. The fix is ALWAYS the same: alias the missing
+ * tokens in this file, in the `.webui-dark` block above.
+ *
+ * Scoped local overrides on `.p-<component>` inside a Vue SFC
+ * are a code smell — they fix one usage and leak debt for the
+ * next page that imports the same widget. Prefer this file.
+ */

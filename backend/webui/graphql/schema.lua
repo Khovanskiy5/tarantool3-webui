@@ -537,6 +537,15 @@ local Query = types.object {
                 'a separate `superuser`-gated mutation set.',
             resolve = admin_data_resolver.query_collations,
         },
+        spaceStats = {
+            kind = data_explorer_types.SpaceStats.nonNull,
+            arguments = { name = types.string.nonNull },
+            description = 'Per-space memory / disk metrics plus engine-wide ' ..
+                'context (slab arena summary, memtx data totals, vinyl ' ..
+                'memory + disk summary). Backs the Data Explorer "Stats" ' ..
+                'collapsible panel. `NOT_FOUND` when the space is absent.',
+            resolve = admin_data_resolver.query_space_stats,
+        },
         audit = {
             kind = audit_types.AuditPage.nonNull,
             description = 'Paginated audit log filtered by user/action/scope/time. '

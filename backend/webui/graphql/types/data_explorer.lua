@@ -185,6 +185,85 @@ M.CollationsPayload = types.object({
     },
 })
 
+-- Per-space tuple memory breakdown for memtx spaces (Tarantool
+-- 3.7 emits this as `space:stat().tuple.memtx`). Vinyl spaces
+-- return an empty table so this stays nil. `field_map_size`
+-- captures the in-memory index entry overhead — useful when
+-- evaluating column-heavy formats.
+M.SpaceMemtxTupleStat = types.object({
+    name = 'SpaceMemtxTupleStat',
+    fields = {
+        data_size       = types.long.nonNull,
+        header_size     = types.long.nonNull,
+        waste_size      = types.long.nonNull,
+        field_map_size  = types.long.nonNull,
+    },
+})
+
+-- Engine-wide vinyl summary. Per-space vinyl attribution is not
+-- exposed by Tarantool 3.7 directly — operators inspecting a vinyl
+-- space see the cluster totals here while the per-space `byte_size`
+-- column above still answers "how big is THIS space on disk".
+M.SpaceVinylStat = types.object({
+    name = 'SpaceVinylStat',
+    fields = {
+        memory_tuple        = types.long.nonNull,
+        memory_tuple_cache  = types.long.nonNull,
+        memory_level0       = types.long.nonNull,
+        memory_page_index   = types.long.nonNull,
+        memory_bloom_filter = types.long.nonNull,
+        disk_data_bytes     = types.long.nonNull,
+        disk_data_compacted = types.long.nonNull,
+        disk_index_bytes    = types.long.nonNull,
+    },
+})
+
+-- `box.slab.info()` projection. The raw payload returns ratios as
+-- printable strings (`"30.08%"`) — the resolver parses them into
+-- floats so the SPA can drive a progress bar without re-parsing.
+M.SlabInfo = types.object({
+    name = 'SlabInfo',
+    fields = {
+        quota_size        = types.long.nonNull,
+        quota_used        = types.long.nonNull,
+        quota_used_ratio  = types.float.nonNull,
+        items_size        = types.long.nonNull,
+        items_used        = types.long.nonNull,
+        items_used_ratio  = types.float.nonNull,
+        arena_size        = types.long.nonNull,
+        arena_used        = types.long.nonNull,
+        arena_used_ratio  = types.float.nonNull,
+    },
+})
+
+M.MemtxEngineData = types.object({
+    name = 'MemtxEngineData',
+    fields = {
+        total      = types.long.nonNull,
+        garbage    = types.long.nonNull,
+        read_view  = types.long.nonNull,
+    },
+})
+
+M.SpaceStats = types.object({
+    name = 'SpaceStats',
+    description = 'Per-space memory and disk metrics plus the ' ..
+        'engine-wide context (slab arena summary, memtx data, ' ..
+        'vinyl summary). Used by the Data Explorer "Stats" ' ..
+        'collapsible panel — read-only, viewer-gated.',
+    fields = {
+        name         = types.string.nonNull,
+        id           = types.long.nonNull,
+        engine       = types.string.nonNull,
+        byte_size    = types.long.nonNull,
+        row_count    = types.long.nonNull,
+        memtx_tuple  = M.SpaceMemtxTupleStat,
+        vinyl_engine = M.SpaceVinylStat,
+        slab         = M.SlabInfo.nonNull,
+        memtx_data   = M.MemtxEngineData.nonNull,
+    },
+})
+
 M.TupleMutationResult = types.object({
     name = 'TupleMutationResult',
     fields = {
