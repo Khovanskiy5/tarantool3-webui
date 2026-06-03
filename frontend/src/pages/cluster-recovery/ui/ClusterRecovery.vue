@@ -29,6 +29,9 @@ import InputText from 'primevue/inputtext';
 import InputNumber from 'primevue/inputnumber';
 import Checkbox from 'primevue/checkbox';
 import Fluid from 'primevue/fluid';
+import RecoveryAssessmentPanel, {
+  type Assessment,
+} from './RecoveryAssessmentPanel.vue';
 
 import { getClient } from '@/shared/api/graphql';
 
@@ -51,10 +54,16 @@ interface SplitBrainGroup {
   members: string[];
 }
 
+interface RecommendedAction {
+  action: string;
+  payload: string | null;
+}
+
 interface RecoverySnapshot {
   self_alias: string | null;
   generation: number | null;
   recommendation: string;
+  recommended_action: RecommendedAction | null;
   peers: PeerEntry[];
   split_brain_groups: SplitBrainGroup[];
 }
@@ -72,6 +81,10 @@ const SNAPSHOT_Q = /* GraphQL */ `
       self_alias
       generation
       recommendation
+      recommended_action {
+        action
+        payload
+      }
       peers {
         alias
         uuid
@@ -94,8 +107,22 @@ const SNAPSHOT_Q = /* GraphQL */ `
 `;
 
 const ACTION_M = /* GraphQL */ `
-  mutation DrAction($action: String!, $payload: String) {
-    recoveryAction(action: $action, payload: $payload) {
+  mutation DrAction(
+    $action: String!
+    $payload: String
+    $acknowledge: Boolean
+    $confirmToken: String
+    $fingerprint: String
+    $idempotencyKey: String
+  ) {
+    recoveryAction(
+      action: $action
+      payload: $payload
+      acknowledge: $acknowledge
+      confirmToken: $confirmToken
+      fingerprint: $fingerprint
+      idempotencyKey: $idempotencyKey
+    ) {
       ok
       action
       error
@@ -108,10 +135,144 @@ const ACTION_M = /* GraphQL */ `
   }
 `;
 
+const PREFLIGHT_Q = /* GraphQL */ `
+  query DrPreflight($action: String!, $payload: String) {
+    recoveryPreflight(action: $action, payload: $payload) {
+      action
+      risk
+      dataLoss
+      autoSafe
+      summary
+      effects
+      warnings
+      manualRecovery
+      preconditions {
+        ok
+        label
+        detail
+      }
+      failureCommands {
+        title
+        command
+        note
+      }
+      confirm {
+        required
+        token
+        acknowledge
+      }
+      docs
+      fingerprint
+    }
+  }
+`;
+
 const loading = ref(false);
 const snapshot = ref<RecoverySnapshot | null>(null);
 const error = ref<string | null>(null);
 const lastResult = ref<ActionResult | null>(null);
+
+// ── Assessment-driven apply flow (RC-5) ──────────────────────────────
+// Any action can be run through preflight -> assessment panel -> apply.
+// safe/caution: one Apply. dangerous: acknowledge + typed token. The
+// server re-checks the fingerprint; STALE_FINGERPRINT re-runs preflight.
+const assessOpen = ref(false);
+const assessBusy = ref(false);
+const assessment = ref<Assessment | null>(null);
+const assessAck = ref(false);
+const assessToken = ref('');
+const assessError = ref<string | null>(null);
+let assessAction = '';
+let assessPayload: string | null = null;
+
+function newIdempotencyKey(): string {
+  if (
+    typeof globalThis.crypto !== 'undefined' &&
+    typeof globalThis.crypto.randomUUID === 'function'
+  ) {
+    return globalThis.crypto.randomUUID();
+  }
+  return 'rc-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+}
+
+async function runPreflight(): Promise<boolean> {
+  assessError.value = null;
+  const res = await getClient()
+    .query<{ recoveryPreflight: Assessment }>(
+      PREFLIGHT_Q,
+      { action: assessAction, payload: assessPayload },
+      { requestPolicy: 'network-only' },
+    )
+    .toPromise();
+  if (res.error) {
+    assessError.value = res.error.message;
+    return false;
+  }
+  assessment.value = res.data?.recoveryPreflight ?? null;
+  return assessment.value !== null;
+}
+
+// Open the assessment panel for an (action, payload).
+async function openAssessment(action: string, payload: string | null) {
+  assessAction = action;
+  assessPayload = payload;
+  assessment.value = null;
+  assessAck.value = false;
+  assessToken.value = '';
+  assessError.value = null;
+  assessOpen.value = true;
+  assessBusy.value = true;
+  try {
+    await runPreflight();
+  } finally {
+    assessBusy.value = false;
+  }
+}
+
+// Apply the assessed action, passing the enforcement context. On a stale
+// fingerprint, refresh the preflight and ask the operator to retry.
+async function applyAssessed() {
+  const a = assessment.value;
+  if (!a) return;
+  assessBusy.value = true;
+  assessError.value = null;
+  try {
+    const res = await getClient()
+      .mutation<{ recoveryAction: ActionResult }>(ACTION_M, {
+        action: assessAction,
+        payload: assessPayload,
+        acknowledge: a.confirm.required ? assessAck.value : null,
+        confirmToken: a.confirm.required ? assessToken.value.trim() : null,
+        fingerprint: a.fingerprint,
+        idempotencyKey: newIdempotencyKey(),
+      })
+      .toPromise();
+    if (res.error) {
+      assessError.value = res.error.message;
+      return;
+    }
+    const r = res.data?.recoveryAction ?? null;
+    if (r && !r.ok && (r.error ?? '').startsWith('STALE_FINGERPRINT')) {
+      // Cluster state moved since preflight — re-assess and ask again.
+      assessAck.value = false;
+      assessToken.value = '';
+      await runPreflight();
+      assessError.value = 'Cluster state changed — review the refreshed summary.';
+      return;
+    }
+    lastResult.value = r;
+    assessOpen.value = false;
+    await refresh();
+  } finally {
+    assessBusy.value = false;
+  }
+}
+
+// Apply the snapshot's recommended safe action (one click).
+function applyRecommended() {
+  const ra = snapshot.value?.recommended_action;
+  if (ra) void openAssessment(ra.action, ra.payload);
+}
 
 async function refresh() {
   loading.value = true;
@@ -574,6 +735,24 @@ async function quarantineWal(row: WalRow) {
       outage.
     </Message>
 
+    <!-- One-click apply of the snapshot's recommended SAFE action.
+         Shown only when the backend computed a safe auto-target; goes
+         through preflight + the assessment panel like any action. -->
+    <Message
+      v-if="snapshot && snapshot.recommended_action"
+      severity="info"
+      :closable="false"
+    >
+      A recommended recovery action is available.
+      <Button
+        label="Apply recommended"
+        icon="pi pi-bolt"
+        size="small"
+        class="ml-2"
+        @click="applyRecommended"
+      />
+    </Message>
+
     <!-- Always-on toolbar: every wizard available regardless of
          the snapshot recommendation, so an operator can apply
          them proactively (e.g. fix a typo in cluster.yaml before
@@ -668,6 +847,35 @@ async function quarantineWal(row: WalRow) {
         </li>
       </ul>
     </section>
+
+    <!-- Risk-assessment dialog (preflight -> panel -> apply). -->
+    <Dialog
+      v-model:visible="assessOpen"
+      modal
+      header="Recovery — risk assessment"
+      :style="{ width: '34rem' }"
+    >
+      <Message
+        v-if="assessError"
+        severity="error"
+        :closable="false"
+        class="mb-2"
+      >
+        {{ assessError }}
+      </Message>
+      <div v-if="assessBusy && !assessment" class="webui-recovery__muted">
+        Assessing…
+      </div>
+      <RecoveryAssessmentPanel
+        v-else
+        v-model:acknowledge="assessAck"
+        v-model:token="assessToken"
+        :assessment="assessment"
+        :busy="assessBusy"
+        @apply="applyAssessed"
+        @cancel="assessOpen = false"
+      />
+    </Dialog>
 
     <!-- Split-brain wizard -->
     <Dialog
