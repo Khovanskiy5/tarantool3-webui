@@ -189,6 +189,22 @@ database:
 - **Fallback `off`.** Агент по-прежнему стартует при `replication.failover: off` (legacy). Это запасной путь на случай сборки Tarantool, отвергающей `supervised` на CE; гарантии RO-при-рестарте в нём слабее — критичные спейсы должны быть `is_sync`. В логе при старте: `failover agent running in legacy "off" mode`.
 - **Переключение на встроенный raft.** Один edit: `replication.failover: election` и `roles_cfg.webui.failover.agent: false`. Агент отказывается стартовать при `failover ∈ {election, manual}`, поэтому double-leadership на transition исключён.
 
+## etcd HA — кворум control-plane
+
+etcd хранит cluster-wide config И lease failover-координатора, поэтому это «голосующие» за лидерство: он обязан быть настоящим **нечётным кворумом**, а не одиночным узлом (SPOF).
+
+**Топология (дефолт «3 полных + 3 etcd»):** etcd = **3 узла**. Кластер из 3 терпит падение **одного** члена и продолжает работать; падение **двух** — потеря кворума: коммиты конфига блокируются, новые промоуты failover замораживаются, лидер сам уходит в RO (см. ниже). dev-compose поднимает `etcd`/`etcd-2`/`etcd-3` (`docker/docker-compose.yml`), endpoints всех трёх прописаны в `config.etcd.endpoints` и `roles_cfg.webui.etcd_writer.endpoints` (клиент ходит round-robin с failover на живой узел).
+
+**Anti-affinity / домены отказа.** Не размещать ≥2 из 3 etcd (или ≥2 Tarantool-членов + etcd) на одном хосте/AZ — падение одного домена уронит кворум сразу. Размещать 3 DB + 3 etcd по **разным** доменам отказа. Если DB-хостов всего два — допустим паттерн **2 DB + 1 дешёвый witness-хост только с etcd** (tiebreaker control-plane), но `synchro_quorum=2 из 2` DB не даёт fault-tolerance записи данных — это осознанный компромисс.
+
+**Поведение при потере кворума etcd:**
+- **Коммит конфига блокируется** до записи: `twophase.commit` зовёт `etcd:cluster_health()` и при `has_quorum=false` (достигнут ≥1 член, но большинство вне кворума) отдаёт `ETCD_QUORUM_LOST` — быстрый понятный отказ вместо таймаута, без частичного коммита и без fan-out reload.
+- **Issue `etcd:cluster:cluster:quorum-lost` (critical)** — поднимается issues-сканером, гаснет при восстановлении.
+- **Авто-промоуты замораживаются структурно:** координатор не может продлить lease (это запись) → слагает полномочия; новые appointment'ы не пишутся. Действующий лидер не может подтвердить лидерство через etcd → **self-fencing (FO-1)** уводит его в RO. Кластер держится в согласованном all-RO до восстановления члена etcd — доступность чтения сохраняется, запись приостановлена (CP-выбор без split-brain).
+- **Локальный fallback-конфиг:** каждый коммит зеркалит YAML на диск каждого инстанса (`file_writer`), поэтому при кратко недоступном etcd инстанс поднимается last-known из файла.
+
+**Восстановление:** вернуть кворум (поднять член etcd) → координатор переизбирается, лидер re-promote'ится, issue гаснет автоматически.
+
 ## State reporter — liveness в etcd
 
 Open-source аналог верхнеуровневого блока `stateboard.*` из Tarantool Enterprise. Каждый инстанс с включённым reporter'ом пишет в etcd небольшой JSON со своим живым `box.info`. Запись привязана к etcd lease, поэтому:

@@ -230,6 +230,30 @@ function M.commit(prepared_id, opts)
         delete_prepared(prepared_id)
         return { revision = 0, dry_run = true }
     end
+
+    -- FO-8: refuse to commit when the etcd control-plane has lost
+    -- quorum. A write without quorum cannot durably land — failing fast
+    -- here returns a clear error instead of a confusing timeout, and
+    -- avoids the file-mirror / reload fan-out running against a write
+    -- that never committed. We only block on a DEFINITE loss (we reached
+    -- at least one member and a majority is NOT in quorum); a total
+    -- outage (no member reachable) falls through to the write, whose own
+    -- error path reports the transport failure.
+    if type(opts.etcd.cluster_health) == 'function' then
+        local ok_h, health = pcall(function() return opts.etcd:cluster_health() end)
+        if ok_h and type(health) == 'table'
+            and health.has_quorum == false and health.reachable > 0 then
+            logger.error('commit refused: etcd quorum lost', {
+                total = health.total, in_quorum = health.in_quorum,
+                needed = health.needed, reachable = health.reachable,
+            })
+            return nil, string.format(
+                'ETCD_QUORUM_LOST: %d/%d etcd members in quorum (need %d); '
+                .. 'config commit aborted to avoid a non-durable write',
+                health.in_quorum, health.total, health.needed)
+        end
+    end
+
     local payload = entry.yaml
     local result, err
     if opts.expected_revision then

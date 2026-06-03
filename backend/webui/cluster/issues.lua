@@ -54,6 +54,7 @@ M.CATEGORIES = {
     CONFIG      = 'config',
     SYNCHRO     = 'synchro',
     FAILOVER    = 'failover',
+    ETCD        = 'etcd',
 }
 
 M.SEVERITY = {
@@ -563,6 +564,48 @@ function M.check_failover_transition_rate(_, _, now)
     return out
 end
 
+-- etcd control-plane quorum lost (FO-8). etcd holds the cluster config
+-- and the failover coordinator lease; without a quorum no config commit
+-- can land and no new leader can be appointed (the coordinator cannot
+-- renew its lease, so it steps down and auto-promotions freeze on their
+-- own). Surface it as CRITICAL so operators restore an etcd member fast.
+--
+-- We probe the etcd members directly via the config-store client. Only
+-- alarm on a DEFINITE quorum loss (at least one member reachable AND a
+-- majority NOT in quorum); a total etcd outage (nothing reachable) is a
+-- different signal already covered by the agent's last_error path, so we
+-- do not double-report it here.
+function M.check_etcd_quorum(_, _, now)
+    now = now or fiber.clock()
+    local out = {}
+    local ok_c, client_mod = pcall(require, 'webui.config_store.client')
+    if not ok_c then return out end
+    local ok_cl, client = pcall(client_mod.get_client)
+    if not ok_cl or client == nil
+        or type(client.cluster_health) ~= 'function' then
+        return out
+    end
+    local ok_h, health = pcall(function() return client:cluster_health() end)
+    if not ok_h or type(health) ~= 'table' then return out end
+    if health.has_quorum == false and (health.reachable or 0) > 0 then
+        table.insert(out, make_issue {
+            id = M.make_id('etcd', 'cluster', 'cluster', 'quorum-lost'),
+            category = M.CATEGORIES.ETCD,
+            severity = M.SEVERITY.CRITICAL,
+            scope    = M.SCOPE.CLUSTER,
+            message  = string.format(
+                'etcd control-plane lost quorum: %d/%d members in quorum '
+                .. '(need %d). Config commits are blocked and failover '
+                .. 'auto-promotions are frozen until a member is restored.',
+                tonumber(health.in_quorum) or 0,
+                tonumber(health.total) or 0,
+                tonumber(health.needed) or 0),
+            now = now,
+        })
+    end
+    return out
+end
+
 -- Two writable leaders in one replicaset (FO-10). The decisive signal
 -- is synchro-queue ownership: an instance owns the queue when
 -- synchro.queue.owner == its own id. More than one owner in a
@@ -654,6 +697,7 @@ function M.scan(snapshot, opts)
         M.check_clock, M.check_config,
         M.check_synchro_quorum, M.check_failover_coordinator,
         M.check_failover_suppressed, M.check_failover_transition_rate,
+        M.check_etcd_quorum,
         M.check_two_rw, M.check_alien,
     }) do
         local rule_issues = fn(snapshot, thresholds, now)

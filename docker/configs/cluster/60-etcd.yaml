@@ -6,4 +6,6 @@ config:
   etcd:
     endpoints:
     - http://etcd:2379
+    - http://etcd-2:2379
+    - http://etcd-3:2379
     prefix: /tarantool/webui

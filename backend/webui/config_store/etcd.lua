@@ -356,6 +356,86 @@ function M.proto:lease_revoke(lease_id)
     return true
 end
 
+-- ── Cluster health / quorum (FO-8) ───────────────────────────────────
+
+-- POST to ONE explicit endpoint (bypasses the round-robin in `post`) so
+-- we can probe each etcd member individually.
+local function post_to(state, endpoint, path, body, timeout)
+    local url = endpoint .. path
+    local hdr = { ['content-type'] = 'application/json' }
+    if state.token then hdr['Authorization'] = state.token end
+    -- json.encode({}) yields "[]" (empty Lua table → array), which the
+    -- grpc-gateway rejects with 400. An empty request body must be the
+    -- JSON object "{}".
+    local payload
+    if body == nil or next(body) == nil then
+        payload = '{}'
+    else
+        payload = json.encode(body)
+    end
+    local ok, response = pcall(state.client.post, state.client, url, payload,
+        { headers = hdr, timeout = timeout or state.timeout })
+    if not ok then return nil, tostring(response) end
+    if response.status ~= 200 then
+        return nil, 'status ' .. tostring(response.status)
+    end
+    if response.body and #response.body > 0 then
+        local ok_dec, decoded = pcall(json.decode, response.body)
+        if ok_dec then return decoded end
+    end
+    return {}
+end
+
+-- Pure: decide quorum from per-endpoint probe results. Each item is
+-- `{ reachable = bool, leader = <raft leader id string|nil> }`. A member
+-- counts toward quorum when it is reachable AND reports a non-zero raft
+-- leader (etcd returns leader "0" when a member has lost quorum).
+-- Quorum exists when that count is a strict majority of configured
+-- members — N/2 + 1.
+function M._quorum_from_statuses(statuses)
+    local total = #statuses
+    local reachable, in_quorum = 0, 0
+    for _, s in ipairs(statuses) do
+        if s.reachable then
+            reachable = reachable + 1
+            local ldr = s.leader
+            if ldr ~= nil and tostring(ldr) ~= '0' then
+                in_quorum = in_quorum + 1
+            end
+        end
+    end
+    local needed = math.floor(total / 2) + 1
+    return {
+        total      = total,
+        reachable  = reachable,
+        in_quorum  = in_quorum,
+        needed     = needed,
+        has_quorum = total > 0 and in_quorum >= needed,
+    }
+end
+
+-- Probe every configured endpoint's /v3/maintenance/status and decide
+-- whether the control-plane has quorum. Returns (summary, statuses).
+-- summary is the table from _quorum_from_statuses. Cheap (one short HTTP
+-- per endpoint); callers should not run it on a hot path.
+function M.proto:cluster_health(timeout)
+    local statuses = {}
+    for _, endpoint in ipairs(self.endpoints) do
+        local st, e = post_to(self, endpoint, '/v3/maintenance/status', {},
+            timeout or 2)
+        if st ~= nil then
+            statuses[#statuses + 1] = {
+                reachable = true, leader = st.leader, endpoint = endpoint,
+            }
+        else
+            statuses[#statuses + 1] = {
+                reachable = false, err = e, endpoint = endpoint,
+            }
+        end
+    end
+    return M._quorum_from_statuses(statuses), statuses
+end
+
 -- ── Watch (polling) ──────────────────────────────────────────────────
 
 -- watch(key, callback, opts) spawns a fiber that polls the key and
