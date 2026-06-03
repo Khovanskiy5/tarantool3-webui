@@ -60,6 +60,7 @@ local STATE = {
     last_leader_confirm_mono = nil, -- last successful self-as-leader read
     last_etcd_ok = false,
     last_applied_term = 0,          -- FO-4: highest appointment term applied
+    react_in_progress = false,      -- re-entrancy guard for react_once
     -- Guards against the watcher loop and the fencing loop calling
     -- box.ctl.promote/demote at the same time (Tarantool rejects
     -- "simultaneous invocations"). A plain boolean is safe: fibers only
@@ -147,7 +148,12 @@ local function prepare_to_promote(appt, client)
     -- (2) CAS-claim the vclockkeeper. expected=0 creates it if absent.
     if client ~= nil then
         local key = string.format(M.KEY_VCLOCKKEEPER, STATE.replicaset)
-        local kv = client:get(key)
+        local kv, get_err = client:get(key)
+        if get_err ~= nil then
+            -- Don't guess the revision on a transient etcd error: defer
+            -- and retry next tick rather than risk a wrong CAS baseline.
+            return false, 'vclockkeeper read: ' .. tostring(get_err)
+        end
         local expected = (kv and kv.revision) or 0
         local payload = json.encode({
             keeper = STATE.self_alias, ts = fiber.time(),
@@ -249,9 +255,8 @@ end
 -- One read-appointment + apply cycle. Shared by the poll loop and the
 -- `box.watch('config.info')` callback so a config reload re-asserts the
 -- target RO/RW state immediately, without waiting for the next poll
--- tick. apply_appointment is idempotent (it checks the current state
--- before acting), so concurrent invocations from both paths are safe.
-local function react_once()
+-- tick.
+local function react_once_inner()
     local client, err = etcd_client.get_client()
     if client == nil then
         STATE.last_error = 'etcd unavailable: ' .. tostring(err)
@@ -297,6 +302,23 @@ local function react_once()
                 STATE.last_error = 'apply: ' .. tostring(ap_err)
             end
         end
+    end
+end
+
+-- Re-entrancy guard around react_once_inner. The poll loop calls it
+-- sequentially, but the box.watch('config.info') callback runs in a
+-- separate fiber and could overlap a poll-loop call that is parked in
+-- the prepare_to_promote catch-up (up to waitlsn_timeout). When that
+-- happens the second caller just skips — the in-flight one is already
+-- reconciling. The flag is safe without a mutex: fibers only yield
+-- inside the inner body, never between this check and set.
+local function react_once()
+    if STATE.react_in_progress then return end
+    STATE.react_in_progress = true
+    local ok, err = pcall(react_once_inner)
+    STATE.react_in_progress = false
+    if not ok then
+        STATE.last_error = 'react: ' .. tostring(err)
     end
 end
 
@@ -387,6 +409,7 @@ function M.start(opts)
     STATE.last_leader_confirm_mono = fiber.clock()
     STATE.last_etcd_ok = false
     STATE.last_applied_term = 0
+    STATE.react_in_progress = false
     STATE.fiber = fiber.create(loop)
     STATE.fencing_fiber = fiber.create(fencing_loop)
     -- React immediately on every config apply/reload. In supervised

@@ -110,3 +110,16 @@ g.test_vclock_nil_target_dominates = function()
         'nothing to catch up to')
     t.assert_equals(fencing.vclock_dominates(nil, {[1]=10}), false)
 end
+
+-- Real runtime shape: prev_vclock comes from json.decode (STRING keys),
+-- box.info.vclock has INTEGER keys. vclock_dominates must compare them
+-- correctly across the key-type mismatch.
+g.test_vclock_json_string_keys_vs_integer_keys = function()
+    local my = {[1]=10, [2]=5}            -- box.info.vclock (int keys)
+    t.assert_equals(fencing.vclock_dominates(my, {['1']=10, ['2']=5}), true,
+        'caught up across string/int key mismatch')
+    t.assert_equals(fencing.vclock_dominates(my, {['1']=10, ['2']=6}), false,
+        'behind on replica 2 (string key)')
+    t.assert_equals(fencing.vclock_dominates(my, {['0']=999, ['1']=10}), true,
+        'string-keyed component 0 ignored')
+end
