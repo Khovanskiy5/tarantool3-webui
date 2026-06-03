@@ -187,6 +187,7 @@ local function probe_peer(conn)
                 ro = i.ro, ro_reason = i.ro_reason,
                 status = i.status, lag = i.replication_lag,
                 lsn = i.lsn,
+                vclock = i.vclock,
             }
         ]], {}, { timeout = M.DEFAULTS.probe_timeout_sec })
     end)
@@ -211,6 +212,7 @@ local function probe_replicasets()
         status     = box.info.status,
         lag        = 0,
         lsn        = box.info.lsn,
+        vclock     = box.info.vclock,
     }
     if self_probe.replicaset ~= nil then
         out[self_probe.replicaset] = out[self_probe.replicaset] or {}
@@ -271,13 +273,18 @@ end
 -- ─────────────────────────────────────────────────────────────────────
 
 local function write_appointment(client, rs_name, leader_alias, previous,
-                                 manual_override_until, by_user)
+                                 manual_override_until, by_user, prev_vclock)
     local key = string.format(M.KEY_APPOINTMENT, rs_name)
     local payload = json.encode({
         leader = leader_alias, ts = fiber.time(),
         coordinator = STATE.self_alias, previous = previous,
         manual_override_until = manual_override_until,
         by_user = by_user,
+        -- Previous leader's vclock (FO-3): the new leader waits until
+        -- its own vclock dominates this before going read-write, so a
+        -- switchover does not silently drop the old leader's confirmed
+        -- transactions. nil on a cold first appointment.
+        prev_vclock = prev_vclock,
         -- Failover term (FO-4 control-plane fencing token): the
         -- mod_revision of OUR coordinator key. etcd revisions are
         -- strictly monotonic, so a newer coordinator stamps a higher
@@ -327,6 +334,16 @@ function M.appoint_manually(client, rs_name, alias, ttl_sec, by_user)
         until_ts = override_until, by_user = by_user,
     })
     return { leader = alias, manual_override_until = override_until }
+end
+
+-- Previous leader's vclock for the new leader to catch up to (FO-3).
+-- Only meaningful on a real leader change where we can still probe the
+-- outgoing leader; nil otherwise (cold appointment / unreachable peer).
+local function prev_leader_vclock(probes, previous, leader)
+    if previous == nil or previous == leader then return nil end
+    local pp = probes[previous]
+    if pp and pp.reachable then return pp.vclock end
+    return nil
 end
 
 local function appointment_cycle(client)
@@ -455,8 +472,9 @@ local function appointment_cycle(client)
                       since_last = now - STATE.last_promotion_at })
             elseif needs_change or needs_refresh then
                 local previous = current and current.leader
+                local prev_vclock = prev_leader_vclock(probes, previous, leader)
                 local ok, write_err = write_appointment(
-                    client, rs_name, leader, previous)
+                    client, rs_name, leader, previous, nil, nil, prev_vclock)
                 if ok then
                     STATE.last_appointments[rs_name] = {
                         leader = leader, ts = now, previous = previous,

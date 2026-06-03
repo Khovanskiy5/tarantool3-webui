@@ -78,3 +78,35 @@ g.test_nil_term_never_stale = function()
     t.assert_equals(fencing.appointment_is_stale(5, nil), false,
         'no baseline yet → accept')
 end
+
+-- ── vclock_dominates (FO-3 consistent switchover) ──────────────────
+
+g.test_vclock_dominates_equal = function()
+    t.assert_equals(fencing.vclock_dominates({[1]=10,[2]=5}, {[1]=10,[2]=5}), true)
+end
+
+g.test_vclock_dominates_ahead = function()
+    t.assert_equals(fencing.vclock_dominates({[1]=12,[2]=5}, {[1]=10,[2]=5}), true)
+end
+
+g.test_vclock_does_not_dominate_when_behind = function()
+    t.assert_equals(fencing.vclock_dominates({[1]=9,[2]=5}, {[1]=10,[2]=5}), false,
+        'behind on replica 1 → not dominating')
+end
+
+g.test_vclock_missing_component_is_zero = function()
+    t.assert_equals(fencing.vclock_dominates({[1]=10}, {[1]=10,[2]=3}), false,
+        'missing component 2 treated as 0 < 3')
+    t.assert_equals(fencing.vclock_dominates({[1]=10,[2]=0}, {[1]=10}), true)
+end
+
+g.test_vclock_ignores_component_zero = function()
+    t.assert_equals(fencing.vclock_dominates({[1]=10}, {[0]=999,[1]=10}), true,
+        'local noop stream (id 0) is ignored')
+end
+
+g.test_vclock_nil_target_dominates = function()
+    t.assert_equals(fencing.vclock_dominates({[1]=10}, nil), true,
+        'nothing to catch up to')
+    t.assert_equals(fencing.vclock_dominates(nil, {[1]=10}), false)
+end

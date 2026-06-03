@@ -38,8 +38,12 @@ M.DEFAULTS = {
     lease_ttl_sec  = 15,
     safety_margin  = 5,
     probe_interval = 2,
+    -- FO-3: how long the new leader waits to catch up to the previous
+    -- leader's vclock before promoting anyway (best-effort).
+    waitlsn_timeout = 3,
 }
 M.KEY_APPOINTMENT = '/failover/replicasets/%s/leader'
+M.KEY_VCLOCKKEEPER = '/failover/replicasets/%s/vclockkeeper'
 
 local STATE = {
     enabled     = false,
@@ -89,6 +93,7 @@ local function read_appointment(client)
         ts     = tonumber(parsed.ts),
         coordinator = parsed.coordinator,
         term   = tonumber(parsed.term),  -- FO-4 fencing token (nil for manual)
+        prev_vclock = parsed.prev_vclock, -- FO-3 catch-up target
         revision = kv.revision,
     }
 end
@@ -115,7 +120,47 @@ local function effectively_leader()
     return synchro.queue.owner == box.info.id
 end
 
-local function apply_appointment(appt)
+-- FO-3 consistent switchover: before a newly-appointed leader goes
+-- read-write it (1) waits until its vclock dominates the previous
+-- leader's confirmed vclock (best-effort, bounded by waitlsn_timeout)
+-- so committed rows are not dropped, and (2) CAS-claims the
+-- vclockkeeper key so two instances cannot both promote. Returns
+-- (true) when safe to promote, or (false, reason) to defer.
+local function prepare_to_promote(appt, client)
+    -- (1) Catch up to the previous leader.
+    if type(appt.prev_vclock) == 'table' then
+        local deadline = fiber.clock() + (STATE.config.waitlsn_timeout or 3)
+        while not fencing.vclock_dominates(box.info.vclock, appt.prev_vclock) do
+            if fiber.clock() >= deadline then
+                -- The remaining gap is an unreplicated tail from the
+                -- (likely dead) previous leader — unrecoverable. Promote
+                -- anyway; the limbo term fence + is_sync protect
+                -- committed sync data. Log loudly.
+                logger.warn('promoting without full catch-up to previous '
+                    .. 'leader; unreplicated tail may be lost', {
+                    previous = appt.previous })
+                break
+            end
+            fiber.sleep(0.1)
+        end
+    end
+    -- (2) CAS-claim the vclockkeeper. expected=0 creates it if absent.
+    if client ~= nil then
+        local key = string.format(M.KEY_VCLOCKKEEPER, STATE.replicaset)
+        local kv = client:get(key)
+        local expected = (kv and kv.revision) or 0
+        local payload = json.encode({
+            keeper = STATE.self_alias, ts = fiber.time(),
+        })
+        local _, cas_err = client:txn_cas(key, payload, expected)
+        if cas_err ~= nil then
+            return false, 'vclockkeeper CAS lost: ' .. tostring(cas_err)
+        end
+    end
+    return true
+end
+
+local function apply_appointment(appt, client)
     if appt == nil then return end
     STATE.last_seen = appt
     local should_be_leader = (appt.leader == STATE.self_alias)
@@ -125,6 +170,14 @@ local function apply_appointment(appt)
     -- spam `box.ctl.promote()` once per second on the steady
     -- leader.
     if should_be_leader and not am_leader then
+        -- FO-3: catch up + claim vclockkeeper before going RW. Defer
+        -- (retry next tick) if we lost the keeper CAS to another peer.
+        local prep_ok, prep_reason = prepare_to_promote(appt, client)
+        if not prep_ok then
+            STATE.last_error = prep_reason
+            logger.warn('deferring promote', { reason = prep_reason })
+            return
+        end
         -- Two-step handoff. In Tarantool 3.x with
         -- `replication.failover: off`, `box.ctl.promote()` claims
         -- the synchronous queue but does NOT flip
@@ -239,7 +292,7 @@ local function react_once()
             if appt.leader == STATE.self_alias then
                 STATE.last_leader_confirm_mono = fiber.clock()
             end
-            local ok, ap_err = pcall(apply_appointment, appt)
+            local ok, ap_err = pcall(apply_appointment, appt, client)
             if not ok then
                 STATE.last_error = 'apply: ' .. tostring(ap_err)
             end
@@ -319,6 +372,8 @@ function M.start(opts)
         probe_interval = tonumber(opts.probe_interval)
             or M.DEFAULTS.probe_interval,
         renew_deadline = renew_deadline,
+        waitlsn_timeout = tonumber(opts.waitlsn_timeout)
+            or M.DEFAULTS.waitlsn_timeout,
     }
     STATE.self_alias = box.info.name
     STATE.replicaset = box.info.replicaset and box.info.replicaset.name

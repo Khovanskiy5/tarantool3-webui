@@ -72,4 +72,30 @@ function M.appointment_is_stale(appt_term, last_applied)
     return t < last
 end
 
+-- Does vclock `a` dominate vclock `b` — i.e. has `a` applied at least
+-- everything `b` had? (Task FO-3 consistent switchover.)
+--
+-- A vclock is a { [replica_id] = lsn } map. `a` dominates `b` iff for
+-- every replica id present in `b`, a[id] >= b[id]. Component 0 (the
+-- local/anonymous noop stream) is ignored — it never carries
+-- replicated data and differs trivially between peers.
+--
+-- Used by the new leader to confirm it holds all of the previous
+-- leader's confirmed transactions before it goes read-write, so a
+-- switchover does not silently drop committed rows.
+function M.vclock_dominates(a, b)
+    if type(b) ~= 'table' then return true end   -- nothing to catch up to
+    if type(a) ~= 'table' then return false end
+    for id, blsn in pairs(b) do
+        id = tonumber(id)
+        if id ~= nil and id ~= 0 then
+            local alsn = tonumber(a[id]) or tonumber(a[tostring(id)]) or 0
+            if alsn < (tonumber(blsn) or 0) then
+                return false
+            end
+        end
+    end
+    return true
+end
+
 return M
