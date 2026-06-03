@@ -41,6 +41,7 @@ local json  = require('json')
 local math  = require('math')
 
 local etcd_client = require('webui.config_store.client')
+local antiflap    = require('webui.failover.antiflap')
 local log_util    = require('webui.log_util')
 local logger      = log_util.with_tag('failover.agent')
 
@@ -357,6 +358,150 @@ local function prev_leader_vclock(probes, previous, leader)
     return nil
 end
 
+-- Write an appointment and run the FO-6 post-write bookkeeping
+-- (backoff the deposed leader, record the change for suppression).
+-- Returns 'stepdown' when a CAS conflict shows we lost coordinator
+-- status (the caller aborts the cycle); nil otherwise.
+local function commit_appointment(client, rs_name, probes, current, leader,
+                                  is_failover, needs_change, now)
+    local previous = current and current.leader
+    local prev_vclock = prev_leader_vclock(probes, previous, leader)
+    local ok, write_err = write_appointment(
+        client, rs_name, leader, previous, nil, nil, prev_vclock)
+    if not ok then
+        if type(write_err) == 'table'
+                and write_err.category == 'CAS_CONFLICT' then
+            logger.warn('lost coordinator; stepping down',
+                { reason = 'CAS conflict on appointment' })
+            STATE.is_coordinator = false
+            STATE.coordinator_revision = nil
+            STATE.lease_id = nil
+            return 'stepdown'
+        end
+        set_error('appointment write: ' .. tostring(write_err))
+        return nil
+    end
+    STATE.last_appointments[rs_name] = {
+        leader = leader, ts = now, previous = previous,
+    }
+    if not needs_change then return nil end
+    STATE.last_promotion_at = now
+    antiflap.note_appointed(rs_name, leader, now)
+    -- Back off the deposed leader so a flapping primary is not
+    -- re-appointed the moment it recovers.
+    if is_failover and previous ~= nil then
+        antiflap.note_promote_failure(previous, now)
+    end
+    local newly_suppressed, n_changes = antiflap.record_change(rs_name, now)
+    if newly_suppressed then
+        logger.warn('failover suppressed: flapping', {
+            replicaset = rs_name, changes_in_window = n_changes,
+        })
+    end
+    logger.info('appointment changed',
+        { replicaset = rs_name, from = previous, to = leader })
+    return nil
+end
+
+-- Evaluate one replicaset and, if warranted, write a new appointment.
+-- `ctx` carries the per-cycle shared inputs (now, can_change, disabled
+-- set, priority map, live-appointment reader). Returns 'stepdown' to
+-- tell the caller to abort the whole cycle (lost coordinator).
+local function evaluate_replicaset(client, rs_name, probes, ctx)
+    local now = ctx.now
+    local live = ctx.read_live(rs_name)
+    if live ~= nil
+        and tonumber(live.manual_override_until) ~= nil
+        and live.manual_override_until > now then
+        -- A manual override is in effect. Keep our memory in sync and
+        -- skip score-based re-evaluation. A deliberate operator action
+        -- also clears accumulated flap state (FO-6 flow 7) so
+        -- suppression / backoff never fights a human decision.
+        STATE.last_appointments[rs_name] = {
+            leader = live.leader, ts = live.ts or now,
+            previous = live.previous,
+            manual_override_until = live.manual_override_until,
+        }
+        antiflap.clear(rs_name)
+        logger.debug('manual override active; skipping score cycle',
+            { replicaset = rs_name, leader = live.leader,
+              expires_at = live.manual_override_until })
+        return nil
+    end
+
+    local current = STATE.last_appointments[rs_name]
+    local cur_alias = current and current.leader
+    local max_lag = STATE.config.max_replication_lag_sec
+
+    -- FO-6: observe the current leader's health for multi-cycle
+    -- dampening, and reconcile the pending appointment (promote took
+    -- vs stalled → backoff the candidate).
+    local cur_qualified = false
+    if cur_alias ~= nil and probes[cur_alias] ~= nil then
+        cur_qualified = M.score_candidate(probes[cur_alias], max_lag)
+            > -math.huge
+    end
+    antiflap.observe(rs_name, cur_qualified, now)
+    if cur_alias ~= nil then
+        antiflap.check_appointment(rs_name, probes[cur_alias], now)
+    end
+
+    -- Auto-return throttle (Task 5.12 part B): don't swap a working
+    -- leader back to priority[0] until autoreturn_delay has passed.
+    local priority_for_pick = ctx.priority_by_rs[rs_name]
+    local autoreturn_delay = tonumber(STATE.config.autoreturn_delay) or 60
+    if current ~= nil and (now - (current.ts or 0)) < autoreturn_delay then
+        priority_for_pick = nil
+    end
+
+    -- FO-6 backoff (flow 5): exclude backed-off candidates, but never
+    -- strand the replicaset leaderless — if backoff removes the last
+    -- candidate, retry with the disabled-only set.
+    local exclude = {}
+    if type(ctx.disabled) == 'table' then
+        for a in pairs(ctx.disabled) do exclude[a] = true end
+    end
+    for a in pairs(antiflap.backoff_set(now)) do exclude[a] = true end
+    local leader = M.pick_leader(probes, max_lag, exclude, priority_for_pick)
+    if leader == nil then
+        leader = M.pick_leader(probes, max_lag, ctx.disabled, priority_for_pick)
+    end
+    if leader == nil then
+        logger.debug('no qualified candidate', { replicaset = rs_name })
+        return nil
+    end
+
+    local needs_change = current == nil or current.leader ~= leader
+    local needs_refresh = current ~= nil and (now - (current.ts or 0)) > 30
+
+    -- A real failover = replacing an UNHEALTHY current leader. Gate it
+    -- behind multi-cycle dampening + primary_start grace + suppression.
+    -- Voluntary swaps (priority change, cold start) skip the gate and
+    -- rely on hysteresis only.
+    local is_failover = needs_change and current ~= nil and not cur_qualified
+    if is_failover then
+        local allowed, why = antiflap.failover_allowed(rs_name, now, current.ts)
+        if not allowed then
+            logger.info('failover dampened', {
+                replicaset = rs_name, from = cur_alias,
+                candidate = leader, reason = why,
+            })
+            needs_change = false
+            needs_refresh = false
+        end
+    end
+
+    if needs_change and not ctx.can_change then
+        logger.debug('hysteresis blocks promotion',
+            { replicaset = rs_name, to = leader,
+              since_last = now - STATE.last_promotion_at })
+        return nil
+    end
+    if not (needs_change or needs_refresh) then return nil end
+    return commit_appointment(client, rs_name, probes, current, leader,
+        is_failover, needs_change, now)
+end
+
 local function appointment_cycle(client)
     -- Maintenance-window pause (Task 5.11). When active, the
     -- coordinator stops issuing new promotions but keeps its lease
@@ -434,86 +579,17 @@ local function appointment_cycle(client)
         return decoded
     end
 
+    local ctx = {
+        now = now,
+        can_change = can_change,
+        disabled = disabled,
+        priority_by_rs = priority_by_rs,
+        read_live = read_live_appointment,
+    }
     for rs_name, probes in pairs(rs_map) do
-        local live = read_live_appointment(rs_name)
-        if live ~= nil
-            and tonumber(live.manual_override_until) ~= nil
-            and live.manual_override_until > now then
-            -- A manual override is in effect. Keep our memory in
-            -- sync and skip score-based re-evaluation for this rs.
-            STATE.last_appointments[rs_name] = {
-                leader = live.leader, ts = live.ts or now,
-                previous = live.previous,
-                manual_override_until = live.manual_override_until,
-            }
-            logger.debug('manual override active; skipping score cycle',
-                { replicaset = rs_name, leader = live.leader,
-                  expires_at = live.manual_override_until })
-        else
-        -- Auto-return throttle (Task 5.12 part B): don't swap a
-        -- working leader back to priority[0] for at least
-        -- `autoreturn_delay` seconds after the current leader was
-        -- appointed. Without this guard, a flapping primary that
-        -- recovers and re-fails inside seconds would ping-pong the
-        -- queue across the cluster on every cycle.
-        local priority_for_pick = priority_by_rs[rs_name]
-        do
-            local current = STATE.last_appointments[rs_name]
-            local autoreturn_delay = tonumber(
-                STATE.config.autoreturn_delay) or 60
-            if current ~= nil
-                and (now - (current.ts or 0)) < autoreturn_delay then
-                priority_for_pick = nil
-            end
+        if evaluate_replicaset(client, rs_name, probes, ctx) == 'stepdown' then
+            return  -- lost coordinator; election_loop will re-evaluate
         end
-
-        local leader = M.pick_leader(probes,
-            STATE.config.max_replication_lag_sec, disabled,
-            priority_for_pick)
-        if leader == nil then
-            logger.debug('no qualified candidate', { replicaset = rs_name })
-        else
-            local current = STATE.last_appointments[rs_name]
-            local needs_change = current == nil or current.leader ~= leader
-            local needs_refresh = current ~= nil
-                and (now - (current.ts or 0)) > 30
-            if needs_change and not can_change then
-                logger.debug('hysteresis blocks promotion',
-                    { replicaset = rs_name, to = leader,
-                      since_last = now - STATE.last_promotion_at })
-            elseif needs_change or needs_refresh then
-                local previous = current and current.leader
-                local prev_vclock = prev_leader_vclock(probes, previous, leader)
-                local ok, write_err = write_appointment(
-                    client, rs_name, leader, previous, nil, nil, prev_vclock)
-                if ok then
-                    STATE.last_appointments[rs_name] = {
-                        leader = leader, ts = now, previous = previous,
-                    }
-                    if needs_change then
-                        STATE.last_promotion_at = now
-                        logger.info('appointment changed', {
-                            replicaset = rs_name,
-                            from = previous, to = leader,
-                        })
-                    end
-                else
-                    -- CAS_CONFLICT means we lost coordinator status.
-                    -- Step down immediately to avoid further writes.
-                    if type(write_err) == 'table'
-                            and write_err.category == 'CAS_CONFLICT' then
-                        logger.warn('lost coordinator; stepping down',
-                            { reason = 'CAS conflict on appointment' })
-                        STATE.is_coordinator = false
-                        STATE.coordinator_revision = nil
-                        STATE.lease_id = nil
-                        return  -- exit loop; election_loop will re-evaluate
-                    end
-                    set_error('appointment write: ' .. tostring(write_err))
-                end
-            end
-        end
-        end -- manual-override else
     end
 end
 
@@ -623,6 +699,23 @@ function M.start(opts)
     STATE.coordinator_revision = nil
     STATE.last_promotion_at = 0
     STATE.last_error = nil
+    -- FO-6: arm the anti-flap circuit-breaker with the operator
+    -- tunables (lease_ttl_sec caps the per-candidate backoff window).
+    antiflap._reset()
+    antiflap.configure({
+        lease_ttl_sec         = STATE.config.lease_ttl_sec,
+        dampen_cycles         = opts.dampen_cycles,
+        primary_start_timeout = opts.primary_start_timeout,
+        suppress_threshold    = opts.suppress_threshold,
+        suppress_window       = opts.suppress_window,
+        suppress_cooldown     = opts.suppress_cooldown,
+        promote_backoff_base  = opts.promote_backoff_base,
+        min_misses            = opts.min_misses,
+        phi_threshold         = opts.phi_threshold,
+        phi_min_samples       = opts.phi_min_samples,
+        phi_max_samples       = opts.phi_max_samples,
+        phi_min_stddev        = opts.phi_min_stddev,
+    })
     -- Seed math.random with a per-instance fiber/PID mix so the
     -- jitter is not identical across the cluster.
     math.randomseed(math.floor(fiber.time() * 1e6) % 2147483647)
@@ -642,7 +735,24 @@ end
 -- agent is not running.
 function M.reconfigure(opts)
     if not STATE.enabled then return false end
-    STATE.config = build_config(opts or {})
+    opts = opts or {}
+    STATE.config = build_config(opts)
+    -- Re-apply anti-flap tunables WITHOUT resetting the live counters
+    -- (a reload must not wipe the flap history mid-storm).
+    antiflap.configure({
+        lease_ttl_sec         = STATE.config.lease_ttl_sec,
+        dampen_cycles         = opts.dampen_cycles,
+        primary_start_timeout = opts.primary_start_timeout,
+        suppress_threshold    = opts.suppress_threshold,
+        suppress_window       = opts.suppress_window,
+        suppress_cooldown     = opts.suppress_cooldown,
+        promote_backoff_base  = opts.promote_backoff_base,
+        min_misses            = opts.min_misses,
+        phi_threshold         = opts.phi_threshold,
+        phi_min_samples       = opts.phi_min_samples,
+        phi_max_samples       = opts.phi_max_samples,
+        phi_min_stddev        = opts.phi_min_stddev,
+    })
     logger.info('failover agent reconfigured (live)', {
         lease_ttl_sec = STATE.config.lease_ttl_sec,
         keepalive_interval = STATE.config.keepalive_interval,
@@ -718,6 +828,7 @@ function M.status()
         last_error      = STATE.last_error,
         last_promotion_at = STATE.last_promotion_at,
         paused_until    = STATE.paused_until,
+        antiflap        = antiflap.snapshot(),
     }
 end
 

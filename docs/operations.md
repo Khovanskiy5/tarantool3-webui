@@ -164,6 +164,17 @@ database:
 - Не использовать `bootstrap_strategy: supervised`/`native` с агентом — они уводят box.cfg в externally-managed ветку; нужен `auto` (или `legacy`/`config`).
 - Не нарушать неравенство таймингов `keepalive_interval + 2*probe_timeout_sec ≤ lease_ttl_sec`.
 
+### Anti-flap — подавление штормов перевыборов
+
+При частых рестартах наивный координатор «пинг-понгует» лидерство. Поверх гистерезиса (`min_promotion_interval`) и троттла авто-возврата (`autoreturn_delay`) работают четыре слоя подавления:
+
+- **φ-accrual failure detection.** Лидер объявляется мёртвым по адаптивному уровню подозрения (Hayashibara φ), вычисляемому из распределения интервалов между успешными наблюдениями: стабильный «пульс» → быстрое обнаружение, дёрганый → терпеливое. Пороги: `phi_threshold` (8), `phi_min_samples` (3), `phi_min_stddev` (0.5с). Пока сэмплов мало — fallback на счётчик `dampen_cycles` (3) подряд промахов; жёсткий пол `min_misses` (2) гарантирует, что одиночный блип не вызывает failover.
+- **primary_start grace.** Свеженазначенному лидеру даётся `primary_start_timeout` (по умолчанию 10с) на старт, прежде чем его можно заменить (он поднимается RO и должен успеть promote).
+- **Suppression circuit-breaker.** Более `suppress_threshold` (по умолчанию 4) смен лидера за `suppress_window` (60с) замораживают авто-промоуты на `suppress_cooldown` (60с) и поднимают issue `failover suppressed: flapping` (WARNING). Ручной промоут оператора игнорирует заморозку. Заранее, ещё до заморозки, при росте частоты смен (≥ `suppress_threshold − 1` за окно) поднимается отдельный WARNING-issue `transition-rate` — раннее предупреждение о назревающем флапе.
+- **Per-candidate backoff.** Смещённый или зависший на promote кандидат исключается из гонки на экспоненциально растущее окно (`promote_backoff_base`, кап = `lease_ttl_sec`), поэтому координатор предпочитает другого пира. Backoff никогда не оставляет реплизасет без лидера: если он убирает последнего кандидата, выбор повторяется без него.
+
+Все тайминги опциональны и настраиваются в `roles_cfg.webui.failover.*` (`dampen_cycles`, `min_misses`, `primary_start_timeout`, `suppress_threshold`, `suppress_window`, `suppress_cooldown`, `promote_backoff_base`, `phi_threshold`, `phi_min_samples`, `phi_min_stddev`); при отсутствии берутся дефолты. Текущее состояние (φ, частота смен, заморозка, backoff) видно в `agent.status().antiflap` и в issue при активной заморозке / повышенной частоте.
+
 ### Fallback и переключение режимов
 
 - **Fallback `off`.** Агент по-прежнему стартует при `replication.failover: off` (legacy). Это запасной путь на случай сборки Tarantool, отвергающей `supervised` на CE; гарантии RO-при-рестарте в нём слабее — критичные спейсы должны быть `is_sync`. В логе при старте: `failover agent running in legacy "off" mode`.

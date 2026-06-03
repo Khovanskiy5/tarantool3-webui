@@ -483,6 +483,86 @@ function M.check_failover_coordinator(_, thresholds, now)
     return out
 end
 
+-- Failover suppressed by the anti-flap circuit-breaker (FO-6). The
+-- agent freezes auto-promotions for a replicaset after too many leader
+-- changes inside the suppression window (a restart storm / flapping
+-- primary). Surface it as a WARNING so operators know auto-failover is
+-- temporarily inhibited there and can investigate the flap source.
+--
+-- Reads the agent's exported anti-flap snapshot (already evaluated
+-- against the agent's own clock — we do NOT recompute the window here).
+function M.check_failover_suppressed(_, _, now)
+    now = now or fiber.clock()
+    local out = {}
+    local ok_agent, agent = pcall(require, 'webui.failover.agent')
+    if not ok_agent then return out end
+    local ok_status, status = pcall(agent.status)
+    if not ok_status or type(status) ~= 'table' then return out end
+    if status.enabled ~= true then return out end
+    local af = status.antiflap
+    if type(af) ~= 'table' or type(af.replicasets) ~= 'table' then return out end
+    for _, rs in ipairs(af.replicasets) do
+        if rs.suppressed == true then
+            table.insert(out, make_issue {
+                id = M.make_id('failover', 'replicaset',
+                    rs.replicaset or '?', 'suppressed'),
+                category = M.CATEGORIES.FAILOVER,
+                severity = M.SEVERITY.WARNING,
+                scope    = M.SCOPE.REPLICASET,
+                replicaset = rs.replicaset,
+                message  = string.format(
+                    'auto-failover suppressed in replicaset %q after %d leader '
+                    .. 'changes in the flap window — promotions are frozen '
+                    .. 'until the storm settles. Investigate the flapping '
+                    .. 'primary; a manual promote overrides the freeze.',
+                    tostring(rs.replicaset or '?'),
+                    tonumber(rs.changes_in_window) or 0),
+                now = now,
+            })
+        end
+    end
+    return out
+end
+
+-- Elevated leadership transition rate (FO-6 flow 6). A leading
+-- indicator before the suppression breaker actually trips: the rate of
+-- leader changes is climbing but auto-promotions are not frozen yet.
+-- Surfaced as a WARNING so operators can catch a brewing flap early.
+-- Mutually exclusive with the `suppressed` issue (the agent reports
+-- `elevated` only while NOT suppressed).
+function M.check_failover_transition_rate(_, _, now)
+    now = now or fiber.clock()
+    local out = {}
+    local ok_agent, agent = pcall(require, 'webui.failover.agent')
+    if not ok_agent then return out end
+    local ok_status, status = pcall(agent.status)
+    if not ok_status or type(status) ~= 'table' then return out end
+    if status.enabled ~= true then return out end
+    local af = status.antiflap
+    if type(af) ~= 'table' or type(af.replicasets) ~= 'table' then return out end
+    for _, rs in ipairs(af.replicasets) do
+        if rs.elevated == true then
+            table.insert(out, make_issue {
+                id = M.make_id('failover', 'replicaset',
+                    rs.replicaset or '?', 'transition-rate'),
+                category = M.CATEGORIES.FAILOVER,
+                severity = M.SEVERITY.WARNING,
+                scope    = M.SCOPE.REPLICASET,
+                replicaset = rs.replicaset,
+                message  = string.format(
+                    'elevated leader-transition rate in replicaset %q (%d '
+                    .. 'changes in the flap window) — approaching the '
+                    .. 'suppression threshold. Investigate the unstable '
+                    .. 'primary before auto-failover freezes.',
+                    tostring(rs.replicaset or '?'),
+                    tonumber(rs.changes_in_window) or 0),
+                now = now,
+            })
+        end
+    end
+    return out
+end
+
 -- Two writable leaders in one replicaset (FO-10). The decisive signal
 -- is synchro-queue ownership: an instance owns the queue when
 -- synchro.queue.owner == its own id. More than one owner in a
@@ -573,6 +653,7 @@ function M.scan(snapshot, opts)
         M.check_replication, M.check_memory,
         M.check_clock, M.check_config,
         M.check_synchro_quorum, M.check_failover_coordinator,
+        M.check_failover_suppressed, M.check_failover_transition_rate,
         M.check_two_rw, M.check_alien,
     }) do
         local rule_issues = fn(snapshot, thresholds, now)

@@ -19,6 +19,18 @@ roles_cfg:
       probe_timeout_sec: 3
       watcher_poll_interval_sec: 1
       appointment_interval: 1
+      # Anti-flap (defaults shown; all optional). Suppress leadership
+      # ping-pong during restart storms:
+      #   phi_threshold: 8          # φ-accrual suspicion to declare dead
+      #   phi_min_samples: 3        # heartbeat samples before φ is trusted
+      #   phi_min_stddev: 0.5       # σ floor (s) — guards against jumpiness
+      #   min_misses: 2             # hard floor: never failover under N misses
+      #   dampen_cycles: 3          # consecutive-miss fallback before failover
+      #   primary_start_timeout: 10 # grace for a fresh leader to boot
+      #   suppress_threshold: 4     # changes/window that freeze promotes
+      #   suppress_window: 60
+      #   suppress_cooldown: 60
+      #   promote_backoff_base: 2   # exp backoff for a stalled candidate
     # Liveness reporter: each instance publishes a JSON snapshot of
     # its box.info to `<prefix>/state/by-name/<alias>` in etcd, bound
     # to a lease so the key disappears on crash. Surfaced in the

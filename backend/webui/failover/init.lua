@@ -208,6 +208,19 @@ function M.start(opts)
         probe_timeout_sec  = adj.retry_timeout,
         election_interval  = opts.election_interval,
         appointment_interval = opts.appointment_interval,
+        -- FO-6 anti-flap tunables (all optional; antiflap falls back to
+        -- its own defaults when unset).
+        dampen_cycles         = opts.dampen_cycles,
+        primary_start_timeout = opts.primary_start_timeout,
+        suppress_threshold    = opts.suppress_threshold,
+        suppress_window       = opts.suppress_window,
+        suppress_cooldown     = opts.suppress_cooldown,
+        promote_backoff_base  = opts.promote_backoff_base,
+        min_misses            = opts.min_misses,
+        phi_threshold         = opts.phi_threshold,
+        phi_min_samples       = opts.phi_min_samples,
+        phi_max_samples       = opts.phi_max_samples,
+        phi_min_stddev        = opts.phi_min_stddev,
     })
     if agent_ok == nil then
         watcher.stop()
@@ -243,6 +256,17 @@ function M.reconfigure(opts)
         probe_timeout_sec    = adj.retry_timeout,
         election_interval    = opts.election_interval,
         appointment_interval = opts.appointment_interval,
+        dampen_cycles         = opts.dampen_cycles,
+        primary_start_timeout = opts.primary_start_timeout,
+        suppress_threshold    = opts.suppress_threshold,
+        suppress_window       = opts.suppress_window,
+        suppress_cooldown     = opts.suppress_cooldown,
+        promote_backoff_base  = opts.promote_backoff_base,
+        min_misses            = opts.min_misses,
+        phi_threshold         = opts.phi_threshold,
+        phi_min_samples       = opts.phi_min_samples,
+        phi_max_samples       = opts.phi_max_samples,
+        phi_min_stddev        = opts.phi_min_stddev,
     })
     local w = watcher.reconfigure({
         poll_interval_sec = opts.watcher_poll_interval_sec,
