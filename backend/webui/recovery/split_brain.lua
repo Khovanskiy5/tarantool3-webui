@@ -200,108 +200,131 @@ function M.force_promote(winner_alias, opts)
     return true, 'promote dispatched on ' .. winner_alias
 end
 
+-- `manual`: record the operator's choice and close. Audit is
+-- best-effort (pcall) — recording must never block the resolution.
+local function resolve_manual(winner, losers, root)
+    pcall(audit.record, {
+        user   = root and root.user,
+        action = 'split_brain.manual_chosen',
+        scope  = 'cluster',
+        payload = { winner = winner, losers = losers },
+        request_id = root and root.request_id,
+    })
+    return {
+        ok = true, action = 'manual',
+        results = { { peer = '*', ok = true, msg = 'operator handles manually' } },
+    }
+end
+
+-- If any losing peer is the current synchro queue owner,
+-- rebootstrap_handler would reject it (it would lose uncommitted
+-- synchro writes). Auto-promote the winner first to move ownership
+-- off the loser. Returns nil to proceed, or a result table the caller
+-- must return verbatim (missing winner / promote failure). Appends the
+-- pre-promote outcome to `results`.
+local function maybe_pre_promote(winner, losers, payload, results)
+    local state = require('webui.cluster.state')
+    local snap = state.snapshot() or {}
+    local servers = snap.servers or {}
+    local loser_owns_queue = false
+    for _, peer in ipairs(losers) do
+        local s = servers[peer]
+        local info = s and s.box_info
+        local syn = info and info.synchro
+        if type(syn) == 'table' and type(syn.queue) == 'table'
+            and syn.queue.owner == info.id then
+            loser_owns_queue = true
+        end
+    end
+    if not loser_owns_queue then return nil end
+
+    if type(winner) ~= 'string' or winner == '' then
+        return { ok = false, action = 'rebootstrap_losing', results = {},
+            error = 'winner_alias is required to move queue '
+                .. 'ownership off a losing peer before rebootstrap' }
+    end
+    local pok, pmsg = M.force_promote(winner, payload)
+    table.insert(results, {
+        peer = winner, ok = pok,
+        msg = 'pre-rebootstrap promote: ' .. tostring(pmsg),
+    })
+    if not pok then
+        -- Bail out — rebootstrapping the loser without a new queue
+        -- owner would just hit FORBIDDEN.
+        return { ok = false, action = 'rebootstrap_losing', results = results,
+            error = 'pre-rebootstrap promote failed' }
+    end
+    -- Give the cluster a moment for the new owner to take effect
+    -- before re-trying rebootstrap.
+    require('fiber').sleep(1)
+    return nil
+end
+
+-- `rebootstrap_losing`: wipe + re-join every losing peer from the
+-- winner, after an optional pre-promote when a loser owns the queue.
+local function resolve_rebootstrap(winner, losers, payload, root)
+    if type(losers) ~= 'table' or #losers == 0 then
+        return { ok = false, action = 'rebootstrap_losing',
+            results = {}, error = 'losing_aliases is required' }
+    end
+    local results = {}
+    local early = maybe_pre_promote(winner, losers, payload, results)
+    if early ~= nil then return early end
+
+    for _, peer in ipairs(losers) do
+        local ok, msg = M.rebootstrap_one(peer)
+        table.insert(results, { peer = peer, ok = ok, msg = msg })
+    end
+    pcall(audit.record, {
+        user   = root and root.user,
+        action = 'split_brain.rebootstrap',
+        scope  = 'cluster',
+        payload = { winner = winner, losers = losers, results = results },
+        request_id = root and root.request_id,
+    })
+    local any_fail = false
+    for _, r in ipairs(results) do
+        if not r.ok then any_fail = true end
+    end
+    return { ok = not any_fail, action = 'rebootstrap_losing', results = results }
+end
+
+-- `force_promote_winner`: push the writer term forward on the winner
+-- so applier-stopped losers can legitimately bootstrap on reconnect.
+local function resolve_force_promote(winner, payload, root)
+    if type(winner) ~= 'string' or winner == '' then
+        return { ok = false, action = 'force_promote_winner',
+            results = {}, error = 'winner_alias is required' }
+    end
+    local results = {}
+    local ok, msg = M.force_promote(winner, payload)
+    table.insert(results, { peer = winner, ok = ok, msg = msg })
+    pcall(audit.record, {
+        user   = root and root.user,
+        action = 'split_brain.force_promote',
+        scope  = 'cluster',
+        payload = { winner = winner, ok = ok, msg = msg },
+        request_id = root and root.request_id,
+    })
+    logger.info('split_brain.force_promote', {
+        winner = winner, ok = ok, msg = msg,
+    })
+    return { ok = ok, action = 'force_promote_winner', results = results }
+end
+
 -- resolve(payload, root) → { ok, action, results: [{peer, ok, msg}] }
 function M.resolve(payload, root)
     payload = payload or {}
     local action = payload.action
     local winner = payload.winner_alias
     local losers = payload.losing_aliases or {}
-    local results = {}
 
     if action == 'manual' then
-        pcall(audit.record, {
-            user   = root and root.user,
-            action = 'split_brain.manual_chosen',
-            scope  = 'cluster',
-            payload = { winner = winner, losers = losers },
-            request_id = root and root.request_id,
-        })
-        return {
-            ok = true, action = action,
-            results = { { peer = '*', ok = true, msg = 'operator handles manually' } },
-        }
-    end
-
-    if action == 'rebootstrap_losing' then
-        if type(losers) ~= 'table' or #losers == 0 then
-            return { ok = false, action = action,
-                results = {}, error = 'losing_aliases is required' }
-        end
-        -- If any losing peer is the current synchro queue owner,
-        -- rebootstrap_handler will reject it (would lose
-        -- uncommitted synchro writes). Auto-promote the winner
-        -- first to move ownership off the loser. The winner is
-        -- required for this two-step path.
-        local state = require('webui.cluster.state')
-        local snap = state.snapshot() or {}
-        local servers = snap.servers or {}
-        local loser_owns_queue = false
-        for _, peer in ipairs(losers) do
-            local s = servers[peer]
-            local info = s and s.box_info
-            local syn = info and info.synchro
-            if type(syn) == 'table' and type(syn.queue) == 'table'
-                and syn.queue.owner == info.id then
-                loser_owns_queue = true
-            end
-        end
-        if loser_owns_queue then
-            if type(winner) ~= 'string' or winner == '' then
-                return { ok = false, action = action, results = {},
-                    error = 'winner_alias is required to move queue '
-                        .. 'ownership off a losing peer before rebootstrap' }
-            end
-            local pok, pmsg = M.force_promote(winner, payload)
-            table.insert(results, {
-                peer = winner, ok = pok,
-                msg = 'pre-rebootstrap promote: ' .. tostring(pmsg),
-            })
-            if not pok then
-                -- Bail out — rebootstrapping the loser without a
-                -- new queue owner would just hit FORBIDDEN.
-                return { ok = false, action = action, results = results,
-                    error = 'pre-rebootstrap promote failed' }
-            end
-            -- Give the cluster a moment for the new owner to take
-            -- effect before re-trying rebootstrap.
-            require('fiber').sleep(1)
-        end
-        for _, peer in ipairs(losers) do
-            local ok, msg = M.rebootstrap_one(peer)
-            table.insert(results, { peer = peer, ok = ok, msg = msg })
-        end
-        pcall(audit.record, {
-            user   = root and root.user,
-            action = 'split_brain.rebootstrap',
-            scope  = 'cluster',
-            payload = { winner = winner, losers = losers, results = results },
-            request_id = root and root.request_id,
-        })
-        local any_fail = false
-        for _, r in ipairs(results) do
-            if not r.ok then any_fail = true end
-        end
-        return { ok = not any_fail, action = action, results = results }
-    end
-
-    if action == 'force_promote_winner' then
-        if type(winner) ~= 'string' or winner == '' then
-            return { ok = false, action = action,
-                results = {}, error = 'winner_alias is required' }
-        end
-        local ok, msg = M.force_promote(winner, payload)
-        table.insert(results, { peer = winner, ok = ok, msg = msg })
-        pcall(audit.record, {
-            user   = root and root.user,
-            action = 'split_brain.force_promote',
-            scope  = 'cluster',
-            payload = { winner = winner, ok = ok, msg = msg },
-            request_id = root and root.request_id,
-        })
-        logger.info('split_brain.force_promote', {
-            winner = winner, ok = ok, msg = msg,
-        })
-        return { ok = ok, action = action, results = results }
+        return resolve_manual(winner, losers, root)
+    elseif action == 'rebootstrap_losing' then
+        return resolve_rebootstrap(winner, losers, payload, root)
+    elseif action == 'force_promote_winner' then
+        return resolve_force_promote(winner, payload, root)
     end
 
     return { ok = false, action = action or 'unknown',

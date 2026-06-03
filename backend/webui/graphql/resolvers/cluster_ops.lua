@@ -1083,18 +1083,10 @@ local function pick_manual_leader(rs, rs_name, prior_leader,
     return aliases[1]
 end
 
-function M.mutation_set_failover_mode(root, args)
-    require_role(root, 'setFailoverMode')
-    args = args or {}
-    if type(args.mode) ~= 'string' or args.mode == '' then
-        error('VALIDATION_ERROR: mode is required')
-    end
-
-    local params = {}
-    if args.params ~= nil then
-        params = decode_json_input('params', args.params)
-    end
-
+-- Read the live cluster YAML and decode it. Raises on an unreachable
+-- store or unparseable YAML. Returns (parsed, current_yaml, revision).
+-- Shared by setFailoverMode and setInstanceState.
+local function load_parsed_yaml()
     local current_yaml, read_err, current_revision = read_current_yaml()
     if current_yaml == nil then
         error('UNAVAILABLE: ' .. read_err)
@@ -1103,26 +1095,17 @@ function M.mutation_set_failover_mode(root, args)
     if not ok or type(parsed) ~= 'table' then
         error('INVALID_CURRENT_CONFIG: failed to parse live YAML')
     end
+    return parsed, current_yaml, current_revision
+end
 
-    local v = validate_failover_params(args.mode, params, count_instances(parsed))
-    if v ~= nil then error(v.code .. ': ' .. v.message) end
-
-    -- Compose the new YAML by deep-copying parsed and patching the
-    -- relevant keys. topology_edit does not model these top-level
-    -- knobs yet — handle them directly here. The byte-equality
-    -- guard inside twophase.prepare still catches no-ops.
-    local new_parsed = topology_edit._deep_copy(parsed)
-    new_parsed.replication = new_parsed.replication or {}
-
-    -- `supervised` is written as the Tarantool-native failover mode:
-    -- the config applier starts instances read-only and our agent
-    -- assigns the writer via etcd + the synchro queue. We do NOT set
-    -- `database.mode` (forbidden under supervised; the strip blocks
-    -- below remove any leftover), and we pin `bootstrap_strategy: auto`
-    -- so the minimal-name instance bootstraps the replicaset, plus MVCC
-    -- for correct synchro-transaction isolation. `agent: true` keeps the
-    -- community driver on.
-    if args.mode == 'supervised' then
+-- Write `replication.failover` and the community-agent toggle for the
+-- target mode. `supervised` is the native failover mode (applier starts
+-- RO; our agent assigns the writer) and keeps agent: true plus
+-- bootstrap_strategy auto + MVCC. election/manual force the agent OFF
+-- (Tarantool drives leadership); off defaults the agent ON unless the
+-- operator passes agent: false.
+local function build_failover_repl_config(new_parsed, mode, params)
+    if mode == 'supervised' then
         new_parsed.replication.failover = 'supervised'
         new_parsed.replication.bootstrap_strategy =
             new_parsed.replication.bootstrap_strategy or 'auto'
@@ -1141,151 +1124,103 @@ function M.mutation_set_failover_mode(root, args)
             end
         end
     else
-        new_parsed.replication.failover = args.mode
-        -- Agent toggle rules:
-        --   * election / manual → forcibly OFF. Tarantool itself
-        --     drives leadership; our agent would fight it for the
-        --     synchro queue.
-        --   * supervised → handled in the branch above (native
-        --     failover: supervised + agent: true).
-        --   * off → defaults to ON because plain `failover: off`
-        --     without an explicit `database.mode` per instance
-        --     leaves the cluster with no RW peer. The agent is
-        --     the open-source primary-electing driver. An operator
-        --     who truly wants off-without-agent (e.g. they will
-        --     drive leadership manually via direct
-        --     `database.mode: rw` edits) passes `agent: false`.
+        new_parsed.replication.failover = mode
         new_parsed.roles_cfg = new_parsed.roles_cfg or {}
         new_parsed.roles_cfg.webui = new_parsed.roles_cfg.webui or {}
         new_parsed.roles_cfg.webui.failover =
             new_parsed.roles_cfg.webui.failover or {}
-        if args.mode == 'election' or args.mode == 'manual' then
+        if mode == 'election' or mode == 'manual' then
             new_parsed.roles_cfg.webui.failover.agent = false
-        elseif args.mode == 'off' then
+        elseif mode == 'off' then
             if params.agent == false then
                 new_parsed.roles_cfg.webui.failover.agent = false
             else
-                -- Default: turn the agent ON. The previous edit
-                -- might have left it off (e.g. transitioning out
-                -- of manual mode); leaving it that way means no
-                -- one drives leadership.
+                -- Default ON: plain `failover: off` with no explicit
+                -- database.mode leaves the cluster with no RW peer; the
+                -- agent is the OSS primary-electing driver.
                 new_parsed.roles_cfg.webui.failover.agent = true
             end
         end
     end
+end
 
-    -- Capture the operator's current leader BEFORE the strip
-    -- blocks below wipe per-instance `database.mode` or per-
-    -- replicaset `rs.leader`. Reused by the manual / off /
-    -- supervised branches to carry the intent across the
-    -- transition. Read from `parsed`, not `new_parsed`, so the
-    -- agent-toggle block above cannot perturb the snapshot.
-    local prior_leader = snapshot_prior_leader(parsed)
-
-    -- Schema rule: native `replication.failover: election | manual |
-    -- supervised` is mutually exclusive with per-instance
-    -- `database.mode`. The moment we flip into one of those, Tarantool
-    -- refuses to (re)load the cluster YAML if any instance still
-    -- carries an explicit `database.mode`. Strip it cluster-wide here
-    -- so the commit lands cleanly. The intent encoded by the stripped
-    -- `database.mode: rw` is preserved in `prior_leader` above and
-    -- re-materialised as `rs.leader` in the manual block below.
-    --
-    -- Under `supervised` a fresh JOIN does not need a config-declared
-    -- writable peer: the applier disables force_ro_on_startup for
-    -- supervised (box_cfg.lua:1082-1084) and the agent-promoted leader
-    -- registers new instances at runtime — so stripping is safe.
-    if args.mode == 'election' or args.mode == 'manual'
-        or args.mode == 'supervised' then
-        for _, group in pairs(new_parsed.groups or {}) do
-            for _, rs in pairs(group.replicasets or {}) do
-                for _, inst in pairs(rs.instances or {}) do
-                    if type(inst.database) == 'table'
-                        and inst.database.mode ~= nil then
-                        inst.database.mode = nil
-                        -- Leave an empty `database` table behind only
-                        -- if it still holds OTHER fields; otherwise
-                        -- drop the empty husk so the YAML stays clean.
-                        if next(inst.database) == nil then
-                            inst.database = nil
-                        end
+-- Native `replication.failover: election | manual | supervised` is
+-- mutually exclusive with per-instance `database.mode`; strip it
+-- cluster-wide so the commit lands. The stripped intent is preserved in
+-- `prior_leader` and re-materialised as rs.leader / database.mode later.
+local function strip_instance_database_mode(new_parsed, mode)
+    if mode ~= 'election' and mode ~= 'manual' and mode ~= 'supervised' then
+        return
+    end
+    for _, group in pairs(new_parsed.groups or {}) do
+        for _, rs in pairs(group.replicasets or {}) do
+            for _, inst in pairs(rs.instances or {}) do
+                if type(inst.database) == 'table'
+                    and inst.database.mode ~= nil then
+                    inst.database.mode = nil
+                    -- Drop an empty `database` husk so the YAML stays clean.
+                    if next(inst.database) == nil then
+                        inst.database = nil
                     end
                 end
             end
         end
     end
+end
 
-    -- Schema rule (cross_validate in config_store/schema.lua):
-    -- `replicasets.<rs>.leader` MUST NOT be set when
-    -- `replication.failover = election | supervised | off`. These
-    -- modes drive leadership through other channels (raft / our
-    -- community agent / per-instance database.mode) and reject a
-    -- contradicting static `leader`. Strip it like `database.mode`.
-    if args.mode == 'election' or args.mode == 'off'
-        or args.mode == 'supervised' then
-        for _, group in pairs(new_parsed.groups or {}) do
-            for _, rs in pairs(group.replicasets or {}) do
-                if rs.leader ~= nil then rs.leader = nil end
-            end
+-- Schema rule: `replicasets.<rs>.leader` MUST NOT be set under
+-- election | off | supervised (leadership is driven by raft / the
+-- agent / per-instance database.mode). Strip it like database.mode.
+local function strip_replicaset_leaders(new_parsed, mode)
+    if mode ~= 'election' and mode ~= 'off' and mode ~= 'supervised' then
+        return
+    end
+    for _, group in pairs(new_parsed.groups or {}) do
+        for _, rs in pairs(group.replicasets or {}) do
+            if rs.leader ~= nil then rs.leader = nil end
         end
     end
+end
 
-    -- Manual mode requires `replicasets.<rs>.leader` to be set —
-    -- otherwise no instance becomes RW and the next sync write
-    -- (audit log on the current commit!) deadlocks on a queue
-    -- without an owner. When the operator switches off → manual
-    -- without naming a leader, pre-populate each replicaset's
-    -- `leader`. Resolution order:
-    --   1. `prior_leader` — the leader the operator selected in
-    --      the previous failover mode (RW instance under off/
-    --      supervised, or rs.leader under manual). This is what
-    --      makes mode toggles round-trip without losing the
-    --      writer.
-    --   2. agent's last appointment in etcd.
-    --   3. self if this instance currently owns the synchro queue.
-    --   4. first alphabetical alias — deterministic placeholder.
-    if args.mode == 'manual' then
-        local self_alias
-        if box.info and box.info.name then self_alias = box.info.name end
-        local self_is_writer = box.info ~= nil and box.info.ro == false
-        local agent_last
-        do
-            local ok_agent, agent = pcall(require, 'webui.failover.agent')
-            if ok_agent then
-                local s = ok_agent and agent.status() or nil
-                if type(s) == 'table' and type(s.appointments) == 'table' then
-                    agent_last = {}
-                    for _, a in ipairs(s.appointments) do
-                        if a.leader ~= nil then
-                            agent_last[a.replicaset] = a.leader
-                        end
+-- Manual mode requires `replicasets.<rs>.leader` to be set — otherwise
+-- no instance becomes RW and the next sync write deadlocks on a queue
+-- without an owner. When entering manual without an explicit leader,
+-- pre-populate each replicaset's leader (prior_leader → agent
+-- appointment → self-if-writer → first alphabetical alias).
+local function assign_manual_leaders(new_parsed, prior_leader, mode)
+    if mode ~= 'manual' then return end
+    local self_alias
+    if box.info and box.info.name then self_alias = box.info.name end
+    local self_is_writer = box.info ~= nil and box.info.ro == false
+    local agent_last
+    do
+        local ok_agent, agent = pcall(require, 'webui.failover.agent')
+        if ok_agent then
+            local s = ok_agent and agent.status() or nil
+            if type(s) == 'table' and type(s.appointments) == 'table' then
+                agent_last = {}
+                for _, a in ipairs(s.appointments) do
+                    if a.leader ~= nil then
+                        agent_last[a.replicaset] = a.leader
                     end
                 end
             end
         end
-        for _, group in pairs(new_parsed.groups or {}) do
-            for rs_name, rs in pairs(group.replicasets or {}) do
-                if rs.leader == nil then
-                    rs.leader = pick_manual_leader(rs, rs_name,
-                        prior_leader, agent_last,
-                        self_alias, self_is_writer)
-                end
+    end
+    for _, group in pairs(new_parsed.groups or {}) do
+        for rs_name, rs in pairs(group.replicasets or {}) do
+            if rs.leader == nil then
+                rs.leader = pick_manual_leader(rs, rs_name,
+                    prior_leader, agent_last,
+                    self_alias, self_is_writer)
             end
         end
     end
+end
 
-    -- Off / supervised re-materialise the prior leader as
-    -- `database.mode: rw` so the writer survives the transition
-    -- OUT of manual (where `database.mode` was stripped on entry).
-    -- Without this re-emit a manual → off toggle lands with no
-    -- RW instance and the next sync write hits "synchro queue
-    -- doesn't belong to any instance".
-    if args.mode == 'off' or args.mode == 'supervised' then
-        restore_prior_leader_rw(new_parsed, prior_leader)
-    end
-
-    -- Apply the rest of the knobs only when explicitly supplied —
-    -- so unset fields keep their current cluster values.
+-- Apply the optional replication knobs only when explicitly supplied —
+-- unset fields keep their current cluster values.
+local function apply_replication_params(new_parsed, params)
     if params.synchro_quorum ~= nil then
         new_parsed.replication.synchro_quorum = params.synchro_quorum
     end
@@ -1298,6 +1233,138 @@ function M.mutation_set_failover_mode(root, args)
     if params.election_fencing_mode ~= nil then
         new_parsed.replication.election_fencing_mode = params.election_fencing_mode
     end
+end
+
+-- Off/election: cfg:reload() flips read_only on the demoted peer but
+-- leaves the synchro queue owned by the old primary, so any new write
+-- hangs. Drive box.ctl.demote() on whichever peer still owns its own
+-- queue (self first, then foreign peers). Best-effort + bounded.
+local function demote_old_queue_owner(mode)
+    if mode ~= 'off' and mode ~= 'election' then return end
+    local rpc_ok, rpc = pcall(require, 'webui.cluster.rpc')
+    local self_alias
+    if box.info and box.info.name then self_alias = box.info.name end
+    local demote_expr = [[
+        if box.info.synchro.queue.owner == box.info.id then
+            pcall(function() box.ctl.demote() end)
+            return { demoted = true }
+        end
+        return { demoted = false }
+    ]]
+    do
+        local ok_info = rawget(_G, 'box') ~= nil and box.info ~= nil
+        if ok_info and box.info.synchro
+            and box.info.synchro.queue.owner == box.info.id then
+            pcall(function() box.ctl.demote() end)
+        end
+    end
+    if rpc_ok then
+        local ok_peers, peers = pcall(require, 'webui.cluster.peers')
+        if ok_peers then
+            local foreign = {}
+            for name in pairs(peers.list() or {}) do
+                if name ~= self_alias then table.insert(foreign, name) end
+            end
+            if #foreign > 0 then
+                pcall(rpc.map_eval, demote_expr, {},
+                    { timeout = 5, peers = foreign })
+            end
+        end
+    end
+end
+
+-- Drive the queue handoff (cfg{read_only=false} + box.ctl.promote) on
+-- the new leader, which cfg:reload() does NOT do for non-election modes
+-- (see box_cfg.lua:1208-1212). manual → each rs.leader; off/supervised
+-- → the re-emitted prior_leader; election → raft owns the term (no-op).
+local function promote_new_queue_owner(mode, new_parsed, prior_leader)
+    if mode == 'manual' then
+        for _, group in pairs(new_parsed.groups or {}) do
+            for _, rs in pairs(group.replicasets or {}) do
+                if type(rs.leader) == 'string' and rs.leader ~= '' then
+                    promote_module.take_queue_on(rs.leader)
+                end
+            end
+        end
+    elseif mode == 'off' or mode == 'supervised' then
+        for _, group in pairs(new_parsed.groups or {}) do
+            for rs_name, rs in pairs(group.replicasets or {}) do
+                local leader_alias = prior_leader[rs_name]
+                if leader_alias and rs.instances
+                    and rs.instances[leader_alias] ~= nil then
+                    promote_module.take_queue_on(leader_alias)
+                end
+            end
+        end
+    end
+end
+
+-- Wait (bounded 8s, 250ms poll) for the cluster to converge on a leader
+-- so the SPA doesn't see a transient "no leader" right after Apply.
+local function wait_for_leader_convergence()
+    local ok_state, cluster_state = pcall(require, 'webui.cluster.state')
+    if ok_state then
+        local fiber = require('fiber')
+        local deadline = fiber.time() + 8
+        while fiber.time() < deadline do
+            local leader = cluster_state.find_leader()
+            if leader ~= nil then break end
+            fiber.sleep(0.25)
+        end
+    end
+end
+
+-- Re-exported for unit testing of the pure YAML transformation.
+M._build_failover_repl_config = build_failover_repl_config
+M._strip_instance_database_mode = strip_instance_database_mode
+M._strip_replicaset_leaders = strip_replicaset_leaders
+M._apply_replication_params = apply_replication_params
+
+function M.mutation_set_failover_mode(root, args)
+    require_role(root, 'setFailoverMode')
+    args = args or {}
+    if type(args.mode) ~= 'string' or args.mode == '' then
+        error('VALIDATION_ERROR: mode is required')
+    end
+
+    local params = {}
+    if args.params ~= nil then
+        params = decode_json_input('params', args.params)
+    end
+
+    local parsed, current_yaml, current_revision = load_parsed_yaml()
+
+    local v = validate_failover_params(args.mode, params, count_instances(parsed))
+    if v ~= nil then error(v.code .. ': ' .. v.message) end
+
+    -- Compose the new YAML by deep-copying parsed and patching the
+    -- relevant keys. topology_edit does not model these top-level
+    -- knobs yet — handle them directly here. The byte-equality
+    -- guard inside twophase.prepare still catches no-ops.
+    local new_parsed = topology_edit._deep_copy(parsed)
+    new_parsed.replication = new_parsed.replication or {}
+
+    build_failover_repl_config(new_parsed, args.mode, params)
+
+    -- Capture the operator's current leader BEFORE the strip blocks
+    -- wipe per-instance `database.mode` / per-replicaset `rs.leader`.
+    -- Read from `parsed`, not `new_parsed`, so the agent toggle above
+    -- cannot perturb the snapshot. Reused to carry leadership intent
+    -- across the manual / off / supervised transitions.
+    local prior_leader = snapshot_prior_leader(parsed)
+
+    strip_instance_database_mode(new_parsed, args.mode)
+    strip_replicaset_leaders(new_parsed, args.mode)
+    assign_manual_leaders(new_parsed, prior_leader, args.mode)
+
+    -- Off / supervised re-materialise the prior leader as
+    -- `database.mode: rw` so the writer survives the transition OUT of
+    -- manual (where `database.mode` was stripped on entry).
+    if args.mode == 'off' or args.mode == 'supervised' then
+        restore_prior_leader_rw(new_parsed, prior_leader)
+    end
+
+    apply_replication_params(new_parsed, params)
 
     local new_yaml = yaml.encode(new_parsed)
 
@@ -1367,134 +1434,20 @@ function M.mutation_set_failover_mode(root, args)
     end)
     local reload_outcome = fan_out_reload()
 
-    -- Manual mode handoff: Tarantool 3.x sets `ro=false` on the
-    -- named leader during `config:reload()` but does NOT call
-    -- `box.ctl.promote()` automatically — the synchro queue
-    -- stays without an owner, so the very next sync write (our
-    -- own audit row of *this* mutation) deadlocks on
-    -- "queue doesn't belong to any instance". Drive the promote
-    -- explicitly from here: walk the assembled YAML for each
-    -- replicaset that names a leader, find the matching peer,
-    -- call promote via net.box. Best-effort — failures land in
-    -- the message so the operator can re-run.
-    -- When switching OUT of a mode that had an explicit primary,
-    -- Tarantool 3.x cfg:reload() flips `box.cfg.read_only=true`
-    -- on the demoted peer but does NOT call `box.ctl.demote()`.
-    -- The synchro queue stays owned by the old primary; any new
-    -- write hangs on "queue doesn't belong to any instance"
-    -- because the now-RO owner refuses to ack. Mirror the
-    -- Cartridge pattern: drive box.ctl.demote() on the previous
-    -- queue owner BEFORE the agent/raft can pick a fresh leader.
-    -- Best-effort + bounded: a failed demote is non-fatal (the
-    -- subsequent promote / agent appointment will overwrite).
-    if args.mode == 'off' or args.mode == 'election' then
-        local rpc_ok, rpc = pcall(require, 'webui.cluster.rpc')
-        local self_alias
-        if box.info and box.info.name then self_alias = box.info.name end
-        -- Walk every peer's box.info.synchro.queue.owner. The
-        -- owner is the replica id, which we cannot map to an
-        -- alias from here without the peer pool. Easiest path:
-        -- ask every peer to demote IF it currently owns its own
-        -- queue (i.e. owner == box.info.id).
-        -- Drop the `not box.info.ro` guard: cfg:reload() that
-        -- triggered this transition already set ro=true on the
-        -- former primary BEFORE we got here, but it left the
-        -- synchro queue ownership in place. Demote regardless of
-        -- the ro flag — `box.ctl.demote()` is the only call that
-        -- drains the limbo and releases queue ownership. pcall
-        -- swallows the harmless "already demoted" no-op.
-        local demote_expr = [[
-            if box.info.synchro.queue.owner == box.info.id then
-                pcall(function() box.ctl.demote() end)
-                return { demoted = true }
-            end
-            return { demoted = false }
-        ]]
-        -- Self first (we are the GraphQL handler peer).
-        do
-            local ok_info = rawget(_G, 'box') ~= nil and box.info ~= nil
-            if ok_info and box.info.synchro
-                and box.info.synchro.queue.owner == box.info.id then
-                pcall(function() box.ctl.demote() end)
-            end
-        end
-        if rpc_ok then
-            local ok_peers, peers = pcall(require, 'webui.cluster.peers')
-            if ok_peers then
-                local foreign = {}
-                for name in pairs(peers.list() or {}) do
-                    if name ~= self_alias then table.insert(foreign, name) end
-                end
-                if #foreign > 0 then
-                    pcall(rpc.map_eval, demote_expr, {},
-                        { timeout = 5, peers = foreign })
-                end
-            end
-        end
-    end
+    -- Cartridge-style synchro-queue handoff: cfg:reload() flips
+    -- read_only per the new YAML but does NOT move queue ownership
+    -- (box_cfg.lua:1208-1212 leaves it to the orchestrator for every
+    -- mode except election). Demote the old owner (off/election) and
+    -- promote the new one (manual/off/supervised); election leaves the
+    -- fresh term to raft. Both are best-effort + bounded.
+    demote_old_queue_owner(args.mode)
+    promote_new_queue_owner(args.mode, new_parsed, prior_leader)
 
-    -- Drive the Cartridge-style queue handoff
-    -- (cfg{read_only=false} + box.ctl.promote()) on the new leader.
-    -- Tarantool 3.x cfg:reload() flips `box.cfg.read_only` based
-    -- on the new YAML but does NOT take the synchro queue — see
-    -- tarantool-3.7.0/src/box/lua/config/applier/box_cfg.lua:1208-1212
-    -- where the authors explicitly leave queue-handoff to the
-    -- orchestrator for every failover mode except `election`. So:
-    --   * manual:       drive promote on each rs.leader.
-    --   * off/supervised: drive promote on `prior_leader` — the
-    --                   instance we just re-emitted `database.mode:
-    --                   rw` for via `restore_prior_leader_rw`. Without
-    --                   this step the YAML has the right RW peer
-    --                   but the queue stays orphaned and the next
-    --                   sync write hangs on "queue doesn't belong
-    --                   to any instance".
-    --   * election:     raft owns the term; do nothing here. The
-    --                   demote block above released the previous
-    --                   owner, which is sufficient for raft to
-    --                   start a fresh round.
-    if args.mode == 'manual' then
-        for _, group in pairs(new_parsed.groups or {}) do
-            for _, rs in pairs(group.replicasets or {}) do
-                if type(rs.leader) == 'string' and rs.leader ~= '' then
-                    promote_module.take_queue_on(rs.leader)
-                end
-            end
-        end
-    elseif args.mode == 'off' or args.mode == 'supervised' then
-        for _, group in pairs(new_parsed.groups or {}) do
-            for rs_name, rs in pairs(group.replicasets or {}) do
-                local leader_alias = prior_leader[rs_name]
-                if leader_alias and rs.instances
-                    and rs.instances[leader_alias] ~= nil then
-                    promote_module.take_queue_on(leader_alias)
-                end
-            end
-        end
-    end
-
-    -- Wait for the cluster to converge on a leader. A mode change
-    -- often demotes the current writer (failover: off → manual
-    -- strips database.mode, every peer becomes RO transiently)
-    -- and the new leader takes a couple of agent/watcher ticks to
-    -- appear. The login endpoint refuses to forward to "no leader"
-    -- so returning success here while find_leader() still returns
-    -- nil makes the SPA show a misleading "[GraphQL] no leader"
-    -- right after a successful Apply. Bounded wait (default 8s) +
-    -- a 250ms poll interval; covers both the supervised path
-    -- (coordinator lease + watcher promote) and the raft path
-    -- (election timeout, 5s default).
-    do
-        local ok_state, cluster_state = pcall(require, 'webui.cluster.state')
-        if ok_state then
-            local fiber = require('fiber')
-            local deadline = fiber.time() + 8
-            while fiber.time() < deadline do
-                local leader = cluster_state.find_leader()
-                if leader ~= nil then break end
-                fiber.sleep(0.25)
-            end
-        end
-    end
+    -- A mode change often demotes the current writer transiently and
+    -- the new leader takes a couple of agent/watcher ticks to appear;
+    -- wait so the SPA doesn't see a misleading "no leader" right after
+    -- a successful Apply.
+    wait_for_leader_convergence()
 
     return {
         prepared_id  = nil,
@@ -1548,6 +1501,198 @@ end
 
 -- setInstanceState(alias, enabled?, electable?) — per-mode action
 -- matrix described in plan/Task 5.7.
+-- Map the (enabled, electable) flags to a raft election_mode:
+-- voter (cannot win), candidate (eligible), or nil when neither flag
+-- was supplied.
+local function compute_new_election_mode(args)
+    if args.enabled == false or args.electable == false then
+        return 'voter'
+    elseif args.enabled == true or args.electable == true then
+        return 'candidate'
+    end
+    return nil
+end
+
+-- Deep-copy the parsed YAML and set the instance's
+-- `replication.election_mode`, returning the encoded YAML. Used for the
+-- raft per-instance electability toggle (topology_edit does not model
+-- election_mode, so we patch the instance spec directly).
+local function patch_instance_election_mode(parsed, gname, rsname, alias, em)
+    local new_parsed = topology_edit._deep_copy(parsed)
+    local inst = new_parsed.groups[gname].replicasets[rsname].instances[alias]
+    inst.replication = inst.replication or {}
+    inst.replication.election_mode = em
+    return yaml.encode(new_parsed)
+end
+
+-- supervised / off-with-agent: toggle the etcd-backed disabled set so
+-- the agent picks the change up on its next coordinator tick (< 1s).
+-- electable is a no-op here (all healthy non-disabled candidates are
+-- electable). Returns the resolver result.
+local function apply_agent_disabled_state(root, args, rs, rsname, mode)
+    local action_taken = {}
+    if args.enabled ~= nil then
+        local client = etcd_client.get_client()
+        if client == nil then
+            error('UNAVAILABLE: etcd unavailable for disabled-set update')
+        end
+        local disabled_mod = require('webui.failover.disabled')
+        if args.enabled == false then
+            local _, derr = disabled_mod.set(client, args.alias,
+                root and root.user)
+            if derr ~= nil then
+                error('UNAVAILABLE: disabled.set failed: ' .. tostring(derr))
+            end
+            table.insert(action_taken, 'disabled in agent score map')
+            -- If the disabled alias is the current synchro-queue owner,
+            -- the operator must promote someone else separately.
+            if rs.leader == args.alias then
+                table.insert(action_taken,
+                    'NOTE: alias is the configured leader — promote '
+                    .. 'another instance to clear the queue owner')
+            end
+        else
+            local _, derr = disabled_mod.clear(client, args.alias)
+            if derr ~= nil then
+                error('UNAVAILABLE: disabled.clear failed: ' .. tostring(derr))
+            end
+            table.insert(action_taken, 'enabled in agent score map')
+        end
+    end
+    if args.electable ~= nil then
+        table.insert(action_taken,
+            'NOTE: electable flag is a no-op in supervised mode '
+            .. '(all healthy non-disabled candidates are electable)')
+    end
+    pcall(function()
+        audit.record({
+            user       = root and root.user,
+            action     = 'cluster.set_instance_state',
+            scope      = 'replicaset:' .. tostring(rsname),
+            payload    = {
+                alias = args.alias, mode = mode,
+                enabled = args.enabled, electable = args.electable,
+                action_taken = action_taken,
+            },
+            request_id = root and root.request_id,
+        })
+    end)
+    return {
+        prepared_id  = nil,
+        diff_summary = action_taken,
+        applied      = true,
+        revision     = 0,
+        message      = string.format(
+            'set_instance_state on %s: %s',
+            args.alias, table.concat(action_taken, '; ')),
+    }
+end
+
+-- `off` without an agent: enable/disable maps to database.mode rw/ro
+-- via the shared editTopology core (audit + reload behave identically).
+local function apply_off_no_agent(root, args)
+    if args.enabled == false then
+        return edit_topology_core(root, {
+            servers = { { alias = args.alias, mode = 'ro' } },
+        }, true, 'cluster.set_instance_state')
+    end
+    if args.enabled == true then
+        return edit_topology_core(root, {
+            servers = { { alias = args.alias, mode = 'rw' } },
+        }, true, 'cluster.set_instance_state')
+    end
+    error('VALIDATION_ERROR: electable does not apply in off+no-agent mode')
+end
+
+-- `manual`: there is no per-instance disable; refuse to disable the
+-- current leader and otherwise point the operator at promote/demote.
+local function apply_manual_state(args, rs)
+    if rs.leader == args.alias and args.enabled == false then
+        error('FORBIDDEN: refusing to disable manual-mode leader; '
+            .. 'promote another instance first')
+    end
+    return {
+        prepared_id  = nil,
+        diff_summary = {},
+        applied      = false,
+        revision     = 0,
+        message      = 'manual mode has no per-instance disable; '
+            .. 'use promote/demote to move the leader instead.',
+    }
+end
+
+-- `election` (raft): toggle the instance's election_mode through a 2PC
+-- prepare/commit on the patched YAML, then fan out a reload.
+local function apply_election_mode_change(root, args, parsed,
+                                          current_yaml, gname, rsname, mode)
+    local new_election_mode = compute_new_election_mode(args)
+    if new_election_mode == nil then
+        error('VALIDATION_ERROR: pass enabled or electable for election mode')
+    end
+    local inst = parsed.groups[gname].replicasets[rsname].instances[args.alias]
+    local current_em
+    if type(inst) == 'table' and type(inst.replication) == 'table' then
+        current_em = inst.replication.election_mode
+    end
+    if current_em == new_election_mode then
+        return {
+            prepared_id  = nil,
+            diff_summary = {},
+            applied      = false,
+            revision     = 0,
+            message      = 'election_mode already set to ' .. new_election_mode,
+        }
+    end
+    local new_yaml = patch_instance_election_mode(parsed, gname, rsname,
+        args.alias, new_election_mode)
+    local prepared, prepare_errs = twophase.prepare({
+        yaml         = new_yaml,
+        user         = root and root.user,
+        current_yaml = current_yaml,
+    })
+    if prepared == nil then
+        local first = prepare_errs and prepare_errs[1] or {}
+        error('PREPARE_FAILED: ' .. tostring(first.message or '?'))
+    end
+    local client = etcd_client.get_client()
+    if client == nil then
+        twophase.abort(prepared.prepared_id)
+        error('UNAVAILABLE: etcd unavailable')
+    end
+    local commit_result, commit_err = twophase.commit(prepared.prepared_id, {
+        etcd   = client,
+        action = 'cluster.set_instance_state',
+    })
+    if commit_err then
+        error('COMMIT_FAILED: ' .. tostring(commit_err))
+    end
+    pcall(function()
+        audit.record({
+            user       = root and root.user,
+            action     = 'cluster.set_instance_state',
+            scope      = 'replicaset:' .. tostring(rsname),
+            payload    = {
+                alias = args.alias, mode = mode,
+                election_mode = new_election_mode,
+            },
+            request_id = root and root.request_id,
+        })
+    end)
+    local reload_outcome = fan_out_reload()
+    return {
+        prepared_id  = nil,
+        diff_summary = { 'change /election_mode → ' .. new_election_mode },
+        applied      = true,
+        revision     = (commit_result and commit_result.revision) or 0,
+        message      = 'election_mode set to ' .. new_election_mode
+            .. reload_outcome,
+    }
+end
+
+-- Re-exported for unit testing of the pure election-mode transforms.
+M._compute_new_election_mode = compute_new_election_mode
+M._patch_instance_election_mode = patch_instance_election_mode
+
 function M.mutation_set_instance_state(root, args)
     require_role(root, 'setInstanceState')
     args = args or {}
@@ -1558,213 +1703,24 @@ function M.mutation_set_instance_state(root, args)
         error('VALIDATION_ERROR: at least one of enabled/electable required')
     end
 
-    local current_yaml, read_err = read_current_yaml()
-    if current_yaml == nil then
-        error('UNAVAILABLE: ' .. read_err)
-    end
-    local ok, parsed = pcall(yaml.decode, current_yaml)
-    if not ok or type(parsed) ~= 'table' then
-        error('INVALID_CURRENT_CONFIG: failed to parse live YAML')
-    end
+    local parsed, current_yaml = load_parsed_yaml()
     local gname, rsname, rs = locate_alias(parsed, args.alias)
     if rsname == nil then
         error('NOT_FOUND: alias ' .. args.alias .. ' is not in cluster YAML')
     end
     local mode = classify_failover_mode(parsed)
-    local action_taken = {}
 
     -- The supervised-OS path is the most common one in our setup:
-    -- failover off + agent on. Use the etcd-backed disabled set so
-    -- the agent picks it up on its next coordinator tick (< 1s).
+    -- failover off + agent on.
     if mode == 'off_with_agent' or mode == 'supervised' then
-        if args.enabled ~= nil then
-            local client = etcd_client.get_client()
-            if client == nil then
-                error('UNAVAILABLE: etcd unavailable for disabled-set update')
-            end
-            local disabled_mod = require('webui.failover.disabled')
-            if args.enabled == false then
-                local _, derr = disabled_mod.set(client, args.alias,
-                    root and root.user)
-                if derr ~= nil then
-                    error('UNAVAILABLE: disabled.set failed: ' .. tostring(derr))
-                end
-                table.insert(action_taken, 'disabled in agent score map')
-                -- If the disabled alias is the current synchro-queue
-                -- owner, the operator needs to promote someone else
-                -- separately — we surface that in the message.
-                if rs.leader == args.alias then
-                    table.insert(action_taken,
-                        'NOTE: alias is the configured leader — promote '
-                        .. 'another instance to clear the queue owner')
-                end
-            else
-                local _, derr = disabled_mod.clear(client, args.alias)
-                if derr ~= nil then
-                    error('UNAVAILABLE: disabled.clear failed: ' .. tostring(derr))
-                end
-                table.insert(action_taken, 'enabled in agent score map')
-            end
-        end
-        if args.electable ~= nil then
-            table.insert(action_taken,
-                'NOTE: electable flag is a no-op in supervised mode '
-                .. '(all healthy non-disabled candidates are electable)')
-        end
-        pcall(function()
-            audit.record({
-                user       = root and root.user,
-                action     = 'cluster.set_instance_state',
-                scope      = 'replicaset:' .. tostring(rsname),
-                payload    = {
-                    alias = args.alias, mode = mode,
-                    enabled = args.enabled, electable = args.electable,
-                    action_taken = action_taken,
-                },
-                request_id = root and root.request_id,
-            })
-        end)
-        return {
-            prepared_id  = nil,
-            diff_summary = action_taken,
-            applied      = true,
-            revision     = 0,
-            message      = string.format(
-                'set_instance_state on %s: %s',
-                args.alias, table.concat(action_taken, '; ')),
-        }
-    end
-
-    -- `off` without agent: mode=ro on the instance via editTopology.
-    if mode == 'off' then
-        if args.enabled == false then
-            return edit_topology_core(root, {
-                servers = { { alias = args.alias, mode = 'ro' } },
-            }, true, 'cluster.set_instance_state')
-        end
-        if args.enabled == true then
-            return edit_topology_core(root, {
-                servers = { { alias = args.alias, mode = 'rw' } },
-            }, true, 'cluster.set_instance_state')
-        end
-        error('VALIDATION_ERROR: electable does not apply in off+no-agent mode')
-    end
-
-    -- `manual`: refuse to disable the current leader.
-    if mode == 'manual' then
-        if rs.leader == args.alias and args.enabled == false then
-            error('FORBIDDEN: refusing to disable manual-mode leader; '
-                .. 'promote another instance first')
-        end
-        return {
-            prepared_id  = nil,
-            diff_summary = {},
-            applied      = false,
-            revision     = 0,
-            message      = 'manual mode has no per-instance disable; '
-                .. 'use promote/demote to move the leader instead.',
-        }
-    end
-
-    -- `election` (raft): toggle election_mode at the instance level.
-    if mode == 'election' then
-        local new_election_mode
-        if args.enabled == false or args.electable == false then
-            new_election_mode = 'voter'
-        elseif args.enabled == true or args.electable == true then
-            new_election_mode = 'candidate'
-        end
-        if new_election_mode == nil then
-            error('VALIDATION_ERROR: pass enabled or electable for election mode')
-        end
-        -- Use editTopology with a server-edit so the audit pipeline
-        -- and reload fan-out behave identically.
-        local server_edit = {
-            alias = args.alias,
-            -- the topology_edit module ignores unknown server-edit
-            -- fields; carry election_mode through a labels-like
-            -- shim so we still mutate the YAML directly here.
-        }
-        -- Direct YAML mutation — topology_edit doesn't model raft
-        -- election_mode yet; do an editTopology server-edit on
-        -- labels first as a dry sentinel, then patch the YAML in
-        -- a separate path. Simpler: edit YAML, validate, propose +
-        -- commit via the same core helper.
-        -- (Falling through to a direct edit_topology_core call so
-        -- the audit + reload behave consistently across modes.)
-        local _ = server_edit
-        local current_election_mode = parsed.groups[gname].replicasets[rsname]
-            .instances[args.alias]
-        local current_em
-        if type(current_election_mode) == 'table'
-            and type(current_election_mode.replication) == 'table' then
-            current_em = current_election_mode.replication.election_mode
-        end
-        if current_em == new_election_mode then
-            return {
-                prepared_id  = nil,
-                diff_summary = {},
-                applied      = false,
-                revision     = 0,
-                message      = 'election_mode already set to '
-                    .. new_election_mode,
-            }
-        end
-        -- Compose a custom replicaset edit that touches the
-        -- instance spec directly. topology_edit's join_instances
-        -- only adds NEW aliases, so we cannot use it for an
-        -- in-place election_mode tweak — handle this case via the
-        -- raw config editor (a thin pass through twophase.prepare).
-        local new_parsed = topology_edit._deep_copy(parsed)
-        new_parsed.groups[gname].replicasets[rsname]
-            .instances[args.alias].replication =
-            new_parsed.groups[gname].replicasets[rsname]
-                .instances[args.alias].replication or {}
-        new_parsed.groups[gname].replicasets[rsname]
-            .instances[args.alias].replication.election_mode = new_election_mode
-        local new_yaml = yaml.encode(new_parsed)
-        local prepared, prepare_errs = twophase.prepare({
-            yaml         = new_yaml,
-            user         = root and root.user,
-            current_yaml = current_yaml,
-        })
-        if prepared == nil then
-            local first = prepare_errs and prepare_errs[1] or {}
-            error('PREPARE_FAILED: ' .. tostring(first.message or '?'))
-        end
-        local client = etcd_client.get_client()
-        if client == nil then
-            twophase.abort(prepared.prepared_id)
-            error('UNAVAILABLE: etcd unavailable')
-        end
-        local commit_result, commit_err = twophase.commit(prepared.prepared_id, {
-            etcd   = client,
-            action = 'cluster.set_instance_state',
-        })
-        if commit_err then
-            error('COMMIT_FAILED: ' .. tostring(commit_err))
-        end
-        pcall(function()
-            audit.record({
-                user       = root and root.user,
-                action     = 'cluster.set_instance_state',
-                scope      = 'replicaset:' .. tostring(rsname),
-                payload    = {
-                    alias = args.alias, mode = mode,
-                    election_mode = new_election_mode,
-                },
-                request_id = root and root.request_id,
-            })
-        end)
-        local reload_outcome = fan_out_reload()
-        return {
-            prepared_id  = nil,
-            diff_summary = { 'change /election_mode → ' .. new_election_mode },
-            applied      = true,
-            revision     = (commit_result and commit_result.revision) or 0,
-            message      = 'election_mode set to ' .. new_election_mode
-                .. reload_outcome,
-        }
+        return apply_agent_disabled_state(root, args, rs, rsname, mode)
+    elseif mode == 'off' then
+        return apply_off_no_agent(root, args)
+    elseif mode == 'manual' then
+        return apply_manual_state(args, rs)
+    elseif mode == 'election' then
+        return apply_election_mode_change(root, args, parsed,
+            current_yaml, gname, rsname, mode)
     end
 
     error('VALIDATION_ERROR: unsupported failover mode: ' .. tostring(mode))

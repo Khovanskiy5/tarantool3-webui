@@ -111,6 +111,92 @@ local function build_envelope(opts)
     return table.concat(headers, CRLF) .. CRLF .. CRLF .. body
 end
 
+-- Each protocol step sends one (or a few) commands, checks the
+-- response codes, and returns `true` on success or `(nil, label,
+-- detail)` on failure. The caller (`M.send`) owns the socket lifecycle
+-- and turns a failure into a `fail(label, detail)` (QUIT + close).
+
+local function smtp_ehlo(s, timeout)
+    if not send_line(s, 'EHLO webui.local', timeout) then
+        return nil, 'SMTP_EHLO', 'write failed'
+    end
+    local _, err = expect(s, { 250 }, timeout, 'EHLO')
+    if err then return nil, 'SMTP_EHLO', err end
+    return true
+end
+
+local function smtp_starttls(s, timeout)
+    if not send_line(s, 'STARTTLS', timeout) then
+        return nil, 'SMTP_STARTTLS', 'write failed'
+    end
+    local _, err = expect(s, { 220 }, timeout, 'STARTTLS')
+    if err then return nil, 'SMTP_STARTTLS', err end
+    if type(s.sslconnect) ~= 'function' then
+        return nil, 'SMTP_STARTTLS',
+            'sslconnect unavailable in this Tarantool build'
+    end
+    local ok_tls = s:sslconnect()
+    if not ok_tls then
+        return nil, 'SMTP_STARTTLS', 'TLS handshake failed'
+    end
+    if not send_line(s, 'EHLO webui.local', timeout) then
+        return nil, 'SMTP_EHLO_TLS', 'write failed'
+    end
+    _, err = expect(s, { 250 }, timeout, 'EHLO/TLS')
+    if err then return nil, 'SMTP_EHLO_TLS', err end
+    return true
+end
+
+local function smtp_auth(s, timeout, username, password)
+    if not send_line(s, 'AUTH LOGIN', timeout) then
+        return nil, 'SMTP_AUTH', 'write failed'
+    end
+    local _, err = expect(s, { 334 }, timeout, 'AUTH start')
+    if err then return nil, 'SMTP_AUTH', err end
+    send_line(s, digest.base64_encode(username, { nowrap = true }), timeout)
+    _, err = expect(s, { 334 }, timeout, 'AUTH user')
+    if err then return nil, 'SMTP_AUTH', err end
+    send_line(s, digest.base64_encode(password, { nowrap = true }), timeout)
+    _, err = expect(s, { 235 }, timeout, 'AUTH password')
+    if err then return nil, 'SMTP_AUTH', err end
+    return true
+end
+
+local function smtp_mail_from(s, timeout, from)
+    if not send_line(s, 'MAIL FROM:<' .. from .. '>', timeout) then
+        return nil, 'SMTP_MAIL', 'write failed'
+    end
+    local _, err = expect(s, { 250 }, timeout, 'MAIL FROM')
+    if err then return nil, 'SMTP_MAIL', err end
+    return true
+end
+
+local function smtp_rcpt_to(s, timeout, to_list)
+    for _, rcpt in ipairs(to_list) do
+        if not send_line(s, 'RCPT TO:<' .. rcpt .. '>', timeout) then
+            return nil, 'SMTP_RCPT', 'write failed'
+        end
+        local _, err = expect(s, { 250, 251 }, timeout, 'RCPT TO ' .. rcpt)
+        if err then return nil, 'SMTP_RCPT', err end
+    end
+    return true
+end
+
+local function smtp_data(s, timeout, opts)
+    if not send_line(s, 'DATA', timeout) then
+        return nil, 'SMTP_DATA', 'write failed'
+    end
+    local _, err = expect(s, { 354 }, timeout, 'DATA start')
+    if err then return nil, 'SMTP_DATA', err end
+    local envelope = build_envelope(opts)
+    if not send_line(s, envelope .. CRLF .. '.', timeout) then
+        return nil, 'SMTP_DATA', 'envelope write failed'
+    end
+    _, err = expect(s, { 250 }, timeout, 'DATA end')
+    if err then return nil, 'SMTP_DATA', err end
+    return true
+end
+
 function M.send(opts)
     opts = opts or {}
     if type(opts.host) ~= 'string' or #opts.host == 0 then
@@ -136,73 +222,28 @@ function M.send(opts)
     local _, err = expect(s, { 220 }, timeout, 'BANNER')
     if err then return fail('SMTP_BANNER', err) end
 
-    if not send_line(s, 'EHLO webui.local', timeout) then
-        return fail('SMTP_EHLO', 'write failed')
-    end
-    _, err = expect(s, { 250 }, timeout, 'EHLO')
-    if err then return fail('SMTP_EHLO', err) end
+    local label, detail
+    _, label, detail = smtp_ehlo(s, timeout)
+    if label then return fail(label, detail) end
 
     if opts.starttls == true then
-        if not send_line(s, 'STARTTLS', timeout) then
-            return fail('SMTP_STARTTLS', 'write failed')
-        end
-        _, err = expect(s, { 220 }, timeout, 'STARTTLS')
-        if err then return fail('SMTP_STARTTLS', err) end
-        if type(s.sslconnect) ~= 'function' then
-            return fail('SMTP_STARTTLS',
-                'sslconnect unavailable in this Tarantool build')
-        end
-        local ok_tls = s:sslconnect()
-        if not ok_tls then
-            return fail('SMTP_STARTTLS', 'TLS handshake failed')
-        end
-        if not send_line(s, 'EHLO webui.local', timeout) then
-            return fail('SMTP_EHLO_TLS', 'write failed')
-        end
-        _, err = expect(s, { 250 }, timeout, 'EHLO/TLS')
-        if err then return fail('SMTP_EHLO_TLS', err) end
+        _, label, detail = smtp_starttls(s, timeout)
+        if label then return fail(label, detail) end
     end
 
     if opts.username and opts.password then
-        if not send_line(s, 'AUTH LOGIN', timeout) then
-            return fail('SMTP_AUTH', 'write failed')
-        end
-        _, err = expect(s, { 334 }, timeout, 'AUTH start')
-        if err then return fail('SMTP_AUTH', err) end
-        send_line(s, digest.base64_encode(opts.username, { nowrap = true }), timeout)
-        _, err = expect(s, { 334 }, timeout, 'AUTH user')
-        if err then return fail('SMTP_AUTH', err) end
-        send_line(s, digest.base64_encode(opts.password, { nowrap = true }), timeout)
-        _, err = expect(s, { 235 }, timeout, 'AUTH password')
-        if err then return fail('SMTP_AUTH', err) end
+        _, label, detail = smtp_auth(s, timeout, opts.username, opts.password)
+        if label then return fail(label, detail) end
     end
 
-    if not send_line(s, 'MAIL FROM:<' .. opts.from .. '>', timeout) then
-        return fail('SMTP_MAIL', 'write failed')
-    end
-    _, err = expect(s, { 250 }, timeout, 'MAIL FROM')
-    if err then return fail('SMTP_MAIL', err) end
+    _, label, detail = smtp_mail_from(s, timeout, opts.from)
+    if label then return fail(label, detail) end
 
-    for _, rcpt in ipairs(opts.to) do
-        if not send_line(s, 'RCPT TO:<' .. rcpt .. '>', timeout) then
-            return fail('SMTP_RCPT', 'write failed')
-        end
-        _, err = expect(s, { 250, 251 }, timeout, 'RCPT TO ' .. rcpt)
-        if err then return fail('SMTP_RCPT', err) end
-    end
+    _, label, detail = smtp_rcpt_to(s, timeout, opts.to)
+    if label then return fail(label, detail) end
 
-    if not send_line(s, 'DATA', timeout) then
-        return fail('SMTP_DATA', 'write failed')
-    end
-    _, err = expect(s, { 354 }, timeout, 'DATA start')
-    if err then return fail('SMTP_DATA', err) end
-
-    local envelope = build_envelope(opts)
-    if not send_line(s, envelope .. CRLF .. '.', timeout) then
-        return fail('SMTP_DATA', 'envelope write failed')
-    end
-    _, err = expect(s, { 250 }, timeout, 'DATA end')
-    if err then return fail('SMTP_DATA', err) end
+    _, label, detail = smtp_data(s, timeout, opts)
+    if label then return fail(label, detail) end
 
     send_line(s, 'QUIT', timeout)
     s:close()
@@ -211,5 +252,11 @@ end
 
 -- Internal helpers re-exported for unit testing.
 M._build_envelope = build_envelope
+M._smtp_ehlo = smtp_ehlo
+M._smtp_starttls = smtp_starttls
+M._smtp_auth = smtp_auth
+M._smtp_mail_from = smtp_mail_from
+M._smtp_rcpt_to = smtp_rcpt_to
+M._smtp_data = smtp_data
 
 return M

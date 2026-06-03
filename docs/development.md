@@ -236,7 +236,14 @@ frontend/src/
 
 ### luacheck
 
-`.luacheckrc` фиксирует LuaJIT stdlib, `max_line_length: 120`, исключения для `bundle.lua` и CLI-скриптов в `tools/`.
+`.luacheckrc` фиксирует LuaJIT stdlib, `max_line_length: 120` и единый
+`max_cyclomatic_complexity: 30` для всего `backend/` и `tools/` — пофайловых
+послаблений порога нет. Сгенерированный `bundle.lua` исключён из проверки.
+
+Порог сложности 30 — инвариант стиля: если функция его превышает, её разбивают
+на хелперы, а не поднимают порог и не подавляют предупреждение инлайном
+(`-- luacheck: ignore 561`). Для функций, скрытых за 2PC/RPC, чистую
+трансформацию выносят в отдельный тестируемый хелпер.
 
 ## Frontend codegen pipeline
 

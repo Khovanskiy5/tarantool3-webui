@@ -33,8 +33,8 @@ local function attached_sequence_name(space_id)
 end
 
 -- Truncate one space, optionally resetting its attached sequence.
--- Pulled out of `space_apply_local` to keep the dispatcher under
--- the per-function cyclomatic-complexity budget.
+-- Pulled out of `space_apply_local` so the dispatcher reads as a flat
+-- list of operations and this branch can be followed on its own.
 local function truncate_one(payload)
     if box.is_in_txn() then
         error('TRUNCATE_INSIDE_TXN: cannot truncate while a ' ..

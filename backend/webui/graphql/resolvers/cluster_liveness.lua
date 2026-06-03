@@ -36,9 +36,8 @@ local function require_role(root, field)
 end
 
 -- Pure: turn a raw etcd kv entry into the GraphQL row, or nil if
--- the value is unparseable. Caller filters nils out. Extracted as
--- module-local so the resolver body stays under the cyclomatic-
--- complexity cap and so the JSON parsing is unit-testable.
+-- the value is unparseable. Caller filters nils out. Kept a separate
+-- module-local so the JSON parsing is unit-testable in isolation.
 function M._decode_entry(kv, now)
     if kv == nil or type(kv.value) ~= 'string' then return nil end
     local ok, parsed = pcall(json.decode, kv.value)

@@ -300,9 +300,234 @@ local function execute(expr, aliases)
     })
 end
 
--- Apply a suggestion. The dispatch is small and explicit because
--- the action space is going to grow with M2/M5/M6 and a registry
--- pattern would just hide the per-type contract.
+-- Split the affected aliases into peers already in split-brain (a
+-- reconnect cycle won't help — Tarantool would just hit the same
+-- conflicting term next applier round, so they escalate straight to
+-- rebootstrap) and the rest, which get the regular reconnect path.
+-- Returns (split_brain_peers set, reconnect_peers list).
+local function classify_split_brain(snapshot, aliases)
+    local split_brain_peers = {}
+    local reconnect_peers = {}
+    for _, alias in ipairs(aliases) do
+        local server = snapshot.servers and snapshot.servers[alias]
+        local broken_reason = nil
+        if server and type(server.replication) == 'table' then
+            for _, entry in pairs(server.replication) do
+                if entry.upstream and entry.upstream.status ~= 'follow' then
+                    broken_reason = entry.upstream.message or ''
+                    break
+                end
+            end
+        end
+        if broken_reason ~= nil
+            and broken_reason:lower():find('split.brain', 1, false) then
+            split_brain_peers[alias] = true
+        else
+            table.insert(reconnect_peers, alias)
+        end
+    end
+    return split_brain_peers, reconnect_peers
+end
+
+-- Reconnect-cycle the non-split-brain peers and tally outcomes.
+-- Late-detected split-brain (applier came back STOPPED with a
+-- split-brain reason after our reconnect) is folded into the passed
+-- `split_brain_peers` set for escalation. Returns (results, recovered,
+-- still_stopped, peer_fail).
+local function run_reconnect(reconnect_peers, split_brain_peers)
+    local results = execute(RESTART_REPLICATION_EXPR, reconnect_peers)
+    local recovered, still_stopped, peer_fail = 0, {}, {}
+    for peer, r in pairs(results or {}) do
+        if not (r and r.ok) then
+            table.insert(peer_fail, peer .. '=' ..
+                tostring(r and r.err or 'unknown'))
+        else
+            local v = r.value or {}
+            if v.recovered == true then
+                recovered = recovered + 1
+            end
+            if type(v.still_stopped) == 'table' and #v.still_stopped > 0 then
+                for _, s in ipairs(v.still_stopped) do
+                    local reason = tostring(s.reason or '')
+                    table.insert(still_stopped, string.format(
+                        '%s upstream id=%s: %s',
+                        peer, tostring(s.id), reason))
+                    if reason:lower():find('split.brain', 1, false) then
+                        split_brain_peers[peer] = true
+                    end
+                end
+            end
+        end
+    end
+    return results, recovered, still_stopped, peer_fail
+end
+
+-- Auto-escalate: any peer reporting "Split-Brain" gets a rebootstrap
+-- kick. The receiver refuses if the peer owns the synchro queue
+-- (Phase 5 contract), so a healthy queue-owner cannot be wiped by
+-- accident. Self-loop: rpc.map_eval excludes the current instance, so
+-- for the self peer we call the global directly so the operator can
+-- recover the very peer they are connected to. Returns (rebooted,
+-- reboot_fail) lists.
+local function escalate_rebootstrap(split_brain_peers)
+    local self_alias
+    if box.info and box.info.name then self_alias = box.info.name end
+    local rebooted, reboot_fail = {}, {}
+    for peer in pairs(split_brain_peers) do
+        if peer == self_alias then
+            local fn = rawget(_G, 'webui_rebootstrap_remote')
+            if type(fn) == 'function' then
+                local ok_self, res_self = pcall(fn)
+                if ok_self and (res_self == nil or res_self.err == nil) then
+                    table.insert(rebooted, peer)
+                else
+                    table.insert(reboot_fail, peer .. '=' ..
+                        tostring((res_self and res_self.err) or res_self or 'self-call failed'))
+                end
+            else
+                table.insert(reboot_fail, peer .. '=no rebootstrap rpc on self')
+            end
+        else
+            local ok_reboot, reboot_res = pcall(rpc.map_eval,
+                'return _G.webui_rebootstrap_remote and ' ..
+                '_G.webui_rebootstrap_remote() or { err = "no rebootstrap rpc" }',
+                {}, { timeout = 5, peers = { peer } })
+            if not ok_reboot or type(reboot_res) ~= 'table'
+                or reboot_res[peer] == nil then
+                table.insert(reboot_fail, peer .. '=transport-err')
+            else
+                local rr = reboot_res[peer]
+                if rr.ok and rr.value and rr.value.err == nil then
+                    table.insert(rebooted, peer)
+                else
+                    table.insert(reboot_fail, peer .. '=' ..
+                        tostring((rr.value and rr.value.err) or rr.err or 'unknown'))
+                end
+            end
+        end
+    end
+    return rebooted, reboot_fail
+end
+
+-- ── Per-suggestion-type handlers ────────────────────────────────────
+-- Uniform signature (resolved, snapshot, opts) → (result, nil) | (nil,
+-- err) so M.apply can dispatch through a table.
+
+local function apply_force_apply(resolved, _snapshot, _opts)
+    local results = execute(FORCE_APPLY_EXPR, resolved.aliases)
+    logger.info('applied force_apply suggestion', {
+        targets = resolved.aliases,
+        unknown = resolved.unknown,
+        count   = #resolved.aliases,
+    })
+    return { ok = true, results = results, unknown = resolved.unknown }
+end
+
+local function apply_restart_replication(resolved, snapshot, _opts)
+    local split_brain_peers, reconnect_peers =
+        classify_split_brain(snapshot, resolved.aliases)
+    local results, recovered, still_stopped, peer_fail =
+        run_reconnect(reconnect_peers, split_brain_peers)
+    local rebooted, reboot_fail = escalate_rebootstrap(split_brain_peers)
+
+    local parts = {}
+    if recovered > 0 then
+        table.insert(parts, string.format('reconnected on %d peer(s)',
+            recovered))
+    end
+    if #rebooted > 0 then
+        table.insert(parts, string.format(
+            'split-brain detected, dispatched rebootstrap to: %s ' ..
+            '(container will restart and bootstrap clean from the leader)',
+            table.concat(rebooted, ', ')))
+    end
+    if #reboot_fail > 0 then
+        table.insert(parts, 'rebootstrap failures: ' ..
+            table.concat(reboot_fail, '; '))
+    end
+    if #still_stopped > 0 and #rebooted == 0 then
+        table.insert(parts, string.format(
+            'STILL STOPPED on %d upstream(s): %s — manual rebootstrap ' ..
+            'required (POST /api/diagnostics/rebootstrap)',
+            #still_stopped, table.concat(still_stopped, '; ')))
+    end
+    if #peer_fail > 0 then
+        table.insert(parts, 'peer error(s): ' ..
+            table.concat(peer_fail, '; '))
+    end
+    if #parts == 0 then
+        table.insert(parts, string.format(
+            'dispatched to %d peer(s)', #resolved.aliases))
+    end
+    logger.info('applied restart_replication suggestion', {
+        targets       = resolved.aliases,
+        unknown       = resolved.unknown,
+        count         = #resolved.aliases,
+        recovered     = recovered,
+        still_stopped = #still_stopped,
+    })
+    return {
+        ok      = #still_stopped == 0 and #peer_fail == 0,
+        message = table.concat(parts, '; '),
+        results = results,
+        unknown = resolved.unknown,
+    }
+end
+
+-- Disable-server suggestion (Task 5.15): mark each affected alias in the
+-- etcd `<prefix>/failover/disabled/<alias>` set via the same
+-- `failover.disabled` module the agent reads each coordinator tick. We
+-- deliberately do NOT go through the GraphQL setInstanceState resolver:
+-- the caller already passed the RBAC gate on applyDisableServer (admin),
+-- and this runs from the suggestions-engine context with no root.user.
+local function apply_disable_server(resolved, _snapshot, opts)
+    local ok_etcd, etcd_client = pcall(require, 'webui.config_store.client')
+    local ok_disabled, disabled = pcall(require, 'webui.failover.disabled')
+    if not (ok_etcd and ok_disabled) then
+        return nil, 'failover.disabled module unavailable'
+    end
+    local client, client_err = etcd_client.get_client()
+    if client == nil then
+        return nil, 'etcd unavailable: ' .. tostring(client_err)
+    end
+    local marked, failed = {}, {}
+    for _, alias in ipairs(resolved.aliases) do
+        local _, derr = disabled.set(client, alias,
+            (opts and opts.user) or 'suggestion-engine')
+        if derr == nil then
+            table.insert(marked, alias)
+        else
+            table.insert(failed, alias .. '=' .. tostring(derr))
+        end
+    end
+    local msg
+    if #failed == 0 then
+        msg = string.format('disabled %d instance(s): %s',
+            #marked, table.concat(marked, ', '))
+    else
+        msg = string.format(
+            'disabled %d instance(s): %s; failed: %s',
+            #marked, table.concat(marked, ', '),
+            table.concat(failed, '; '))
+    end
+    logger.warn('applied disable_server suggestion', {
+        marked = marked, failed = failed, unknown = resolved.unknown,
+    })
+    return {
+        ok      = #failed == 0,
+        message = msg,
+        unknown = resolved.unknown,
+    }
+end
+
+-- Apply a suggestion. The handler contract is uniform, so dispatch is a
+-- table keyed by suggestion type; an unknown type is "not implemented".
+local HANDLERS = {
+    [M.TYPES.FORCE_APPLY]         = apply_force_apply,
+    [M.TYPES.RESTART_REPLICATION] = apply_restart_replication,
+    [M.TYPES.DISABLE_SERVER]      = apply_disable_server,
+}
+
 function M.apply(type_, payload, opts)
     checks('string', '?table', '?table')
     opts = opts or {}
@@ -310,209 +535,13 @@ function M.apply(type_, payload, opts)
     local snapshot = opts.snapshot or state.snapshot()
     local target_uuids = payload.instance_uuids or payload.uuids or {}
     local resolved = M.resolve_targets(snapshot, target_uuids)
-    if type_ == M.TYPES.FORCE_APPLY then
-        local results = execute(FORCE_APPLY_EXPR, resolved.aliases)
-        logger.info('applied force_apply suggestion', {
-            targets = resolved.aliases,
-            unknown = resolved.unknown,
-            count   = #resolved.aliases,
-        })
-        return { ok = true, results = results, unknown = resolved.unknown }
-    elseif type_ == M.TYPES.RESTART_REPLICATION then
-        -- Decision up-front: if the snapshot says the affected
-        -- upstreams are in split-brain right now, a reconnect
-        -- cycle won't fix anything — Tarantool would just hit
-        -- the same conflicting term on the next applier round.
-        -- We escalate straight to rebootstrap on those peers.
-        -- The non-split-brain peers still get the regular
-        -- reconnect path.
-        local split_brain_peers = {}
-        local reconnect_peers = {}
-        for _, alias in ipairs(resolved.aliases) do
-            local server = snapshot.servers and snapshot.servers[alias]
-            local broken_reason = nil
-            if server and type(server.replication) == 'table' then
-                for _, entry in pairs(server.replication) do
-                    if entry.upstream and entry.upstream.status ~= 'follow' then
-                        broken_reason = entry.upstream.message or ''
-                        break
-                    end
-                end
-            end
-            if broken_reason ~= nil
-                and broken_reason:lower():find('split.brain', 1, false) then
-                split_brain_peers[alias] = true
-            else
-                table.insert(reconnect_peers, alias)
-            end
-        end
 
-        local results = execute(RESTART_REPLICATION_EXPR, reconnect_peers)
-        local recovered, still_stopped, peer_fail = 0, {}, {}
-        for peer, r in pairs(results or {}) do
-            if not (r and r.ok) then
-                table.insert(peer_fail, peer .. '=' ..
-                    tostring(r and r.err or 'unknown'))
-            else
-                local v = r.value or {}
-                if v.recovered == true then
-                    recovered = recovered + 1
-                end
-                if type(v.still_stopped) == 'table' and #v.still_stopped > 0 then
-                    for _, s in ipairs(v.still_stopped) do
-                        local reason = tostring(s.reason or '')
-                        table.insert(still_stopped, string.format(
-                            '%s upstream id=%s: %s',
-                            peer, tostring(s.id), reason))
-                        -- Late-detected split-brain: applier came
-                        -- back STOPPED after our reconnect cycle.
-                        if reason:lower():find('split.brain', 1, false) then
-                            split_brain_peers[peer] = true
-                        end
-                    end
-                end
-            end
-        end
-
-        -- Auto-escalate: any peer reporting "Split-Brain" gets a
-        -- rebootstrap kick. The receiver refuses if the peer owns
-        -- the synchro queue (Phase 5 contract), so a healthy
-        -- queue-owner cannot be wiped by accident.
-        --
-        -- Self-loop: rpc.map_eval routes through the peer pool,
-        -- which deliberately excludes the current instance ("not
-        -- connected" otherwise on every self-call). For the
-        -- self-rebootstrap path we call the global directly so
-        -- the operator can recover the very peer they are
-        -- connected to.
-        local self_alias
-        if box.info and box.info.name then self_alias = box.info.name end
-        local rebooted, reboot_fail = {}, {}
-        for peer in pairs(split_brain_peers) do
-            if peer == self_alias then
-                local fn = rawget(_G, 'webui_rebootstrap_remote')
-                if type(fn) == 'function' then
-                    local ok_self, res_self = pcall(fn)
-                    if ok_self and (res_self == nil or res_self.err == nil) then
-                        table.insert(rebooted, peer)
-                    else
-                        table.insert(reboot_fail, peer .. '=' ..
-                            tostring((res_self and res_self.err) or res_self or 'self-call failed'))
-                    end
-                else
-                    table.insert(reboot_fail, peer .. '=no rebootstrap rpc on self')
-                end
-            else
-                local ok_reboot, reboot_res = pcall(rpc.map_eval,
-                    'return _G.webui_rebootstrap_remote and ' ..
-                    '_G.webui_rebootstrap_remote() or { err = "no rebootstrap rpc" }',
-                    {}, { timeout = 5, peers = { peer } })
-                if not ok_reboot or type(reboot_res) ~= 'table'
-                    or reboot_res[peer] == nil then
-                    table.insert(reboot_fail, peer .. '=transport-err')
-                else
-                    local rr = reboot_res[peer]
-                    if rr.ok and rr.value and rr.value.err == nil then
-                        table.insert(rebooted, peer)
-                    else
-                        table.insert(reboot_fail, peer .. '=' ..
-                            tostring((rr.value and rr.value.err) or rr.err or 'unknown'))
-                    end
-                end
-            end
-        end
-        local parts = {}
-        if recovered > 0 then
-            table.insert(parts, string.format('reconnected on %d peer(s)',
-                recovered))
-        end
-        if #rebooted > 0 then
-            table.insert(parts, string.format(
-                'split-brain detected, dispatched rebootstrap to: %s ' ..
-                '(container will restart and bootstrap clean from the leader)',
-                table.concat(rebooted, ', ')))
-        end
-        if #reboot_fail > 0 then
-            table.insert(parts, 'rebootstrap failures: ' ..
-                table.concat(reboot_fail, '; '))
-        end
-        if #still_stopped > 0 and #rebooted == 0 then
-            table.insert(parts, string.format(
-                'STILL STOPPED on %d upstream(s): %s — manual rebootstrap ' ..
-                'required (POST /api/diagnostics/rebootstrap)',
-                #still_stopped, table.concat(still_stopped, '; ')))
-        end
-        if #peer_fail > 0 then
-            table.insert(parts, 'peer error(s): ' ..
-                table.concat(peer_fail, '; '))
-        end
-        if #parts == 0 then
-            table.insert(parts, string.format(
-                'dispatched to %d peer(s)', #resolved.aliases))
-        end
-        logger.info('applied restart_replication suggestion', {
-            targets       = resolved.aliases,
-            unknown       = resolved.unknown,
-            count         = #resolved.aliases,
-            recovered     = recovered,
-            still_stopped = #still_stopped,
-        })
-        return {
-            ok      = #still_stopped == 0 and #peer_fail == 0,
-            message = table.concat(parts, '; '),
-            results = results,
-            unknown = resolved.unknown,
-        }
+    local handler = HANDLERS[type_]
+    if handler == nil then
+        return nil, string.format(
+            'suggestion type %q is not implemented yet', type_)
     end
-    if type_ == M.TYPES.DISABLE_SERVER then
-        -- Disable-server suggestion (Task 5.15): for each affected
-        -- alias, write to the etcd `<prefix>/failover/disabled/<alias>`
-        -- set via the same `failover.disabled` module the agent
-        -- reads on every coordinator tick. We deliberately do NOT
-        -- go through the GraphQL `setInstanceState` resolver here:
-        -- the caller has already passed the RBAC gate on
-        -- `applyDisableServer` (admin) and we need the action to
-        -- run from the suggestions engine context, which has no
-        -- `root.user` available the way the SPA resolver does.
-        local ok_etcd, etcd_client = pcall(require, 'webui.config_store.client')
-        local ok_disabled, disabled = pcall(require, 'webui.failover.disabled')
-        if not (ok_etcd and ok_disabled) then
-            return nil, 'failover.disabled module unavailable'
-        end
-        local client, client_err = etcd_client.get_client()
-        if client == nil then
-            return nil, 'etcd unavailable: ' .. tostring(client_err)
-        end
-        local marked, failed = {}, {}
-        for _, alias in ipairs(resolved.aliases) do
-            local _, derr = disabled.set(client, alias,
-                (opts and opts.user) or 'suggestion-engine')
-            if derr == nil then
-                table.insert(marked, alias)
-            else
-                table.insert(failed, alias .. '=' .. tostring(derr))
-            end
-        end
-        local msg
-        if #failed == 0 then
-            msg = string.format('disabled %d instance(s): %s',
-                #marked, table.concat(marked, ', '))
-        else
-            msg = string.format(
-                'disabled %d instance(s): %s; failed: %s',
-                #marked, table.concat(marked, ', '),
-                table.concat(failed, '; '))
-        end
-        logger.warn('applied disable_server suggestion', {
-            marked = marked, failed = failed, unknown = resolved.unknown,
-        })
-        return {
-            ok      = #failed == 0,
-            message = msg,
-            unknown = resolved.unknown,
-        }
-    end
-    return nil, string.format('suggestion type %q is not implemented yet', type_)
+    return handler(resolved, snapshot, opts)
 end
 
 -- ─────────────────────────────────────────────────────────────────────

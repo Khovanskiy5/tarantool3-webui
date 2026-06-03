@@ -26,9 +26,9 @@ function M.majority_guard(servers, stop_aliases)
     return false, verdict.reason
 end
 
--- Split out of validate() to keep its cyclomatic complexity below
--- the project luacheck cap. Returns (true, nil) on success or
--- (false, message) on rejection. Accepts nil (unset → no-op).
+-- Validate the optional `state_reporter` block as a focused, reusable
+-- check. Returns (true, nil) on success or (false, message) on
+-- rejection. Accepts nil (unset → no-op).
 function M._validate_state_reporter(sr)
     if sr == nil then return true end
     if type(sr) ~= 'table' then
@@ -48,15 +48,9 @@ function M._validate_state_reporter(sr)
     return true
 end
 
-function M.validate(cfg)
-    checks('?table')
-    cfg = cfg or {}
-
-    local ok, err = version.check_tarantool()
-    if not ok then
-        return nil, err
-    end
-
+-- HTTP / server-surface fields. Each is optional; a present value must
+-- match the declared type. Returns (true) or (nil, message).
+local function validate_http(cfg)
     if cfg.listen ~= nil and type(cfg.listen) ~= 'string' then
         return nil, 'roles_cfg.webui.listen must be a string'
     end
@@ -82,56 +76,94 @@ function M.validate(cfg)
         or cfg.shutdown_timeout < 0) then
         return nil, 'roles_cfg.webui.shutdown_timeout must be a non-negative number'
     end
+    return true
+end
+
+-- RBAC block: `rbac` table with an optional `users = {user=[roles]}` map.
+local function validate_rbac(cfg)
+    if cfg.rbac == nil then return true end
+    if type(cfg.rbac) ~= 'table' then
+        return nil, 'roles_cfg.webui.rbac must be a table'
+    end
+    if cfg.rbac.users ~= nil and type(cfg.rbac.users) ~= 'table' then
+        return nil, 'roles_cfg.webui.rbac.users must be a {user = [roles]} table'
+    end
+    return true
+end
+
+-- etcd writer: a non-empty list of endpoint URL strings.
+local function validate_etcd_writer(cfg)
+    if cfg.etcd_writer == nil then return true end
+    if type(cfg.etcd_writer) ~= 'table' then
+        return nil, 'roles_cfg.webui.etcd_writer must be a table'
+    end
+    if type(cfg.etcd_writer.endpoints) ~= 'table'
+        or #cfg.etcd_writer.endpoints == 0 then
+        return nil, 'roles_cfg.webui.etcd_writer.endpoints '
+            .. 'must be a non-empty list of URLs'
+    end
+    for _, ep in ipairs(cfg.etcd_writer.endpoints) do
+        if type(ep) ~= 'string' or #ep == 0 then
+            return nil,
+                'roles_cfg.webui.etcd_writer.endpoints entries '
+                .. 'must be non-empty strings'
+        end
+    end
+    return true
+end
+
+-- Failover block: optional `agent` boolean plus positive-number tunables.
+local function validate_failover(cfg)
+    if cfg.failover == nil then return true end
+    if type(cfg.failover) ~= 'table' then
+        return nil, 'roles_cfg.webui.failover must be a table'
+    end
+    if cfg.failover.agent ~= nil and type(cfg.failover.agent) ~= 'boolean' then
+        return nil, 'roles_cfg.webui.failover.agent must be a boolean'
+    end
+    for _, k in ipairs({ 'lease_ttl_sec', 'keepalive_interval',
+            'election_interval', 'appointment_interval',
+            'watcher_poll_interval_sec' }) do
+        if cfg.failover[k] ~= nil
+            and (type(cfg.failover[k]) ~= 'number'
+            or cfg.failover[k] <= 0) then
+            return nil, 'roles_cfg.webui.failover.' .. k
+                .. ' must be a positive number'
+        end
+    end
+    return true
+end
+
+function M.validate(cfg)
+    checks('?table')
+    cfg = cfg or {}
+
+    local ok, err = version.check_tarantool()
+    if not ok then
+        return nil, err
+    end
+
+    ok, err = validate_http(cfg)
+    if not ok then return nil, err end
+
+    -- Notifications config is validated by its own module when present.
     local notif_ok, notif = pcall(require, 'webui.notifications')
     if notif_ok then
         local _, n_err = notif.validate(cfg)
         if n_err ~= nil then return nil, n_err end
     end
-    if cfg.rbac ~= nil then
-        if type(cfg.rbac) ~= 'table' then
-            return nil, 'roles_cfg.webui.rbac must be a table'
-        end
-        if cfg.rbac.users ~= nil and type(cfg.rbac.users) ~= 'table' then
-            return nil, 'roles_cfg.webui.rbac.users must be a {user = [roles]} table'
-        end
-    end
-    if cfg.etcd_writer ~= nil then
-        if type(cfg.etcd_writer) ~= 'table' then
-            return nil, 'roles_cfg.webui.etcd_writer must be a table'
-        end
-        if type(cfg.etcd_writer.endpoints) ~= 'table'
-            or #cfg.etcd_writer.endpoints == 0 then
-            return nil, 'roles_cfg.webui.etcd_writer.endpoints '
-                .. 'must be a non-empty list of URLs'
-        end
-        for _, ep in ipairs(cfg.etcd_writer.endpoints) do
-            if type(ep) ~= 'string' or #ep == 0 then
-                return nil,
-                    'roles_cfg.webui.etcd_writer.endpoints entries '
-                    .. 'must be non-empty strings'
-            end
-        end
-    end
+
+    ok, err = validate_rbac(cfg)
+    if not ok then return nil, err end
+
+    ok, err = validate_etcd_writer(cfg)
+    if not ok then return nil, err end
+
     local sr_ok, sr_err = M._validate_state_reporter(cfg.state_reporter)
     if not sr_ok then return nil, sr_err end
-    if cfg.failover ~= nil then
-        if type(cfg.failover) ~= 'table' then
-            return nil, 'roles_cfg.webui.failover must be a table'
-        end
-        if cfg.failover.agent ~= nil and type(cfg.failover.agent) ~= 'boolean' then
-            return nil, 'roles_cfg.webui.failover.agent must be a boolean'
-        end
-        for _, k in ipairs({ 'lease_ttl_sec', 'keepalive_interval',
-                'election_interval', 'appointment_interval',
-                'watcher_poll_interval_sec' }) do
-            if cfg.failover[k] ~= nil
-                and (type(cfg.failover[k]) ~= 'number'
-                or cfg.failover[k] <= 0) then
-                return nil, 'roles_cfg.webui.failover.' .. k
-                    .. ' must be a positive number'
-            end
-        end
-    end
+
+    ok, err = validate_failover(cfg)
+    if not ok then return nil, err end
 
     return true
 end

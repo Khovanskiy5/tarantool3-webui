@@ -173,6 +173,101 @@ local function unwrap_binary(v)
     return v
 end
 
+-- Per-type coercers. Each takes the already-unwrapped value (and the
+-- declared type, for shared coercers / error text) and returns
+-- (coerced_value, err?). One coercer per supported Tarantool type is
+-- easier to audit than a long if/elseif chain — see the COERCE table.
+
+local function coerce_uuid(value)
+    if uuid_mod == nil then return nil, 'uuid module unavailable' end
+    if type(value) ~= 'string' then
+        return nil, 'uuid field requires RFC4122 string, got ' .. type(value)
+    end
+    local ok, parsed = pcall(uuid_mod.fromstr, value)
+    if not ok or parsed == nil then
+        return nil, 'invalid uuid string: ' .. tostring(value)
+    end
+    return parsed
+end
+
+local function coerce_decimal(value)
+    if decimal_mod == nil then return nil, 'decimal module unavailable' end
+    local ok, parsed = pcall(decimal_mod.new, value)
+    if not ok or parsed == nil then
+        return nil, 'invalid decimal value: ' .. tostring(value)
+    end
+    return parsed
+end
+
+local function coerce_numeric(value, declared_type)
+    if type(value) == 'number' then return value end
+    if type(value) == 'string' then
+        local n = tonumber(value)
+        if n == nil then
+            return nil, declared_type .. ' field needs numeric input, got ' .. value
+        end
+        return n
+    end
+    return nil, declared_type .. ' field needs number, got ' .. type(value)
+end
+
+local function coerce_boolean(value)
+    if type(value) == 'boolean' then return value end
+    if value == 'true'  or value == 1 then return true end
+    if value == 'false' or value == 0 then return false end
+    return nil, 'boolean field needs true|false, got ' .. tostring(value)
+end
+
+local function coerce_varbinary(value)
+    -- After unwrap_binary, value is a plain Lua string of raw bytes.
+    -- Tarantool rejects a plain string for a varbinary column
+    -- ("expected varbinary, got string") — it must be a `varbinary`
+    -- cdata. Wrap it. Strings that came in UTF-8 (not via the
+    -- envelope) are encoded byte-for-byte.
+    if type(value) ~= 'string' then
+        return nil, 'varbinary field needs bytes, got ' .. type(value)
+    end
+    if varbinary == nil then
+        return nil, 'varbinary module unavailable'
+    end
+    return varbinary.new(value)
+end
+
+-- string / scalar / unknown types: pass through unchanged. After
+-- unwrap_binary the value is a plain Lua string (UTF-8 or raw bytes)
+-- or, for scalar, any primitive.
+local function coerce_passthrough(value)
+    return value
+end
+
+local function coerce_structured(value, declared_type)
+    if type(value) == 'string' then
+        local ok, parsed = pcall(json.decode, value)
+        if ok and type(parsed) == 'table' then return parsed end
+        -- Not JSON — for `any` we pass the string through.
+        if declared_type == 'any' then return value end
+        return nil, declared_type .. ' field needs JSON object/array, got string'
+    end
+    return value
+end
+
+local COERCE = {
+    uuid      = coerce_uuid,
+    decimal   = coerce_decimal,
+    unsigned  = coerce_numeric,
+    integer   = coerce_numeric,
+    number    = coerce_numeric,
+    double    = coerce_numeric,
+    float     = coerce_numeric,
+    boolean   = coerce_boolean,
+    varbinary = coerce_varbinary,
+    string    = coerce_passthrough,
+    scalar    = coerce_passthrough,
+    map       = coerce_structured,
+    array     = coerce_structured,
+    any       = coerce_structured,
+}
+
 -- coerce_field(value, declared_type) → (coerced_value, err?)
 --
 -- declared_type is the lowercase Tarantool field type from
@@ -189,81 +284,7 @@ function M.coerce_field(value, declared_type)
     -- Always unwrap our binary envelope first, regardless of type.
     value = unwrap_binary(value)
 
-    if declared_type == 'uuid' then
-        if uuid_mod == nil then return nil, 'uuid module unavailable' end
-        if type(value) ~= 'string' then
-            return nil, 'uuid field requires RFC4122 string, got ' .. type(value)
-        end
-        local ok, parsed = pcall(uuid_mod.fromstr, value)
-        if not ok or parsed == nil then
-            return nil, 'invalid uuid string: ' .. tostring(value)
-        end
-        return parsed
-    end
-
-    if declared_type == 'decimal' then
-        if decimal_mod == nil then return nil, 'decimal module unavailable' end
-        local ok, parsed = pcall(decimal_mod.new, value)
-        if not ok or parsed == nil then
-            return nil, 'invalid decimal value: ' .. tostring(value)
-        end
-        return parsed
-    end
-
-    if declared_type == 'unsigned' or declared_type == 'integer'
-        or declared_type == 'number' or declared_type == 'double'
-        or declared_type == 'float' then
-        if type(value) == 'number' then return value end
-        if type(value) == 'string' then
-            local n = tonumber(value)
-            if n == nil then
-                return nil, declared_type .. ' field needs numeric input, got ' .. value
-            end
-            return n
-        end
-        return nil, declared_type .. ' field needs number, got ' .. type(value)
-    end
-
-    if declared_type == 'boolean' then
-        if type(value) == 'boolean' then return value end
-        if value == 'true'  or value == 1 then return true end
-        if value == 'false' or value == 0 then return false end
-        return nil, 'boolean field needs true|false, got ' .. tostring(value)
-    end
-
-    if declared_type == 'varbinary' then
-        -- After unwrap_binary, value is a plain Lua string of raw
-        -- bytes. Tarantool rejects a plain string for a varbinary
-        -- column ("expected varbinary, got string") — it must be a
-        -- `varbinary` cdata. Wrap it. Strings that came in UTF-8
-        -- (not via the envelope) are encoded byte-for-byte.
-        if type(value) ~= 'string' then
-            return nil, 'varbinary field needs bytes, got ' .. type(value)
-        end
-        if varbinary == nil then
-            return nil, 'varbinary module unavailable'
-        end
-        return varbinary.new(value)
-    end
-
-    if declared_type == 'string' or declared_type == 'scalar' then
-        -- After unwrap_binary, value is either a plain Lua string
-        -- (UTF-8 or raw bytes) or, for `scalar`, any primitive.
-        return value
-    end
-
-    if declared_type == 'map' or declared_type == 'array' or declared_type == 'any' then
-        if type(value) == 'string' then
-            local ok, parsed = pcall(json.decode, value)
-            if ok and type(parsed) == 'table' then return parsed end
-            -- Not JSON — for `any` we pass the string through.
-            if declared_type == 'any' then return value end
-            return nil, declared_type .. ' field needs JSON object/array, got string'
-        end
-        return value
-    end
-
-    return value
+    return (COERCE[declared_type] or coerce_passthrough)(value, declared_type)
 end
 
 -- coerce_tuple(fields, format) → (tuple, err?)

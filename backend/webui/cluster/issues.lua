@@ -129,91 +129,91 @@ end
 -- Rules
 -- ─────────────────────────────────────────────────────────────────────
 
+-- Classify one instance's upstream entries into operator-actionable
+-- buckets. `follow`/`sync`/`connect`/`ready`/`loading` are healthy or
+-- healthy transients (initial boot / cold bootstrap), so only other
+-- statuses warrant a `stopped` entry. Lag and idle are checked only
+-- for otherwise-healthy upstreams.
+local function classify_upstreams(replication, thresholds)
+    local stopped, lagging, idle_peers = {}, {}, {}
+    for _, entry in pairs(replication) do
+        local upstream = entry.upstream
+        if upstream ~= nil and upstream.status ~= nil then
+            local s = upstream.status
+            if s ~= 'follow' and s ~= 'sync'
+                and s ~= 'connect' and s ~= 'ready'
+                and s ~= 'loading' then
+                table.insert(stopped, {
+                    uuid    = entry.uuid or '?',
+                    status  = tostring(s),
+                    message = upstream.message,
+                })
+            elseif type(upstream.lag) == 'number'
+                and upstream.lag > thresholds.replication_sync_lag then
+                table.insert(lagging, {
+                    uuid = entry.uuid or '?',
+                    lag  = upstream.lag,
+                })
+            elseif type(upstream.idle) == 'number'
+                and upstream.idle > thresholds.replication_idle_factor
+                    * thresholds.default_replication_timeout then
+                table.insert(idle_peers, {
+                    uuid = entry.uuid or '?',
+                    idle = upstream.idle,
+                })
+            end
+        end
+    end
+    return stopped, lagging, idle_peers
+end
+
+-- Build the message for an instance's stopped upstreams. Same reason
+-- text on every upstream? Collapse to one row with a peer count.
+-- Different reasons? Spell each out so operators see the full picture
+-- without expanding rows.
+local function format_stopped_message(stopped)
+    local sample = stopped[1]
+    local same_reason = true
+    for _, s in ipairs(stopped) do
+        if s.message ~= sample.message
+            or s.status ~= sample.status then
+            same_reason = false; break
+        end
+    end
+    if same_reason then
+        return string.format(
+            '%d upstream(s) %s%s',
+            #stopped, sample.status,
+            sample.message and (': ' .. sample.message) or '')
+    end
+    local parts = {}
+    for _, s in ipairs(stopped) do
+        table.insert(parts, string.format(
+            '%s %s%s',
+            s.uuid:sub(1, 8), s.status,
+            s.message and (': ' .. s.message) or ''))
+    end
+    return 'replication upstreams stopped: ' .. table.concat(parts, '; ')
+end
+
 -- Replication issues: per-server upstream / downstream entries.
 -- The probe collects only the fields the scanner cares about
 -- (status / lag / idle / message) so this rule is a straightforward
 -- threshold check.
--- luacheck: ignore 561
 function M.check_replication(snapshot, thresholds, now)
     thresholds = thresholds or M.DEFAULT_THRESHOLDS
     now = now or fiber.clock()
     local out = {}
     for alias, server in pairs((snapshot and snapshot.servers) or {}) do
         if server.reachable and type(server.replication) == 'table' then
-            -- Per-instance aggregation: classify every upstream entry
-            -- and emit ONE issue per (instance, problem-class) instead
-            -- of one per upstream UUID. The previous per-upstream
-            -- granularity surfaced two identical "Split-Brain" rows
-            -- when a follower lost sync with both peers, which read as
-            -- noise — the cluster-level symptom is the same.
-            local stopped, lagging, idle_peers = {}, {}, {}
-            for _, entry in pairs(server.replication) do
-                local upstream = entry.upstream
-                if upstream ~= nil and upstream.status ~= nil then
-                    -- `follow` is the steady state; `sync` and `connect`
-                    -- are healthy transients on initial boot (peers are
-                    -- still negotiating); `ready` is the brief window
-                    -- after handshake before the first follow tick.
-                    -- None of these are operator-actionable — only
-                    -- `stopped` / `disconnected` / `auth` warrant an issue.
-                    local s = upstream.status
-                    -- `loading` covers the first few seconds of a cold
-                    -- bootstrap before applier starts streaming.
-                    if s ~= 'follow' and s ~= 'sync'
-                        and s ~= 'connect' and s ~= 'ready'
-                        and s ~= 'loading' then
-                        table.insert(stopped, {
-                            uuid    = entry.uuid or '?',
-                            status  = tostring(s),
-                            message = upstream.message,
-                        })
-                    elseif type(upstream.lag) == 'number'
-                        and upstream.lag > thresholds.replication_sync_lag then
-                        table.insert(lagging, {
-                            uuid = entry.uuid or '?',
-                            lag  = upstream.lag,
-                        })
-                    elseif type(upstream.idle) == 'number'
-                        and upstream.idle > thresholds.replication_idle_factor
-                            * thresholds.default_replication_timeout then
-                        table.insert(idle_peers, {
-                            uuid = entry.uuid or '?',
-                            idle = upstream.idle,
-                        })
-                    end
-                end
-            end
+            -- Per-instance aggregation: one issue per (instance,
+            -- problem-class), not per upstream UUID — a follower that
+            -- loses sync with both peers is one symptom, not two rows.
+            local stopped, lagging, idle_peers =
+                classify_upstreams(server.replication, thresholds)
 
             if #stopped > 0 then
-                -- Same reason text on multiple upstreams? Collapse to
-                -- one row with peer count. Different reasons? Show
-                -- each in the message so operators see the full
-                -- picture without expanding rows.
-                local sample = stopped[1]
-                local same_reason = true
-                for _, s in ipairs(stopped) do
-                    if s.message ~= sample.message
-                        or s.status ~= sample.status then
-                        same_reason = false; break
-                    end
-                end
-                local msg
-                if same_reason then
-                    msg = string.format(
-                        '%d upstream(s) %s%s',
-                        #stopped, sample.status,
-                        sample.message and (': ' .. sample.message) or '')
-                else
-                    local parts = {}
-                    for _, s in ipairs(stopped) do
-                        table.insert(parts, string.format(
-                            '%s %s%s',
-                            s.uuid:sub(1, 8), s.status,
-                            s.message and (': ' .. s.message) or ''))
-                    end
-                    msg = 'replication upstreams stopped: ' ..
-                        table.concat(parts, '; ')
-                end
+                local msg = format_stopped_message(stopped)
                 table.insert(out, make_issue {
                     -- Stable id per instance (NOT per upstream uuid) so
                     -- a transient `e82d…` / `07aa…` flicker doesn't
