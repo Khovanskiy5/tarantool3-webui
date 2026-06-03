@@ -81,6 +81,8 @@ local STATE = {
     lease_id             = nil,
     coordinator_revision = nil,    -- mod_revision of OUR coordinator key
     election_fiber       = nil,
+    wake_cond            = nil,    -- FO-7: early-wake on coordinator-key change
+    coordinator_watch    = nil,    -- FO-7: etcd streaming watch handle
     last_appointments    = {},
     last_error           = nil,
     last_promotion_at    = 0,
@@ -659,13 +661,56 @@ local function coordinator_loop()
                 -- Lurking. No work; just refresh our view.
                 clear_error()
             end
-            fiber.sleep(STATE.config.keepalive_interval)
+            -- FO-7: wait on the wake condition instead of a plain sleep
+            -- so a coordinator-key change (e.g. the holder's lease
+            -- expiring → DELETE event) wakes a lurking peer within
+            -- milliseconds to contest the vacancy, instead of waiting up
+            -- to keepalive_interval. The timeout keeps lease renewal and
+            -- the safety net ticking even when no watch event arrives.
+            if STATE.wake_cond ~= nil then
+                STATE.wake_cond:wait(STATE.config.keepalive_interval)
+            else
+                fiber.sleep(STATE.config.keepalive_interval)
+            end
         end
     end
     -- Best-effort cleanup on stop: try to release the lease so the
     -- next coordinator does not have to wait for TTL.
     local client = etcd_client.get_client()
     release_lease(client)
+end
+
+-- FO-7: push-based coordinator-key watch. A streaming etcd watch on the
+-- coordinator key signals the wake condition on any change — most
+-- importantly the DELETE event when the current holder's lease expires —
+-- so a lurking peer contests the vacancy within milliseconds instead of
+-- waiting up to keepalive_interval. Pure latency optimiser: the loop's
+-- keepalive_interval timeout remains the safety net.
+local function start_coordinator_watch()
+    local cfg = STATE.config or {}
+    if cfg.watch_enabled == false then return end
+    local client, err = etcd_client.get_client()
+    if client == nil then
+        logger.debug('coordinator watch: etcd unavailable, poll only',
+            { err = tostring(err) })
+        return
+    end
+    if type(client.watch_stream) ~= 'function' then
+        logger.info('coordinator watch: streaming unsupported, poll fallback')
+        return
+    end
+    STATE.coordinator_watch = client:watch_stream(M.KEY_COORDINATOR, function()
+        if STATE.stop_flag or not STATE.enabled then return end
+        if STATE.wake_cond ~= nil then STATE.wake_cond:signal() end
+    end, { idle_timeout = cfg.watch_idle_timeout })
+    logger.info('coordinator watch (push) started')
+end
+
+local function stop_coordinator_watch()
+    if STATE.coordinator_watch ~= nil then
+        pcall(function() STATE.coordinator_watch:stop() end)
+        STATE.coordinator_watch = nil
+    end
 end
 
 -- ─────────────────────────────────────────────────────────────────────
@@ -679,6 +724,10 @@ local function build_config(opts)
         local v = tonumber(opts[k])
         cfg[k] = (v and v > 0) and v or default
     end
+    -- FO-7 push watch (non-numeric, handled explicitly): on by default,
+    -- degrades to the poll loop if streaming is unavailable.
+    cfg.watch_enabled = opts.watch_enabled ~= false
+    cfg.watch_idle_timeout = tonumber(opts.watch_idle_timeout) or 10
     return cfg
 end
 
@@ -719,7 +768,10 @@ function M.start(opts)
     -- Seed math.random with a per-instance fiber/PID mix so the
     -- jitter is not identical across the cluster.
     math.randomseed(math.floor(fiber.time() * 1e6) % 2147483647)
+    -- FO-7: wake condition + coordinator-key push watch (best-effort).
+    STATE.wake_cond = fiber.cond()
     STATE.election_fiber = fiber.create(coordinator_loop)
+    pcall(start_coordinator_watch)
     logger.info('failover agent started', {
         self = STATE.self_alias,
         lease_ttl_sec = STATE.config.lease_ttl_sec,
@@ -764,6 +816,11 @@ function M.stop()
     if not STATE.enabled then return end
     STATE.stop_flag = true
     STATE.enabled = false
+
+    -- FO-7: stop the push watch and wake the loop so it exits promptly
+    -- instead of parking on the keepalive timeout.
+    stop_coordinator_watch()
+    if STATE.wake_cond ~= nil then pcall(function() STATE.wake_cond:signal() end) end
 
     -- ── Graceful synchro queue handover (split-brain prevention) ──
     -- Drain the limbo BEFORE revoking the coordinator lease. Shared
@@ -835,6 +892,8 @@ end
 function M._reset()
     STATE.enabled = false
     STATE.stop_flag = true
+    stop_coordinator_watch()
+    STATE.wake_cond = nil
     STATE.lease_id = nil
     STATE.coordinator_revision = nil
     STATE.is_coordinator = false

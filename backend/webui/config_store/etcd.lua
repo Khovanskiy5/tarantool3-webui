@@ -390,4 +390,133 @@ function M.proto:watch(key, callback, opts)
     return handle
 end
 
+-- ── Watch (streaming, push) ──────────────────────────────────────────
+--
+-- A real etcd v3 watch over the JSON gateway's `/v3/watch` streaming
+-- endpoint, using the chunked HTTP io interface available since
+-- Tarantool 3.x. Unlike :watch (revision polling) this blocks on the
+-- server and fires the callback within milliseconds of a change.
+--
+-- The gateway streams newline-delimited JSON frames, each shaped
+-- `{"result": {created, canceled, compact_revision, events:[...]}}`.
+-- We watch from "now" (no start_revision) so compaction can never bite.
+--
+-- Reliability contract: this is a LATENCY OPTIMISER, never a dependency.
+-- The fiber NEVER propagates an error to the caller — any stream
+-- failure logs at DEBUG and reconnects after a backoff. Callers MUST
+-- keep their poll loop as the safety net.
+
+-- Process one decoded stream frame. Raises on a server-side cancel so
+-- the surrounding pcall reconnects. Invokes `callback(kv, type)` once
+-- per change event (the watcher only needs the "something changed"
+-- edge; kv is best-effort).
+local function handle_watch_frame(frame, callback)
+    local r = frame.result
+    if type(r) ~= 'table' then
+        -- `{"error": {...}}` — the gateway rejected the stream.
+        error('watch stream error frame')
+    end
+    if r.created then return end          -- creation ack
+    if r.canceled then
+        error('watch canceled: ' .. tostring(r.cancel_reason or '?'))
+    end
+    local events = r.events
+    if type(events) ~= 'table' then return end  -- progress_notify keepalive
+    for _, ev in ipairs(events) do
+        local kv = ev.kv
+        local decoded
+        if type(kv) == 'table' then
+            decoded = {
+                key      = kv.key and from_b64(kv.key),
+                value    = kv.value and from_b64(kv.value),
+                revision = tonumber(kv.mod_revision),
+            }
+        end
+        pcall(callback, decoded, ev.type or 'PUT')
+    end
+end
+M._handle_watch_frame = handle_watch_frame
+
+-- Establish + drain one watch stream. Returns normally when the stream
+-- ends (stop requested / server closed); raises on transport error so
+-- the caller reconnects.
+local function run_watch_stream(state, key, callback, handle, opts)
+    local endpoint = pick_endpoint(state)
+    local url = endpoint .. '/v3/watch'
+    local hdr = { ['content-type'] = 'application/json' }
+    if state.token then hdr['Authorization'] = state.token end
+    local resp = state.client:request('POST', url, nil, {
+        chunked = true,
+        headers = hdr,
+        timeout = opts.connect_timeout or 10,
+    })
+    if type(resp) ~= 'table' or type(resp.read) ~= 'function'
+            or type(resp.write) ~= 'function' then
+        error('chunked io interface unavailable')
+    end
+    local idle_timeout = opts.idle_timeout or 10
+    local ok, perr = pcall(function()
+        -- Send the create frame: watch a single key from "now".
+        local create = json.encode({
+            create_request = {
+                key = b64(full_key(state, key)),
+                progress_notify = true,
+            },
+        })
+        resp:write(create, opts.write_timeout or 5)
+        handle.active = true
+        logger.debug('etcd watch stream established', { key = key })
+        while not handle.stop_flag do
+            -- Reads return immediately on an event; on idle they return
+            -- nil after idle_timeout so we can re-check the stop flag and
+            -- keep the same persistent stream alive.
+            -- nil ⇒ idle timeout (no change) — just loop and re-check the
+            -- stop flag on the same persistent stream.
+            local line = resp:read({ delimiter = '\n' }, idle_timeout)
+            if line == '' then
+                break  -- server closed the stream (eof)
+            elseif line ~= nil then
+                local ok_dec, parsed = pcall(json.decode, line)
+                if ok_dec and type(parsed) == 'table' then
+                    handle_watch_frame(parsed, callback)
+                end
+            end
+        end
+    end)
+    handle.active = false
+    pcall(function() resp:finish(1) end)
+    if not ok then error(perr) end
+end
+
+-- watch_stream(key, callback, opts) — spawn a fiber that maintains a
+-- streaming watch on `key`, reconnecting on failure. Returns a handle
+-- with :stop(). opts: { idle_timeout, connect_timeout, write_timeout,
+-- reconnect_interval }.
+function M.proto:watch_stream(key, callback, opts)
+    opts = opts or {}
+    local handle = { stop_flag = false, active = false }
+    handle.fiber = fiber.create(function()
+        fiber.self():name('etcd_watchs', { truncate = true })
+        while not handle.stop_flag do
+            local ok, e = pcall(run_watch_stream, self, key, callback,
+                handle, opts)
+            if not ok and not handle.stop_flag then
+                logger.debug('etcd watch stream dropped; reconnecting',
+                    { key = key, err = tostring(e) })
+            end
+            -- Backoff before re-establishing so a flapping endpoint does
+            -- not spin a hot reconnect loop.
+            local left = opts.reconnect_interval or 1
+            while left > 0 and not handle.stop_flag do
+                local slice = math.min(left, 0.2)
+                fiber.sleep(slice)
+                left = left - slice
+            end
+        end
+        logger.debug('etcd watch stream stopped', { key = key })
+    end)
+    handle.stop = function(h) h.stop_flag = true end
+    return handle
+end
+
 return M

@@ -175,6 +175,15 @@ database:
 
 Все тайминги опциональны и настраиваются в `roles_cfg.webui.failover.*` (`dampen_cycles`, `min_misses`, `primary_start_timeout`, `suppress_threshold`, `suppress_window`, `suppress_cooldown`, `promote_backoff_base`, `phi_threshold`, `phi_min_samples`, `phi_min_stddev`); при отсутствии берутся дефолты. Текущее состояние (φ, частота смен, заморозка, backoff) видно в `agent.status().antiflap` и в issue при активной заморозке / повышенной частоте.
 
+### Push-watch (etcd streaming)
+
+Чтобы реагировать на смену лидера за миллисекунды, а не ждать секундный поллинг, агент держит два потоковых etcd-watch'а через JSON-gateway `/v3/watch` (chunked HTTP io):
+
+- **appointment-watch** (на каждом инстансе) — следит за `<prefix>/failover/replicasets/<rs>/leader`; на событие сразу вызывает реакцию вотчера (promote/demote), не дожидаясь `watcher_poll_interval_sec`;
+- **coordinator-watch** (на каждом инстансе) — следит за `<prefix>/failover/coordinator`; на DELETE (истечение lease координатора) будит лишь «дремлющего» пира, чтобы тот мгновенно поборолся за вакансию вместо ожидания `keepalive_interval`.
+
+Это **чистая оптимизация задержки**: поллинг-цикл и self-fence остаются safety net. Если стрим не поднялся (etcd-блип, нет поддержки chunked-io) — агент тихо деградирует на поллинг и периодически переподключает watch. Отключается через `roles_cfg.webui.failover.watch_enabled: false`; `watch_idle_timeout` (деф 10с) — как часто watch-файбер просыпается проверить флаг остановки на простаивающем стриме.
+
 ### Fallback и переключение режимов
 
 - **Fallback `off`.** Агент по-прежнему стартует при `replication.failover: off` (legacy). Это запасной путь на случай сборки Tarantool, отвергающей `supervised` на CE; гарантии RO-при-рестарте в нём слабее — критичные спейсы должны быть `is_sync`. В логе при старте: `failover agent running in legacy "off" mode`.

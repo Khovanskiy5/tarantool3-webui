@@ -31,6 +31,9 @@ roles_cfg:
       #   suppress_window: 60
       #   suppress_cooldown: 60
       #   promote_backoff_base: 2   # exp backoff for a stalled candidate
+      # Push watch (FO-7): streaming etcd watch for sub-second reaction.
+      #   watch_enabled: true       # false → fall back to polling only
+      #   watch_idle_timeout: 10    # idle re-check period for the watch fiber
     # Liveness reporter: each instance publishes a JSON snapshot of
     # its box.info to `<prefix>/state/by-name/<alias>` in etcd, bound
     # to a lease so the key disappears on crash. Surfaced in the

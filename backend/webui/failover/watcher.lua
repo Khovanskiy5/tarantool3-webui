@@ -58,6 +58,7 @@ local STATE = {
     fiber       = nil,
     fencing_fiber = nil,
     config_watch = nil,   -- box.watch('config.info') handle
+    appointment_watch = nil, -- FO-7 etcd streaming watch handle
     last_seen   = nil,    -- { leader, ts }
     last_applied = nil,   -- { read_only, ts }
     last_error  = nil,
@@ -429,6 +430,41 @@ local function loop()
     end
 end
 
+-- FO-7: push-based appointment watch. A streaming etcd watch on our
+-- replicaset's leader key fires react_once() within milliseconds of a
+-- new appointment instead of waiting up to poll_interval_sec. It is a
+-- pure latency optimiser layered on top of loop() — the poll stays the
+-- safety net, so a watch that fails to establish (no streaming support,
+-- etcd blip) silently degrades to polling.
+local function start_appointment_watch()
+    if STATE.config == nil or STATE.config.watch_enabled == false then
+        return
+    end
+    local client, err = etcd_client.get_client()
+    if client == nil then
+        logger.debug('appointment watch: etcd unavailable, poll only',
+            { err = tostring(err) })
+        return
+    end
+    if type(client.watch_stream) ~= 'function' then
+        logger.info('appointment watch: streaming unsupported, poll fallback')
+        return
+    end
+    local key = string.format(M.KEY_APPOINTMENT, STATE.replicaset)
+    STATE.appointment_watch = client:watch_stream(key, function()
+        if STATE.stop_flag or not STATE.enabled then return end
+        pcall(react_once)
+    end, { idle_timeout = STATE.config.watch_idle_timeout })
+    logger.info('appointment watch (push) started', { key = key })
+end
+
+local function stop_appointment_watch()
+    if STATE.appointment_watch ~= nil then
+        pcall(function() STATE.appointment_watch:stop() end)
+        STATE.appointment_watch = nil
+    end
+end
+
 -- Build STATE.config from opts. renew_deadline = lease_ttl - safety,
 -- clamped so a too-small lease still leaves a positive window.
 local function build_config(opts)
@@ -450,6 +486,11 @@ local function build_config(opts)
         hard_deadline = lease_ttl,
         -- FO-16 failsafe: opt-in (default off → safe CP demote on DCS loss).
         failsafe_enabled = opts.failsafe_enabled == true,
+        -- FO-7 push watch: on by default; degrades to poll if streaming
+        -- is unavailable. idle_timeout bounds how often the watch fiber
+        -- wakes to re-check the stop flag while no events arrive.
+        watch_enabled = opts.watch_enabled ~= false,
+        watch_idle_timeout = tonumber(opts.watch_idle_timeout) or 10,
     }
 end
 
@@ -527,6 +568,8 @@ function M.start(opts)
                 { err = tostring(handle) })
         end
     end
+    -- FO-7: start the push-based appointment watch (best-effort).
+    pcall(start_appointment_watch)
     logger.info('failover watcher started', {
         self = STATE.self_alias,
         replicaset = STATE.replicaset,
@@ -561,6 +604,7 @@ function M.stop()
     STATE.fiber = nil
     STATE.fencing_fiber = nil
     pcall(function() watchdog.stop() end)
+    stop_appointment_watch()
     if STATE.config_watch ~= nil then
         pcall(function() STATE.config_watch:unregister() end)
         STATE.config_watch = nil
@@ -589,6 +633,7 @@ function M._reset()
     STATE.fiber = nil
     STATE.fencing_fiber = nil
     pcall(function() watchdog.stop() end)
+    stop_appointment_watch()
     STATE.last_leader_confirm_mono = nil
     STATE.last_etcd_ok = false
     STATE.last_applied_term = 0

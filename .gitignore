@@ -120,6 +120,8 @@ desktop.ini
 cartridge-*/
 tarantool-*/
 primevue/
+etcd/
+patroni/
 
 # ──────────────────────────────────────────────────────────────
 # Local tooling state (not part of the project)

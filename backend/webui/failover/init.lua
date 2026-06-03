@@ -198,6 +198,9 @@ function M.start(opts)
         watchdog_enabled = opts.watchdog_enabled,
         -- FO-16 failsafe; opt-in via roles_cfg.webui.failover.failsafe_enabled.
         failsafe_enabled = opts.failsafe_enabled,
+        -- FO-7 push watch; on by default, degrades to poll if unavailable.
+        watch_enabled = opts.watch_enabled,
+        watch_idle_timeout = opts.watch_idle_timeout,
     })
     if watch_ok == nil then
         return false, 'watcher: ' .. tostring(watch_err)
@@ -221,6 +224,9 @@ function M.start(opts)
         phi_min_samples       = opts.phi_min_samples,
         phi_max_samples       = opts.phi_max_samples,
         phi_min_stddev        = opts.phi_min_stddev,
+        -- FO-7 push watch.
+        watch_enabled         = opts.watch_enabled,
+        watch_idle_timeout    = opts.watch_idle_timeout,
     })
     if agent_ok == nil then
         watcher.stop()
@@ -267,6 +273,11 @@ function M.reconfigure(opts)
         phi_min_samples       = opts.phi_min_samples,
         phi_max_samples       = opts.phi_max_samples,
         phi_min_stddev        = opts.phi_min_stddev,
+        -- FO-7: forwarded for config consistency. The watch fiber's
+        -- lifecycle is tied to start/stop (a live toggle needs a
+        -- restart); reconfigure does not churn the stream.
+        watch_enabled         = opts.watch_enabled,
+        watch_idle_timeout    = opts.watch_idle_timeout,
     })
     local w = watcher.reconfigure({
         poll_interval_sec = opts.watcher_poll_interval_sec,
@@ -275,6 +286,8 @@ function M.reconfigure(opts)
         probe_interval    = adj.retry_timeout,
         watchdog_enabled  = opts.watchdog_enabled,
         failsafe_enabled  = opts.failsafe_enabled,
+        watch_enabled     = opts.watch_enabled,
+        watch_idle_timeout = opts.watch_idle_timeout,
     })
     return a == true and w == true
 end
