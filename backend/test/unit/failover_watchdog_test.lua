@@ -53,3 +53,27 @@ g.test_start_rejects_bad_options = function()
     t.assert_str_contains(err, 'invalid options')
     watchdog._reset()
 end
+
+-- FO-19: under a maintenance pause the dead-man switch must not fire,
+-- even when the leader is well past the hard deadline.
+g.test_pause_suppresses_fire = function()
+    local fiber = require('fiber')
+
+    local function run(paused)
+        local fired = false
+        watchdog._reset()
+        watchdog.start({
+            is_leader    = function() return true end,
+            last_confirm = function() return fiber.clock() - 100 end, -- way past
+            hard_deadline = 1, probe_interval = 0.05,
+            is_paused    = function() return paused end,
+            exit_fn      = function() fired = true end,
+        })
+        fiber.sleep(0.25)
+        watchdog.stop()
+        return fired
+    end
+
+    t.assert_equals(run(true), false, 'no exit while paused')
+    t.assert_equals(run(false), true, 'fires when not paused')
+end

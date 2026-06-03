@@ -231,6 +231,21 @@ etcd хранит cluster-wide config И lease failover-координатора
 
 Хвост не пропихивается на лидер и без этого guard'а — лимб Tarantool (term/LSN-фильтр, `ER_SPLIT_BRAIN`) его отвергает; FO-18 добавляет **упреждающую** детекцию + понятное действие.
 
+## Maintenance pause (плановое обслуживание)
+
+Чтобы безопасно обслуживать кластер (rolling-restart, остановка ноды/etcd) без срабатывания авто-failover, есть **pause** — etcd-ключ `<prefix>/failover/pause = {until_ts, by_user}` с жёстким TTL (деф 1ч, макс 24ч). Включается через `mutation pauseFailover(ttl)` / выключается `resumeFailover` (admin).
+
+Под pause (по образцу Patroni):
+- **Lease продлевается** — координатор держит lease, чтобы failover не сработал, но **не делает авто-promote/demote** (appointment-цикл замораживается).
+- **Self-fencing (FO-1) выключен** — лидер при потере etcd НЕ уходит в RO (оператор намеренно гасит etcd/ноды). Проверено вживую: при полной потере etcd под pause лидер остаётся RW.
+- **Watchdog / dead-man (FO-15) выключен** — нет принудительного `os.exit` лидера.
+- **Два RW под pause** — авто-демоут не-назначенного RW **не** происходит (issue `two-rw` всё равно поднимается; оператор разруливает).
+- **Ручной `promoteInstance`** под pause работает (appointment-цикл заморожен, поэтому единственные изменения appointment'а — операторские, и вотчер их применяет).
+
+**Защита:** pause-окно оценивается по локальным часам относительно `until_ts`, поэтому даже если etcd недоступен (часть обслуживания), pause всё равно истечёт по TTL — fencing не может быть отключён навечно из-за залипшего состояния. Состояние видно в `agent.status().watcher.paused`.
+
+> Ручной промоут/маin­tenance делать **под pause**; авто-rolling-restart (`safeRestartInstance`, FO-12) сам управляет лидерством через appointment — его под pause запускать НЕ нужно.
+
 ## State reporter — liveness в etcd
 
 Open-source аналог верхнеуровневого блока `stateboard.*` из Tarantool Enterprise. Каждый инстанс с включённым reporter'ом пишет в etcd небольшой JSON со своим живым `box.info`. Запись привязана к etcd lease, поэтому:

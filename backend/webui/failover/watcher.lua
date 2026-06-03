@@ -59,6 +59,7 @@ local STATE = {
     fencing_fiber = nil,
     config_watch = nil,   -- box.watch('config.info') handle
     appointment_watch = nil, -- FO-7 etcd streaming watch handle
+    paused_until = nil,   -- FO-19: maintenance-pause expiry (wall clock)
     last_seen   = nil,    -- { leader, ts }
     last_applied = nil,   -- { read_only, ts }
     last_error  = nil,
@@ -89,6 +90,17 @@ local function guarded_ctl(ctl_fn)
     STATE.ctl_in_progress = false
     return ok, err
 end
+
+-- FO-19: is a maintenance pause in effect? Evaluated against the LOCAL
+-- clock so the pause still expires by its TTL even when etcd is
+-- unreachable (e.g. etcd is part of the maintenance) — a stale paused
+-- state can never linger past its window and silently disable fencing
+-- forever. `STATE.paused_until` is refreshed from etcd on each poll.
+local function is_paused()
+    return STATE.paused_until ~= nil
+        and fiber.time() < STATE.paused_until
+end
+M._is_paused = is_paused
 
 local function read_appointment(client)
     local key = string.format(M.KEY_APPOINTMENT, STATE.replicaset)
@@ -256,6 +268,14 @@ local function apply_appointment(appt, client)
             STATE.last_error = 'demote: ' .. tostring(err)
             logger.error('failed to apply demotion', { err = tostring(err) })
         end
+    elseif not should_be_leader and not box.info.ro and is_paused() then
+        -- FO-19: a non-appointed RW instance while a maintenance pause is
+        -- active. This is the two-writable case operators expect to
+        -- resolve themselves under pause (Patroni: warn, do NOT demote) —
+        -- skip the automatic read-only flip. `check_two_rw` still raises
+        -- the split-brain issue so the operator sees it.
+        logger.warn('paused: NOT auto-demoting non-appointed RW instance',
+            { appointed_leader = appt.leader, paused_until = STATE.paused_until })
     elseif not should_be_leader and not box.info.ro then
         -- We are NOT the appointed leader, do not own the synchro
         -- queue (effectively_leader() was false), yet we are still
@@ -293,6 +313,22 @@ local function react_once_inner()
         STATE.last_error = 'etcd unavailable: ' .. tostring(err)
         STATE.last_etcd_ok = false
         return
+    end
+    -- FO-19: refresh the maintenance-pause window from etcd. CRITICAL:
+    -- only overwrite the local window on a DEFINITIVE read (no transport
+    -- error). If etcd is unreachable — which is exactly when a paused
+    -- leader must NOT self-fence — pause.read returns (nil, err); keeping
+    -- the last-known until_ts lets is_paused() ride out the etcd outage on
+    -- the local clock, bounded by the pause TTL. Clearing it here (the
+    -- original bug) re-enabled self-fence the moment etcd went down.
+    do
+        local ok_p, pause = pcall(require, 'webui.failover.pause')
+        if ok_p then
+            local entry, perr = pause.read(client)
+            if perr == nil then
+                STATE.paused_until = entry and entry.until_ts or nil
+            end
+        end
     end
     local appt, get_err = read_appointment(client)
     if get_err ~= nil then
@@ -360,12 +396,17 @@ end
 local function fencing_loop()
     fiber.self():name('webui_failover_fence', { truncate = true })
     while not STATE.stop_flag do
-        local reason = fencing.should_fence({
+        -- FO-19: under a maintenance pause, self-fencing is disabled
+        -- (Patroni parity). The operator is deliberately taking nodes /
+        -- etcd offline; a leader must keep serving and not demote itself
+        -- on a planned lease loss. The pause has a hard TTL, so this can
+        -- never silently disable fencing forever.
+        local reason = (not is_paused()) and fencing.should_fence({
             is_leader = effectively_leader(),
             now_mono = fiber.clock(),
             last_confirm_mono = STATE.last_leader_confirm_mono,
             renew_deadline = STATE.config.renew_deadline,
-        })
+        }) or nil
         if reason ~= nil then
             local ctx = STATE.last_etcd_ok and 'lost_lease' or 'dcs_down'
             -- FO-16 failsafe: on DCS loss only, if enabled and EVERY
@@ -519,6 +560,7 @@ local function reconcile_watchdog()
             last_confirm = function() return STATE.last_leader_confirm_mono end,
             hard_deadline = want.hard_deadline,
             probe_interval = want.probe,
+            is_paused = is_paused,  -- FO-19: no dead-man exit under pause
         })
     end
     STATE.watchdog_params = want
@@ -543,6 +585,7 @@ function M.start(opts)
     STATE.react_in_progress = false
     STATE.sysid_validated = false
     STATE.watchdog_params = nil
+    STATE.paused_until = nil
     STATE.fiber = fiber.create(loop)
     STATE.fencing_fiber = fiber.create(fencing_loop)
     -- FO-15: dead-man switch as a backstop to self-fence. Watches the
@@ -620,6 +663,10 @@ function M.status()
         last_seen  = STATE.last_seen,
         last_applied = STATE.last_applied,
         last_error = STATE.last_error,
+        -- FO-19: surface the maintenance pause so the UI / diagnostics
+        -- can show that fencing + auto-demote are intentionally off.
+        paused        = is_paused(),
+        paused_until  = STATE.paused_until,
     }
 end
 
@@ -640,6 +687,7 @@ function M._reset()
     STATE.react_in_progress = false
     STATE.sysid_validated = false
     STATE.watchdog_params = nil
+    STATE.paused_until = nil
     STATE.last_seen = nil
     STATE.last_applied = nil
     STATE.last_error = nil

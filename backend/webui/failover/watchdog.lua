@@ -64,6 +64,11 @@ function M.start(opts)
     local hard_deadline = tonumber(opts.hard_deadline) or 0
     local probe = tonumber(opts.probe_interval) or 2
     local exit_fn = opts.exit_fn or os.exit
+    -- FO-19: optional maintenance-pause gate. Under a pause the dead-man
+    -- switch must NOT force an exit — the operator is deliberately taking
+    -- nodes offline. Defaults to "never paused" when not supplied.
+    local is_paused = (type(opts.is_paused) == 'function' and opts.is_paused)
+        or function() return false end
     if type(is_leader) ~= 'function' or type(last_confirm) ~= 'function'
         or hard_deadline <= 0 then
         return nil, 'watchdog: invalid options'
@@ -84,7 +89,7 @@ function M.start(opts)
             if M.should_trigger({
                 is_leader = leader, now_mono = now,
                 last_confirm_mono = last, hard_deadline = hard_deadline,
-            }) then
+            }) and not is_paused() then
                 logger.error('dead-man switch FIRED: still leader past hard '
                     .. 'deadline; forcing process exit so it restarts '
                     .. 'read-only', { since_confirm = now - last,
