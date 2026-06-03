@@ -446,6 +446,7 @@ function M.stop()
     STATE.stop_flag = true
     STATE.enabled = false
     -- Both loop() and fencing_loop() exit on the next tick via stop_flag.
+    STATE.fiber = nil
     STATE.fencing_fiber = nil
     if STATE.config_watch ~= nil then
         pcall(function() STATE.config_watch:unregister() end)
@@ -472,10 +473,12 @@ function M._reset()
         pcall(function() STATE.config_watch:unregister() end)
         STATE.config_watch = nil
     end
+    STATE.fiber = nil
     STATE.fencing_fiber = nil
     STATE.last_leader_confirm_mono = nil
     STATE.last_etcd_ok = false
     STATE.last_applied_term = 0
+    STATE.react_in_progress = false
     STATE.last_seen = nil
     STATE.last_applied = nil
     STATE.last_error = nil
