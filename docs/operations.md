@@ -354,7 +354,7 @@ CSRF: cookie `webui_csrf` (не HttpOnly) дублируется в заголо
 | Config 2PC | `config`, `configHistory`, `configRevision`, `configJsonSchema` | `proposeConfig`, `validateConfig`, `commitConfig`, `abortConfig`, `rollbackConfig`, `forceReapplyConfig`, `reloadRoles` |
 | Топология | — | `editTopology`, `setReplicasetRoles`, `createReplicaset`, `editReplicaset`, `addInstance`, `expelInstance`, `setInstanceState` |
 | Failover | `failover`, `failoverAgentStatus`, `failoverStateProviderStatus`, `failoverCommands`, `rollingRestartPlan` | `setFailoverMode`, `promoteInstance`, `demoteInstance`, `pauseFailover`, `resumeFailover`, `safeRestartInstance`, `rebootstrapInstance` |
-| Recovery | `recoverySnapshot` | `recoveryAction` |
+| Recovery | `recoverySnapshot`, `recoveryPreflight` | `recoveryAction` (preflight-оценка риска + серверный gate для опасных действий) |
 | vshard | `vshard`, `vshardKnownGroups`, `canBootstrapVshard` | `bootstrapVshard` |
 | Data explorer | `spaces`, `tuples`, `spaceStats`, `sequenceInfo`, `collations`, `indexAction` | `tupleInsert/Replace/Update/Delete`, `createSpace`, `dropSpace`, `alterSpace`, `truncateSpace`, `createIndex`, `dropIndex`, `sequenceCreate/Alter/Drop/Reset/Set` |
 | Users / saved queries | `users`, `savedQueries` | `saveQuery`, `deleteSavedQuery` |

@@ -100,5 +100,6 @@ Issues-сканер (`cluster/issues.lua`) поднимает (и гасит) is
 - [`operations.md`](operations.md) — операционная модель, конфиг, тайминги, etcd-HA, мониторинг.
 - [`runbooks/failover-issues.md`](runbooks/failover-issues.md) — что делать по каждому issue.
 - [`runbooks/failover-mode.md`](runbooks/failover-mode.md) — переключение режимов.
+- [`runbooks/recovery-overview.md`](runbooks/recovery-overview.md) — страница /cluster-recovery: модель риска (safe/caution/dangerous) и визарды восстановления.
 - [`runbooks/split-brain-recovery.md`](runbooks/split-brain-recovery.md) — восстановление после split-brain.
 - [`sync-replication-internals.md`](sync-replication-internals.md) — лимб, term/LSN-фильтры, `ER_SPLIT_BRAIN`.
