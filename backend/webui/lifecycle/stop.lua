@@ -46,6 +46,19 @@ function M.stop()
     local uptime = STATE.started_at and (fiber.time() - STATE.started_at) or 0
     logger.info('webui role stopping', { uptime_sec = uptime })
 
+    -- Phase 0a: graceful synchro-queue drain (FO-9). When the failover
+    -- agent manages leadership, agent.stop() (Phase 0) drains as part of
+    -- its handover. When it does NOT (election / manual / agent
+    -- disabled), drain here so a stopped leader still hands off the limbo
+    -- on EVERY mode — otherwise a hung sync txn becomes ER_SPLIT_BRAIN on
+    -- the survivors after restart. A hard kill -9 bypasses this; there
+    -- the is_sync limbo term fence + survivor self-fencing are the net.
+    if STATE.failover == nil then
+        pcall(function()
+            require('webui.failover.drain').drain_synchro_queue(3)
+        end)
+    end
+
     -- Phase 0: release the failover coordinator lease FIRST, before
     -- the HTTP drain wait. The lease TTL (3s) is shorter than the
     -- drain budget (5s default), so deferring this would let the
