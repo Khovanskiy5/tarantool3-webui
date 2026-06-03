@@ -317,3 +317,57 @@ g.test_constants_publicly_exposed = function()
     t.assert_equals(issues.SEVERITY.CRITICAL, 'critical')
     t.assert(issues.SCAN_INTERVAL_SEC > 0)
 end
+
+-- ── FO-10: two-RW and alien checks ──────────────────────────────────
+
+g.test_two_rw_detected_when_two_queue_owners = function()
+    local snapshot = {
+        servers = {
+            ['tt-1'] = { id = 1, replicaset = { name = 'rs-1' },
+                synchro = { queue = { owner = 1 } } },  -- owns its queue
+            ['tt-2'] = { id = 2, replicaset = { name = 'rs-1' },
+                synchro = { queue = { owner = 2 } } },  -- ALSO owns -> split
+            ['tt-3'] = { id = 3, replicaset = { name = 'rs-1' },
+                synchro = { queue = { owner = 1 } } },  -- follows tt-1
+        },
+    }
+    local out = issues.check_two_rw(snapshot, nil, 100)
+    t.assert_equals(#out, 1)
+    t.assert_equals(out[1].severity, issues.SEVERITY.CRITICAL)
+    t.assert_str_contains(out[1].message, 'two synchro-queue owners')
+end
+
+g.test_single_owner_no_two_rw = function()
+    local snapshot = {
+        servers = {
+            ['tt-1'] = { id = 1, replicaset = { name = 'rs-1' },
+                synchro = { queue = { owner = 1 } } },
+            ['tt-2'] = { id = 2, replicaset = { name = 'rs-1' },
+                synchro = { queue = { owner = 1 } } },
+        },
+    }
+    t.assert_equals(#issues.check_two_rw(snapshot, nil, 100), 0)
+end
+
+g.test_alien_detected_on_uuid_mismatch = function()
+    local snapshot = {
+        servers = {
+            ['tt-1'] = { replicaset = { name = 'rs-1', uuid = 'uuid-a' } },
+            ['tt-2'] = { replicaset = { name = 'rs-1', uuid = 'uuid-b' } },
+        },
+    }
+    local out = issues.check_alien(snapshot, nil, 100)
+    t.assert_equals(#out, 1)
+    t.assert_equals(out[1].severity, issues.SEVERITY.WARNING)
+    t.assert_str_contains(out[1].message, 'different replicaset')
+end
+
+g.test_no_alien_when_uuids_match = function()
+    local snapshot = {
+        servers = {
+            ['tt-1'] = { replicaset = { name = 'rs-1', uuid = 'uuid-a' } },
+            ['tt-2'] = { replicaset = { name = 'rs-1', uuid = 'uuid-a' } },
+        },
+    }
+    t.assert_equals(#issues.check_alien(snapshot, nil, 100), 0)
+end

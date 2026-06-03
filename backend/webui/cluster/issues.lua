@@ -483,6 +483,83 @@ function M.check_failover_coordinator(_, thresholds, now)
     return out
 end
 
+-- Two writable leaders in one replicaset (FO-10). The decisive signal
+-- is synchro-queue ownership: an instance owns the queue when
+-- synchro.queue.owner == its own id. More than one owner in a
+-- replicaset is an active split-brain. Grouped by replicaset name.
+function M.check_two_rw(snapshot, _, now)
+    now = now or fiber.clock()
+    local out = {}
+    local owners_by_rs = {}  -- rs_name -> { alias, ... }
+    for alias, server in pairs((snapshot and snapshot.servers) or {}) do
+        local rs = server.replicaset and server.replicaset.name or '_'
+        local syn = server.synchro
+        local q = syn and syn.queue
+        if q ~= nil and server.id ~= nil
+            and q.owner ~= nil and q.owner == server.id then
+            owners_by_rs[rs] = owners_by_rs[rs] or {}
+            table.insert(owners_by_rs[rs], alias)
+        end
+    end
+    for rs, owners in pairs(owners_by_rs) do
+        if #owners > 1 then
+            table.sort(owners)
+            table.insert(out, make_issue {
+                id = M.make_id('synchro', 'replicaset', rs, 'two-rw'),
+                category = M.CATEGORIES.SYNCHRO,
+                severity = M.SEVERITY.CRITICAL,
+                scope    = M.SCOPE.REPLICASET,
+                replicaset = rs,
+                message  = string.format(
+                    'two synchro-queue owners in replicaset %q: %s. This is '
+                    .. 'an active split-brain — demote all but the most '
+                    .. 'up-to-date one immediately.',
+                    rs, table.concat(owners, ', ')),
+                now = now,
+            })
+        end
+    end
+    return out
+end
+
+-- Alien instance (FO-10 / FO-17 surfacing): instances that claim the
+-- same replicaset NAME but report different replicaset UUIDs belong to
+-- different clusters sharing this etcd prefix.
+function M.check_alien(snapshot, _, now)
+    now = now or fiber.clock()
+    local out = {}
+    local uuids_by_rs = {}  -- rs_name -> { uuid -> {alias,...} }
+    for alias, server in pairs((snapshot and snapshot.servers) or {}) do
+        local rsinfo = server.replicaset
+        if type(rsinfo) == 'table' and rsinfo.name and rsinfo.uuid then
+            uuids_by_rs[rsinfo.name] = uuids_by_rs[rsinfo.name] or {}
+            local bucket = uuids_by_rs[rsinfo.name]
+            bucket[rsinfo.uuid] = bucket[rsinfo.uuid] or {}
+            table.insert(bucket[rsinfo.uuid], alias)
+        end
+    end
+    for rs, by_uuid in pairs(uuids_by_rs) do
+        local distinct = 0
+        for _ in pairs(by_uuid) do distinct = distinct + 1 end
+        if distinct > 1 then
+            table.insert(out, make_issue {
+                id = M.make_id('failover', 'replicaset', rs, 'alien'),
+                category = M.CATEGORIES.FAILOVER,
+                severity = M.SEVERITY.WARNING,
+                scope    = M.SCOPE.REPLICASET,
+                replicaset = rs,
+                message  = string.format(
+                    'replicaset %q has instances with different replicaset '
+                    .. 'UUIDs — two clusters may be sharing this etcd prefix '
+                    .. '/ cluster cookie. The agent refuses to promote aliens.',
+                    rs),
+                now = now,
+            })
+        end
+    end
+    return out
+end
+
 -- Combine all rules. Output is sorted by (severity desc, id asc)
 -- so the UI can show critical issues first; ties broken by ID for
 -- deterministic ordering.
@@ -496,6 +573,7 @@ function M.scan(snapshot, opts)
         M.check_replication, M.check_memory,
         M.check_clock, M.check_config,
         M.check_synchro_quorum, M.check_failover_coordinator,
+        M.check_two_rw, M.check_alien,
     }) do
         local rule_issues = fn(snapshot, thresholds, now)
         for _, issue in ipairs(rule_issues) do

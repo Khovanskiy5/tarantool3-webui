@@ -138,6 +138,11 @@ M.PROBE_SRC = [[
                 uuid = info.replicaset.uuid,
             } or nil
         end),
+        id            = info.id,
+        synchro       = safe(function()
+            local q = info.synchro and info.synchro.queue
+            return q and { queue = { owner = q.owner, term = q.term } } or nil
+        end),
         config_status = type(cfg_info) == 'table' and cfg_info.status or nil,
         config_alerts = type(cfg_info) == 'table' and map_alerts(cfg_info.alerts) or {},
     }
@@ -273,6 +278,11 @@ local function collect_local_probe()
                 name = info.replicaset.name,
                 uuid = info.replicaset.uuid,
             } or nil
+        end),
+        id            = info.id,
+        synchro       = safe_call(function()
+            local q = info.synchro and info.synchro.queue
+            return q and { queue = { owner = q.owner, term = q.term } } or nil
         end),
         config_status = type(cfg_info) == 'table' and cfg_info.status or nil,
         config_alerts = config_alerts,
