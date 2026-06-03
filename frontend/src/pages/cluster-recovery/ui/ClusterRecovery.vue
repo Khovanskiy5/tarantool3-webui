@@ -10,10 +10,12 @@
       with the matching wizard button.
 
   Each wizard collects the inputs it needs (winner + losers for
-  split-brain; target for takeover), goes through the existing
-  DestructiveActionDialog for type-to-confirm, then fires
-  `recoveryAction(...)`. Streaming progress is post-MVP — the
-  resolver returns the per-peer outcome synchronously.
+  split-brain; target for takeover), then hands (action, payload) to
+  the shared RecoveryAssessmentPanel: a read-only `recoveryPreflight`
+  computes the risk summary, and only then is `recoveryAction(...)`
+  fired with the enforcement context (acknowledge / confirm token /
+  fingerprint / idempotency key). safe/caution apply with one click;
+  dangerous actions require the typed token in the panel.
 -->
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
@@ -27,7 +29,6 @@ import MultiSelect from 'primevue/multiselect';
 import Dialog from 'primevue/dialog';
 import InputText from 'primevue/inputtext';
 import InputNumber from 'primevue/inputnumber';
-import Checkbox from 'primevue/checkbox';
 import Fluid from 'primevue/fluid';
 import RecoveryAssessmentPanel, {
   type Assessment,
@@ -311,8 +312,6 @@ const sbLosers = ref<string[]>([]);
 const sbAction = ref<'rebootstrap_losing' | 'force_promote_winner' | 'manual'>(
   'rebootstrap_losing',
 );
-const sbConfirm = ref('');
-const sbBusy = ref(false);
 
 const splitBrainPeers = computed(() => {
   if (snapshot.value === null) return [] as PeerEntry[];
@@ -345,70 +344,35 @@ function openSplitBrainWizard() {
     healthyPeers.value.find((p) => p.queue_owner)?.alias ?? healthyPeers.value[0]?.alias ?? '';
   sbLosers.value = splitBrainPeers.value.map((p) => p.alias);
   sbAction.value = 'rebootstrap_losing';
-  sbConfirm.value = '';
 }
 
-const sbConfirmExpected = computed(() => `SPLIT BRAIN ${sbWinner.value}`);
-
-async function executeSplitBrain() {
-  if (sbConfirm.value.trim() !== sbConfirmExpected.value) return;
-  sbBusy.value = true;
-  const res = await getClient()
-    .mutation(ACTION_M, {
-      action: 'split_brain_resolve',
-      payload: JSON.stringify({
-        action: sbAction.value,
-        winner_alias: sbWinner.value,
-        losing_aliases: sbLosers.value,
-      }),
-    })
-    .toPromise();
-  sbBusy.value = false;
-  if (res.error) {
-    error.value = res.error.message;
-    return;
-  }
-  lastResult.value =
-    (res.data as { recoveryAction: ActionResult } | undefined)?.recoveryAction ?? null;
+// Hand off to the assessment panel (preflight -> risk summary -> apply).
+function executeSplitBrain() {
+  const payload = JSON.stringify({
+    action: sbAction.value,
+    winner_alias: sbWinner.value,
+    losing_aliases: sbLosers.value,
+  });
   sbOpen.value = false;
-  await refresh();
+  void openAssessment('split_brain_resolve', payload);
 }
 
 // ── Leader takeover wizard ────────────────────────────────────────
 
 const ltOpen = ref(false);
 const ltTarget = ref<string>('');
-const ltConfirm = ref('');
-const ltBusy = ref(false);
 
 function openTakeoverWizard() {
   ltOpen.value = true;
   // Pick the peer with the highest LSN as the default candidate.
   const sorted = healthyPeers.value.slice().sort((a, b) => (b.last_lsn ?? 0) - (a.last_lsn ?? 0));
   ltTarget.value = sorted[0]?.alias ?? '';
-  ltConfirm.value = '';
 }
 
-const ltConfirmExpected = computed(() => `TAKEOVER ${ltTarget.value}`);
-
-async function executeTakeover() {
-  if (ltConfirm.value.trim() !== ltConfirmExpected.value) return;
-  ltBusy.value = true;
-  const res = await getClient()
-    .mutation(ACTION_M, {
-      action: 'leader_takeover',
-      payload: JSON.stringify({ target_alias: ltTarget.value }),
-    })
-    .toPromise();
-  ltBusy.value = false;
-  if (res.error) {
-    error.value = res.error.message;
-    return;
-  }
-  lastResult.value =
-    (res.data as { recoveryAction: ActionResult } | undefined)?.recoveryAction ?? null;
+function executeTakeover() {
+  const payload = JSON.stringify({ target_alias: ltTarget.value });
   ltOpen.value = false;
-  await refresh();
+  void openAssessment('leader_takeover', payload);
 }
 
 const peerOptions = computed(() =>
@@ -422,8 +386,6 @@ const peerOptions = computed(() =>
 const orOpen = ref(false);
 const orTarget = ref<string>('');
 const orAction = ref<'force_reconnect' | 'rebootstrap' | 'solo_promote'>('force_reconnect');
-const orConfirm = ref('');
-const orBusy = ref(false);
 
 function openOrphanWizard() {
   orOpen.value = true;
@@ -436,41 +398,21 @@ function openOrphanWizard() {
   const owner = (snapshot.value?.peers ?? []).find((p) => p.queue_owner);
   orTarget.value = orphan?.alias ?? owner?.alias ?? (snapshot.value?.peers ?? [])[0]?.alias ?? '';
   orAction.value = 'force_reconnect';
-  orConfirm.value = '';
 }
 
-const orConfirmExpected = computed(() => `ORPHAN ${orTarget.value}`);
-
-async function executeOrphan() {
-  if (orConfirm.value.trim() !== orConfirmExpected.value) return;
-  orBusy.value = true;
-  const res = await getClient()
-    .mutation(ACTION_M, {
-      action: 'orphan_resolve',
-      payload: JSON.stringify({
-        target_alias: orTarget.value,
-        action: orAction.value,
-      }),
-    })
-    .toPromise();
-  orBusy.value = false;
-  if (res.error) {
-    error.value = res.error.message;
-    return;
-  }
-  lastResult.value =
-    (res.data as { recoveryAction: ActionResult } | undefined)?.recoveryAction ?? null;
+function executeOrphan() {
+  const payload = JSON.stringify({
+    target_alias: orTarget.value,
+    action: orAction.value,
+  });
   orOpen.value = false;
-  await refresh();
+  void openAssessment('orphan_resolve', payload);
 }
 
 // ── Quorum loss wizard ────────────────────────────────────────────
 const qOpen = ref(false);
 const qTarget = ref<string>('');
 const qWindow = ref<number>(300);
-const qAck = ref(false);
-const qConfirm = ref('');
-const qBusy = ref(false);
 
 function openQuorumWizard() {
   qOpen.value = true;
@@ -479,34 +421,16 @@ function openQuorumWizard() {
     (snapshot.value?.peers ?? [])[0]?.alias ??
     '';
   qWindow.value = 300;
-  qAck.value = false;
-  qConfirm.value = '';
 }
 
-const qConfirmExpected = computed(() => `QUORUM ${qTarget.value}`);
-
-async function executeQuorum() {
-  if (qConfirm.value.trim() !== qConfirmExpected.value || !qAck.value) return;
-  qBusy.value = true;
-  const res = await getClient()
-    .mutation(ACTION_M, {
-      action: 'quorum_loss_escape',
-      payload: JSON.stringify({
-        target_alias: qTarget.value,
-        window_sec: qWindow.value,
-        risk_acknowledged: true,
-      }),
-    })
-    .toPromise();
-  qBusy.value = false;
-  if (res.error) {
-    error.value = res.error.message;
-    return;
-  }
-  lastResult.value =
-    (res.data as { recoveryAction: ActionResult } | undefined)?.recoveryAction ?? null;
+function executeQuorum() {
+  const payload = JSON.stringify({
+    target_alias: qTarget.value,
+    window_sec: qWindow.value,
+    risk_acknowledged: true,
+  });
   qOpen.value = false;
-  await refresh();
+  void openAssessment('quorum_loss_escape', payload);
 }
 
 // ── Topology fix wizard ───────────────────────────────────────────
@@ -520,14 +444,10 @@ interface TopologyPeer {
 const tOpen = ref(false);
 const tPeers = ref<TopologyPeer[]>([]);
 const tFixes = ref<Record<string, string>>({});
-const tConfirm = ref('');
-const tBusy = ref(false);
 const tDiagnosed = ref(false);
 
 async function openTopologyWizard() {
   tOpen.value = true;
-  tConfirm.value = '';
-  tBusy.value = false;
   tDiagnosed.value = false;
   tPeers.value = [];
   tFixes.value = {};
@@ -565,27 +485,11 @@ async function openTopologyWizard() {
   tDiagnosed.value = true;
 }
 
-const tConfirmExpected = 'TOPOLOGY FIX';
-
-async function executeTopology() {
-  if (tConfirm.value.trim() !== tConfirmExpected) return;
+function executeTopology() {
   if (Object.keys(tFixes.value).length === 0) return;
-  tBusy.value = true;
-  const res = await getClient()
-    .mutation(ACTION_M, {
-      action: 'topology_fix',
-      payload: JSON.stringify({ fixes: tFixes.value }),
-    })
-    .toPromise();
-  tBusy.value = false;
-  if (res.error) {
-    error.value = res.error.message;
-    return;
-  }
-  lastResult.value =
-    (res.data as { recoveryAction: ActionResult } | undefined)?.recoveryAction ?? null;
+  const payload = JSON.stringify({ fixes: tFixes.value });
   tOpen.value = false;
-  await refresh();
+  void openAssessment('topology_fix', payload);
 }
 
 // ── WAL repair wizard ─────────────────────────────────────────────
@@ -622,28 +526,13 @@ async function openWalRepairWizard() {
   }));
 }
 
-async function quarantineWal(row: WalRow) {
+function quarantineWal(row: WalRow) {
   if (row.ok) return;
-  if (
-    !window.confirm(
-      `Quarantine ${row.file}? ` +
-        `It will be renamed to ${row.file}.corrupt and skipped on next boot.`,
-    )
-  ) {
-    return;
-  }
-  const res = await getClient()
-    .mutation(ACTION_M, {
-      action: 'wal_quarantine',
-      payload: JSON.stringify({ file: row.file }),
-    })
-    .toPromise();
-  if (res.error) {
-    error.value = res.error.message;
-    return;
-  }
-  // Refresh the diagnostic so the quarantined file disappears.
-  await openWalRepairWizard();
+  // Route through the assessment panel: it classifies tail vs mid-chain
+  // corruption and gates a dangerous (mid-chain) quarantine behind a token.
+  const payload = JSON.stringify({ file: row.file });
+  wOpen.value = false;
+  void openAssessment('wal_quarantine', payload);
 }
 </script>
 
@@ -923,24 +812,14 @@ async function quarantineWal(row: WalRow) {
               option-value="value"
             />
           </div>
-          <div class="r-field">
-            <label for="sb-confirm">Confirmation phrase</label>
-            <InputText id="sb-confirm" v-model="sbConfirm" :placeholder="sbConfirmExpected" />
-            <Message size="small" severity="warn" variant="simple">
-              Destructive action. Type <code>{{ sbConfirmExpected }}</code
-              >.
-            </Message>
-          </div>
         </Fluid>
       </div>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="sbOpen = false" />
         <Button
-          label="Resolve"
+          label="Review…"
           icon="pi pi-shield"
-          severity="danger"
-          :loading="sbBusy"
-          :disabled="sbConfirm.trim() !== sbConfirmExpected"
+          :disabled="!sbWinner"
           @click="executeSplitBrain"
         />
       </template>
@@ -982,24 +861,14 @@ async function quarantineWal(row: WalRow) {
               option-value="value"
             />
           </div>
-          <div class="r-field">
-            <label for="or-confirm">Confirmation phrase</label>
-            <InputText id="or-confirm" v-model="orConfirm" :placeholder="orConfirmExpected" />
-            <Message size="small" severity="warn" variant="simple">
-              Type <code>{{ orConfirmExpected }}</code
-              >.
-            </Message>
-          </div>
         </Fluid>
       </div>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="orOpen = false" />
         <Button
-          label="Resolve"
+          label="Review…"
           icon="pi pi-link"
-          severity="warn"
-          :loading="orBusy"
-          :disabled="orConfirm.trim() !== orConfirmExpected"
+          :disabled="!orTarget"
           @click="executeOrphan"
         />
       </template>
@@ -1056,28 +925,14 @@ async function quarantineWal(row: WalRow) {
               Auto-restores original quorum after this window.
             </Message>
           </div>
-          <div class="r-ack">
-            <Checkbox v-model="qAck" input-id="q-ack" binary />
-            <label for="q-ack">I accept the split-brain risk during the window</label>
-          </div>
-          <div class="r-field">
-            <label for="q-confirm">Confirmation phrase</label>
-            <InputText id="q-confirm" v-model="qConfirm" :placeholder="qConfirmExpected" />
-            <Message size="small" severity="warn" variant="simple">
-              Type <code>{{ qConfirmExpected }}</code
-              >.
-            </Message>
-          </div>
         </Fluid>
       </div>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="qOpen = false" />
         <Button
-          label="Lower quorum"
+          label="Review…"
           icon="pi pi-bolt"
-          severity="danger"
-          :loading="qBusy"
-          :disabled="!qAck || qConfirm.trim() !== qConfirmExpected"
+          :disabled="!qTarget"
           @click="executeQuorum"
         />
       </template>
@@ -1123,26 +978,13 @@ async function quarantineWal(row: WalRow) {
             </tr>
           </tbody>
         </table>
-        <Fluid v-if="tDiagnosed && Object.keys(tFixes).length > 0">
-          <div class="r-field">
-            <label for="t-confirm">Confirmation phrase</label>
-            <InputText id="t-confirm" v-model="tConfirm" :placeholder="tConfirmExpected" />
-            <Message size="small" severity="warn" variant="simple">
-              Type <code>{{ tConfirmExpected }}</code
-              >.
-            </Message>
-          </div>
-        </Fluid>
       </div>
       <template #footer>
         <Button label="Close" severity="secondary" text @click="tOpen = false" />
         <Button
           v-if="tDiagnosed && Object.keys(tFixes).length > 0"
-          label="Apply fix"
+          label="Review…"
           icon="pi pi-link"
-          severity="warn"
-          :loading="tBusy"
-          :disabled="tConfirm.trim() !== tConfirmExpected"
           @click="executeTopology"
         />
       </template>
@@ -1225,24 +1067,14 @@ async function quarantineWal(row: WalRow) {
               Selected peer already owns the queue — pick a different one.
             </Message>
           </div>
-          <div class="r-field">
-            <label for="lt-confirm">Confirmation phrase</label>
-            <InputText id="lt-confirm" v-model="ltConfirm" :placeholder="ltConfirmExpected" />
-            <Message size="small" severity="warn" variant="simple">
-              Drives <code>box.ctl.promote()</code>. Type <code>{{ ltConfirmExpected }}</code
-              >.
-            </Message>
-          </div>
         </Fluid>
       </div>
       <template #footer>
         <Button label="Cancel" severity="secondary" text @click="ltOpen = false" />
         <Button
-          label="Promote"
+          label="Review…"
           icon="pi pi-arrow-up-right"
-          severity="warn"
-          :loading="ltBusy"
-          :disabled="ltConfirm.trim() !== ltConfirmExpected"
+          :disabled="!ltTarget"
           @click="executeTakeover"
         />
       </template>
