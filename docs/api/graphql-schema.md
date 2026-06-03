@@ -183,7 +183,7 @@ Per-mode demote. `off`: `mode: ro`. `supervised`: `box.ctl.demote` на target (
 
 Переключает кластер на новый failover mode (`off`/`manual`/`election`/`supervised`). `params` — JSON envelope: `synchro_quorum`, `synchro_timeout`, `election_timeout`, `election_fencing_mode` (off/soft/strict), `agent` (для off+agent варианта), `agent_params` (для supervised).
 
-`supervised` — наш OS-эквивалент: shorthand для `replication.failover: off` + `roles_cfg.webui.failover.agent: true`. Переключение на `election` или `manual` автоматически выключает наш агент чтобы не было fight за synchro queue.
+`supervised` — нативный режим Tarantool: записывает `replication.failover: supervised` + `bootstrap_strategy: auto` + `database.use_mvcc_engine: true` + `roles_cfg.webui.failover.agent: true`, и снимает `database.mode`/`<rs>.leader` (в supervised они запрещены). Applier стартует инстансы read-only, а writer'а в рантайме назначает агент через synchro-очередь. Fallback `off`+agent остаётся для сборок, отвергающих supervised на CE. Переключение на `election`/`manual` автоматически выключает агент, чтобы не было fight за synchro queue.
 
 Reject: `synchro_quorum < N/2+1` (would allow split-brain).
 

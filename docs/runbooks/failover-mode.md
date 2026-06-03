@@ -1,10 +1,10 @@
 # Runbook: change failover mode
 
-Переключить кластер между четырьмя режимами выбора лидера: `off` (без агента) / `off + supervised agent` (наш OS аналог Cartridge supervised) / `manual` / `election` (raft).
+Переключить кластер между режимами выбора лидера: `supervised` (нативный Tarantool + наш агент, рекомендуемый) / `off` (legacy/fallback, с агентом или без) / `manual` / `election` (raft).
 
 ## Когда применять
 
-* Переход с прототипа (`off` + manual leader через `database.mode`) на production-grade автоматический failover (`supervised` или `election`).
+* Переход с прототипа (`off` + ручной лидер через `database.mode`) на production-grade автоматический failover (`supervised` или `election`).
 * Maintenance: временно перейти в `manual` чтобы зафиксировать лидера на одном инстансе на час тестирования.
 * Тестирование raft: переключить кластер в `election` и проверить как ведёт себя приложение под promote/demote.
 
@@ -12,10 +12,10 @@
 
 1. **Открыть /failover → кнопка `Settings…`.**
 2. **Выбрать новый mode из dropdown.** Появятся dynamic-fields подходящие для выбранного режима:
-   * `off` — toggle "Enable supervised agent on top of failover: off". По дефолту `true` (рекомендуемый production setup).
-   * `manual` — никаких extra knobs; лидера будешь назначать через `editTopology` или через [promote.md](promote.md).
+   * `supervised` (рекомендуемый) — нативный режим + агент; `lease_ttl_sec` (default 15s — TTL etcd-аренды координатора), `keepalive_interval`, `probe_timeout_sec`.
+   * `off` — legacy/fallback; toggle "Enable agent" (по дефолту `true`). Без агента лидера задаёшь вручную через `database.mode`.
+   * `manual` — никаких extra knobs; лидера назначаешь через `editTopology` или [promote.md](promote.md).
    * `election` — `election_timeout`, `election_fencing_mode` (off/soft/strict).
-   * `supervised` — `lease_ttl_sec` (default 3s — TTL etcd-аренды координатора).
 3. **(Опционально) выставить `synchro_quorum` / `synchro_timeout`** в SYNCHRO разделе. Пусто = backend оставит текущее значение. UI флагает красным баннером если ввести quorum < N/2+1 (split-brain risk).
 4. **Preview** → backend возвращает `diff_summary: ['set_failover_mode → election']` и `prepared_id`. Можно перечитать что произойдёт.
 5. **Apply** → backend коммитит в etcd + fan-out `config:reload()` на всех peer'ах (включая self). Ответ: `failover mode changed to election (revision 17). Reloaded on 3 peer(s) (self + 2).`
@@ -24,10 +24,10 @@
 
 * Берёт live YAML из etcd (или из file mirror на свежем кластере).
 * Меняет `replication.failover` и сопутствующие `synchro_*` / `election_*` knobs.
-* Снимает `database.mode` со всех инстансов когда новый mode ≠ `off` (Tarantool схема не пускает оба одновременно).
+* Снимает `database.mode` и `<rs>.leader` со всех инстансов когда новый mode ∈ {`election`, `manual`, `supervised`} (Tarantool-схема не пускает их одновременно с этими режимами). В `supervised` дополнительно пинит `bootstrap_strategy: auto` и `database.use_mvcc_engine: true`.
 * Тоглит `roles_cfg.webui.failover.agent`:
   * `election` / `manual` → forcibly `false` (наш agent не должен фитнуть Tarantool за queue ownership).
-  * `supervised` → forcibly `true` (это и есть supervised path).
+  * `supervised` → forcibly `true` (нативный режим + агент назначает writer'а).
   * `off` → default `true` (preserve previous "agent on" for typical setups); `params.agent: false` отключает явно.
 * Validate'ит assembled YAML (`config_schema.validate`).
 * `twophase.prepare → commit`.

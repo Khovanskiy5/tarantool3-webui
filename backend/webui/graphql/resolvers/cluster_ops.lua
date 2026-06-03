@@ -1004,8 +1004,10 @@ end
 -- Snapshot the current leader per replicaset so failover-mode
 -- transitions can carry the intent across the strip blocks.
 -- Resolution order matches how each source-mode encodes
--- leadership: `database.mode: rw` (off / supervised), then
--- `rs.leader` (manual). Election leaves no static marker.
+-- leadership: `database.mode: rw` (off), then `rs.leader` (manual).
+-- election and supervised leave no static marker (raft / the agent's
+-- etcd appointment drive leadership) — pick_manual_leader falls back
+-- to the agent's last appointment for those.
 local function snapshot_prior_leader(parsed)
     local out = {}
     for _, group in pairs(parsed.groups or {}) do
@@ -1112,12 +1114,22 @@ function M.mutation_set_failover_mode(root, args)
     local new_parsed = topology_edit._deep_copy(parsed)
     new_parsed.replication = new_parsed.replication or {}
 
-    -- Special case: `supervised` IS our community agent on top of
-    -- `replication.failover: off`. Translate the operator-friendly
-    -- name to (off + agent: true) so the Tarantool 3.x schema
-    -- validates cleanly.
+    -- `supervised` is written as the Tarantool-native failover mode:
+    -- the config applier starts instances read-only and our agent
+    -- assigns the writer via etcd + the synchro queue. We do NOT set
+    -- `database.mode` (forbidden under supervised; the strip blocks
+    -- below remove any leftover), and we pin `bootstrap_strategy: auto`
+    -- so the minimal-name instance bootstraps the replicaset, plus MVCC
+    -- for correct synchro-transaction isolation. `agent: true` keeps the
+    -- community driver on.
     if args.mode == 'supervised' then
-        new_parsed.replication.failover = 'off'
+        new_parsed.replication.failover = 'supervised'
+        new_parsed.replication.bootstrap_strategy =
+            new_parsed.replication.bootstrap_strategy or 'auto'
+        new_parsed.database = new_parsed.database or {}
+        if new_parsed.database.use_mvcc_engine == nil then
+            new_parsed.database.use_mvcc_engine = true
+        end
         new_parsed.roles_cfg = new_parsed.roles_cfg or {}
         new_parsed.roles_cfg.webui = new_parsed.roles_cfg.webui or {}
         new_parsed.roles_cfg.webui.failover =
@@ -1134,9 +1146,8 @@ function M.mutation_set_failover_mode(root, args)
         --   * election / manual → forcibly OFF. Tarantool itself
         --     drives leadership; our agent would fight it for the
         --     synchro queue.
-        --   * supervised → forcibly ON (it IS the agent path; the
-        --     other branch above explicitly maps supervised to
-        --     `off + agent: true`).
+        --   * supervised → handled in the branch above (native
+        --     failover: supervised + agent: true).
         --   * off → defaults to ON because plain `failover: off`
         --     without an explicit `database.mode` per instance
         --     leaves the cluster with no RW peer. The agent is
@@ -1171,23 +1182,21 @@ function M.mutation_set_failover_mode(root, args)
     -- agent-toggle block above cannot perturb the snapshot.
     local prior_leader = snapshot_prior_leader(parsed)
 
-    -- Schema rule: native `replication.failover: election | manual`
-    -- is mutually exclusive with per-instance `database.mode`. The
-    -- moment we flip into one of those, Tarantool refuses to
-    -- (re)load the cluster YAML if any instance still carries an
-    -- explicit `database.mode`. Strip it cluster-wide here so the
-    -- commit lands cleanly. The intent encoded by the stripped
+    -- Schema rule: native `replication.failover: election | manual |
+    -- supervised` is mutually exclusive with per-instance
+    -- `database.mode`. The moment we flip into one of those, Tarantool
+    -- refuses to (re)load the cluster YAML if any instance still
+    -- carries an explicit `database.mode`. Strip it cluster-wide here
+    -- so the commit lands cleanly. The intent encoded by the stripped
     -- `database.mode: rw` is preserved in `prior_leader` above and
     -- re-materialised as `rs.leader` in the manual block below.
     --
-    -- The `supervised` mode here is the WebUI alias that the
-    -- branch above rewrites to `failover: off + agent: true`, NOT
-    -- the Tarantool-native value. On disk the cluster stays
-    -- `failover: off`, so the schema rule does not apply and
-    -- stripping `database.mode` would break fresh JOIN — without
-    -- a writable peer in config a new instance hits
-    -- `box_cfg.lua:1107-1118` "No leader to register".
-    if args.mode == 'election' or args.mode == 'manual' then
+    -- Under `supervised` a fresh JOIN does not need a config-declared
+    -- writable peer: the applier disables force_ro_on_startup for
+    -- supervised (box_cfg.lua:1082-1084) and the agent-promoted leader
+    -- registers new instances at runtime — so stripping is safe.
+    if args.mode == 'election' or args.mode == 'manual'
+        or args.mode == 'supervised' then
         for _, group in pairs(new_parsed.groups or {}) do
             for _, rs in pairs(group.replicasets or {}) do
                 for _, inst in pairs(rs.instances or {}) do
@@ -1208,12 +1217,12 @@ function M.mutation_set_failover_mode(root, args)
 
     -- Schema rule (cross_validate in config_store/schema.lua):
     -- `replicasets.<rs>.leader` MUST NOT be set when
-    -- `replication.failover = election` OR
-    -- `replication.failover = off`. Both modes drive leadership
-    -- through other channels (raft / per-instance database.mode /
-    -- our community agent) and reject a contradicting static `leader`.
-    -- Strip it the same way we strip `database.mode`.
-    if args.mode == 'election' or args.mode == 'off' then
+    -- `replication.failover = election | supervised | off`. These
+    -- modes drive leadership through other channels (raft / our
+    -- community agent / per-instance database.mode) and reject a
+    -- contradicting static `leader`. Strip it like `database.mode`.
+    if args.mode == 'election' or args.mode == 'off'
+        or args.mode == 'supervised' then
         for _, group in pairs(new_parsed.groups or {}) do
             for _, rs in pairs(group.replicasets or {}) do
                 if rs.leader ~= nil then rs.leader = nil end

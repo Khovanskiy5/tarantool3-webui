@@ -21,7 +21,7 @@
 | Mode | Действие |
 |---|---|
 | `off` (без agent) | `editTopology` ставит `database.mode: rw` на target и `mode: ro` на остальных в этом replicaset. |
-| `off` + agent / `supervised` | Запись `manual_override_until = now + ttl_sec` в `/failover/replicasets/<rs>/leader`. Coordinator уважает override TTL секунд (default 300s) и не выбирает другого. Параллельно `box.ctl.promote()` на target сразу переносит synchro queue. |
+| `supervised` (или `off` + agent fallback) | Запись `manual_override_until = now + ttl_sec` в `/failover/replicasets/<rs>/leader`. Coordinator уважает override TTL секунд (default 300s) и не выбирает другого. Параллельно `box.ctl.promote()` на target сразу переносит synchro queue. |
 | `manual` | `editTopology` обновляет `replicasets.<rs>.leader: <alias>`. |
 | `election` | `box.ctl.promote()` через net.box на target — Tarantool гоняет raft round. |
 

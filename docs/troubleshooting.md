@@ -37,32 +37,30 @@ Runbooks для типовых инцидентов. Для каждого сл�
 
 **Симптомы.** Все три инстанса показывают RO, ни один не принимает запись. В `box.info.ro_reason` — `synchro`.
 
-**Причина.** Synchronous queue ownership «зависла» у мёртвого предыдущего лидера. Обычно происходит после жёсткого killing'а + если был выставлен `database.mode: ro` на followers.
+**Причина.** Synchronous queue ownership «зависла» у мёртвого предыдущего лидера — никто не владеет очередью, поэтому все RO. Обычно после жёсткого killing'а лидера, пока агент ещё не назначил нового.
 
 **Действие.**
-1. Убедиться, что в YAML **все** инстансы декларируют `database.mode: rw`. С `mode: ro` на followers Tarantool переписывает `read_only` при каждом config reload, и failover agent с ним «бодается».
-2. Убедиться, что `roles_cfg.webui.failover.agent: true` и `replication.failover: off`.
-3. Если ничего не помогает — вручную `box.ctl.promote()` на любом одном инстансе (через REST `/api/eval` под superuser или прямо через `tt console`).
+1. Убедиться, что режим — `replication.failover: supervised` и `roles_cfg.webui.failover.agent: true` (в логе агента при старте: `failover agent running under replication.failover { mode = supervised }`). В supervised `database.mode` **не задаётся** — applier сам держит инстансы RO до назначения.
+2. Дать агенту пару секунд — он назначит лидера (appointment в etcd) и watcher сделает `box.ctl.promote`.
+3. Если ничего не помогает — вручную `box.ctl.promote()` на самом догнавшем инстансе (через REST `/api/eval` под superuser или `tt console`), либо через UI `promoteInstance`.
 
 ### Новый инстанс падает с `No leader to register`
 
 **Симптомы.** Свежий инстанс (без snap) не выходит из startup; в логе:
 `Startup failure. No leader to register new instance "tt-3". All the instances in replicaset "rs-1" of group "default" are configured to the read-only mode.` Уже работающие пиры здоровы, login работает.
 
-**Причина.** Bootstrap-проверка в `box_cfg.lua` (lines 1107-1118) ищет в YAML хотя бы один peer с `database.mode: rw` — это будущий писатель, который впишет новичка в `_cluster`. По умолчанию в replicaset с >1 instance отсутствие `database.mode` равно RO; если поле пропало у всех — регистрироваться негде, и инстанс exit'ится ещё до подключения к failover-агенту. Live-инстансы переживают пропажу: `has_snap=true` коротко замыкает ту же проверку в `box_cfg.lua:1105`, а runtime `box.cfg.read_only` контролируется failover-агентом через etcd-лизу.
+**Причина (только режим `off`-fallback).** Bootstrap-проверка в `box_cfg.lua:1107-1118` ищет в YAML писателя (`database.mode: rw`), который впишет новичка в `_cluster`. В legacy-режиме `failover: off` без RW-пира регистрироваться негде, и инстанс exit'ится. **В нативном `supervised` этой проблемы нет:** applier отключает `force_ro_on_startup` для supervised (`box_cfg.lua:1082-1084`), а новичка регистрирует лидер, назначенный агентом в рантайме — `database.mode` для этого не нужен.
 
 **Диагностика.**
 ```bash
 docker exec webui-etcd etcdctl get /tarantool/webui/config/all --print-value-only \
-  | grep -A 2 'database:'
+  | grep -E 'failover|bootstrap_strategy'
 ```
-В выводе должно быть `mode: rw` под каждым инстансом в `groups → default → replicasets → rs-1 → instances`.
+Должно быть `failover: supervised` + `bootstrap_strategy: auto`. Если видите `failover: off` без `database.mode: rw` ни у кого — это и есть причина (legacy-конфиг).
 
 **Действие.**
-1. Если `database.mode: rw` пропал — взять текущий конфиг из etcd, дописать `database: { mode: rw }` каждому инстансу, и `etcdctl put` обратно в `/tarantool/webui/config/all`. Tarantool watch'ит ключ и подхватит изменение в течение секунды.
-2. Перезапустить «новый» инстанс — он пройдёт JOIN.
-
-**Известная причина пропажи.** Старая версия GraphQL-резолвера `setFailoverMode("supervised")` strip'ала `database.mode` со всех инстансов как часть «schema rule» блока, разделявшего поведение с native `election`/`manual`. На диске `supervised` хранится как `failover: off + agent: true`, поэтому schema-rule не применяется — strip был ошибочным. Исправлено в `backend/webui/graphql/resolvers/cluster_ops.lua:1086-1104`.
+1. Перевести кластер на `failover: supervised` (UI `setFailoverMode("supervised")` или правкой YAML), затем перезапустить «новый» инстанс — он пройдёт JOIN через агент-назначенного лидера.
+2. Если по какой-то причине нужен `off`-fallback — дописать `database: { mode: rw }` хотя бы одному инстансу и `etcdctl put` обратно.
 
 ### Контейнер инстанса в loop'е с `Instance name for X is not set in snapshot`
 
@@ -155,8 +153,8 @@ docker exec webui-etcd etcdctl get --prefix /tarantool/webui/failover/
 
 **Возможные причины:**
 
-1. **Coordinator был coloocated с лидером.** Lease истечёт через `lease_ttl_sec` (default 3s), затем новый coordinator избирается через `election_interval` секунд → ещё ~5 секунд → appointment → watcher promote. Полный цикл — ~10 секунд. Если ждали меньше — это нормально.
-2. **Agent не стартовал.** Проверить `roles_cfg.webui.failover.agent: true` и `replication.failover: off`. Лог: `failover.agent: agent precondition failed` означает несовместимый `replication.failover` mode.
+1. **Coordinator был coloocated с лидером.** Lease истечёт через `lease_ttl_sec` (default 15s), затем новый coordinator избирается → appointment → watcher promote. Полный цикл — до ~TTL. Если ждали меньше — это нормально.
+2. **Agent не стартовал.** Проверить `roles_cfg.webui.failover.agent: true` и `replication.failover: supervised` (либо `off` как fallback). Лог: `failover.agent: agent precondition failed` означает несовместимый режим (`election`/`manual` агент не запускает).
 3. **etcd unreachable.** Лог: `failover.agent: lease keepalive failed`. Проверить `webui_etcd_request_total{status="error"}` и сетевой доступ из контейнера до etcd.
 4. **Нет ни одного `running` кандидата.** Лог: `failover.agent: no eligible candidate for rs-1`. Кандидат должен быть `box.info.status='running'` с lag <= `max_replication_lag_sec` (default 5).
 
@@ -166,7 +164,7 @@ docker exec webui-etcd etcdctl get --prefix /tarantool/webui/failover/
 
 **Возможные причины:**
 
-1. **Слишком низкий `lease_ttl_sec`.** При `lease_ttl_sec < keepalive_interval × 3` keepalive может не успеть. Поднять до 3+ секунд.
+1. **Слишком тесные тайминги.** Должно соблюдаться `keepalive_interval + 2*probe_timeout_sec ≤ lease_ttl_sec` (дефолт 5 + 2·2 = 9 ≤ 15). Если `lease_ttl_sec` занижен — keepalive не успевает и координатор теряет lease на ровном месте.
 2. **Сетевые проблемы между coordinator'ом и etcd.** Проверить `webui_etcd_request_total{status="error"}`.
 3. **Кандидат на границе health.** Hysteresis (`min_promotion_interval`, default 10s) должен предотвращать промоутинг чаще, чем раз в 10 секунд. Если flap'ает чаще — bug; собрать `diagnostics bundle` и приложить к issue.
 
@@ -174,7 +172,7 @@ docker exec webui-etcd etcdctl get --prefix /tarantool/webui/failover/
 
 **Симптомы.** На `/cluster` бейдж `leader` стоит на всех trёх инстансах.
 
-**Причина.** Старая версия UI определяла leader по `box.info.ro === false`. При `database.mode: rw` на всех + supervised-failover на synchro queue все три имеют `ro=false`.
+**Причина.** Старая версия UI определяла leader по `box.info.ro === false`. В legacy-модели (`off` + `database.mode: rw` на всех) все три имели `ro=false`. В нативном supervised не-лидеры RO, так что баг не воспроизводится, но старый UI всё равно стоит обновить.
 
 **Действие.** Обновить UI до текущей версии. Selector `isLeader(instance, leaderAlias)` теперь сравнивает `instance.alias === leaderAlias`, где `leaderAlias` приходит из `Replicaset.activeLeader || leader` резолвера.
 
