@@ -79,6 +79,83 @@ local function resolve_work_paths()
     return dirs
 end
 
+-- Pin this instance's uuid in the cluster config so the wiped instance
+-- reclaims the SAME identity on rejoin. In a named Tarantool 3.x cluster
+-- the instance NAME is bound to its uuid in `_cluster`; a rejoin with a
+-- fresh uuid orphans the name and the instance crash-loops on boot with
+-- "Instance name <x> is not set in snapshot and UUID is missing in the
+-- config" (src/box/lua/config/configdata.lua). Pinning the uuid keeps the
+-- named `_cluster` row valid across the wipe and satisfies that check.
+-- Returns (true, nil) on success/no-op, (nil, err) otherwise. (#3740)
+-- Read the live cluster YAML from etcd. → (raw, nil) | (nil, err).
+local function read_cluster_yaml()
+    local ok_cl, client_mod = pcall(require, 'webui.config_store.client')
+    if not ok_cl then return nil, 'config client unavailable' end
+    local client = client_mod.get_client()
+    if client == nil then return nil, 'etcd client unavailable' end
+    local kv = select(1, client:read_cluster_config())
+    if kv == nil or kv.value == nil then return nil, 'no current cluster config' end
+    return kv.value
+end
+
+-- Set instances.<name>.database.instance_uuid in the parsed config tree.
+-- → 'set' | 'already' | 'missing'.
+local function set_instance_uuid(parsed, name, uuid)
+    for _, group in pairs(parsed.groups or {}) do
+        for _, rs in pairs(group.replicasets or {}) do
+            local inst = rs.instances and rs.instances[name]
+            if type(inst) == 'table' then
+                inst.database = (type(inst.database) == 'table')
+                    and inst.database or {}
+                if inst.database.instance_uuid == uuid then return 'already' end
+                inst.database.instance_uuid = uuid
+                return 'set'
+            end
+        end
+    end
+    return 'missing'
+end
+
+-- Write a full cluster YAML straight to etcd. We deliberately bypass the
+-- two-phase commit here: a rebootstrap target often has BROKEN replication
+-- (frequently the very reason it is being rebootstrapped), so the 2PC
+-- prepared-row round-trip can't complete on it. The target reads the
+-- config fresh from etcd on its restart, so a plain write is enough to
+-- pin its uuid; healthy peers reconcile it on their next config commit.
+-- → (true, nil) | (nil, err).
+local function commit_cluster_yaml(new_yaml)
+    local ok_cl, client_mod = pcall(require, 'webui.config_store.client')
+    if not ok_cl then return nil, 'config client unavailable' end
+    local client = client_mod.get_client()
+    if client == nil then return nil, 'etcd client unavailable' end
+    local ok, res, err = pcall(client.write_cluster_config, client, new_yaml)
+    if not ok then return nil, 'etcd write raised: ' .. tostring(res) end
+    if res == nil then return nil, 'etcd write failed: ' .. tostring(err) end
+    return true
+end
+
+local function pin_self_instance_uuid()
+    local self_name = box.info and box.info.name
+    local my_uuid   = box.info and box.info.uuid
+    if type(self_name) ~= 'string' or self_name == ''
+        or type(my_uuid) ~= 'string' or my_uuid == '' then
+        return nil, 'self identity unavailable'
+    end
+    local raw, read_err = read_cluster_yaml()
+    if raw == nil then return nil, read_err end
+    local yaml = require('yaml')
+    local ok_p, parsed = pcall(yaml.decode, raw)
+    if not ok_p or type(parsed) ~= 'table' then
+        return nil, 'cluster config YAML invalid'
+    end
+    local outcome = set_instance_uuid(parsed, self_name, my_uuid)
+    if outcome == 'missing' then
+        return nil, 'instance ' .. self_name .. ' not found in config'
+    end
+    if outcome == 'already' then return true end  -- idempotent
+    return commit_cluster_yaml(yaml.encode(parsed))
+end
+
 -- POST /api/diagnostics/rebootstrap.
 --
 -- Refuses when the responding instance is the synchro queue owner —
@@ -130,39 +207,32 @@ function M.rebootstrap_handler(req)
         }
     end
 
-    -- Best-effort: drop our own row from the leader's `_cluster`
-    -- space before wiping. Without this the peers keep our OLD
-    -- instance_uuid in `_cluster`; on the next boot a fresh wipe
-    -- gives us a NEW uuid, peers end up with both, and applier
-    -- chokes on stale xlog references ("invalid instance UUID").
-    -- Forward the delete to the queue owner via the peer pool;
-    -- silent on failure — replication can still recover when the
-    -- new UUID registers, just with extra noise in the issue panel.
-    local my_uuid = box.info.uuid
-    local fwd_ok, fwd_err = pcall(function()
-        local rpc_ok, rpc = pcall(require, 'webui.cluster.rpc')
-        local peers_ok, peers = pcall(require, 'webui.cluster.peers')
-        if not (rpc_ok and peers_ok) then return end
-        local all = {}
-        for name in pairs(peers.list() or {}) do
-            table.insert(all, name)
-        end
-        if #all == 0 then return end
-        -- Anyone may try; only the queue owner will actually mutate
-        -- _cluster (others are RO and silently noop).
-        rpc.map_eval(string.format(
-            [[local s = box.space._cluster
-              for _, t in s:pairs() do
-                  if t[2] == %q then
-                      pcall(function() s:delete{t[1]} end)
-                  end
-              end
-              return true]], my_uuid), {}, { timeout = 3, peers = all })
-    end)
-    if not fwd_ok then
-        logger.warn('rebootstrap: _cluster cleanup forward failed', {
-            err = tostring(fwd_err),
+    -- Preserve our identity across the wipe: pin our instance_uuid in the
+    -- cluster config and KEEP the named `_cluster` row. In a named
+    -- Tarantool 3.x cluster the name is bound to the uuid; if we instead
+    -- dropped the `_cluster` row and rejoined with a fresh uuid, the new
+    -- snapshot would have no name and the instance would crash-loop on
+    -- "Instance name ... is not set in snapshot". Pinning keeps the uuid
+    -- stable so the rejoin re-syncs cleanly under the existing name.
+    --
+    -- This is a HARD precondition: if we can't pin it, abort instead of
+    -- wiping the instance into an unbootable state.
+    local pin_ok, pin_err = pin_self_instance_uuid()
+    if not pin_ok then
+        logger.warn('rebootstrap aborted: could not pin instance_uuid', {
+            instance = box.info.name, err = tostring(pin_err),
         })
+        return {
+            status = 500,
+            headers = { ['content-type'] = 'application/json' },
+            body = json.encode({ error = {
+                code = 'PIN_FAILED',
+                message = 'could not pin instance_uuid before wipe ('
+                    .. tostring(pin_err) .. '); aborted to avoid leaving '
+                    .. 'the instance unbootable',
+                request_id = request_id,
+            } }),
+        }
     end
 
     local dirs = resolve_work_paths()
@@ -307,5 +377,7 @@ end
 -- (relative wal_dir silently misses the real data) was hard to
 -- catch without a direct seam.
 M._resolve_one = _resolve_one
+-- Pure config-tree edit behind the rebootstrap identity pin; unit-tested.
+M._set_instance_uuid = set_instance_uuid
 
 return M
