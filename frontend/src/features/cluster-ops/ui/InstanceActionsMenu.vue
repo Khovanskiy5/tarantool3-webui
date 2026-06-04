@@ -15,6 +15,8 @@
  * matches the rest of the SPA's affordance style.
  */
 import { ref } from 'vue';
+import Button from 'primevue/button';
+import { useToast } from 'primevue/usetoast';
 
 import { DestructiveActionDialog } from '@/shared/ui/destructive-action-dialog';
 
@@ -33,16 +35,26 @@ const emit = defineEmits<{
 }>();
 
 const ops = useClusterOpsStore();
-const banner = ref<{ severity: 'ok' | 'err'; text: string } | null>(null);
+const toast = useToast();
 const expelOpen = ref(false);
 
-function setBanner(ok: boolean, text: string) {
-  banner.value = { severity: ok ? 'ok' : 'err', text };
+// Backend action messages can be long ("manual override appointment
+// written for tt-3 on rs-1 (expires in 300s). box.ctl.promote() ok.")
+// — far too wide for the inline actions cell — so results surface as a
+// corner toast instead. Successes auto-dismiss; failures stay until the
+// operator dismisses them.
+function notify(ok: boolean, summary: string, detail: string) {
+  toast.add({
+    severity: ok ? 'success' : 'error',
+    summary,
+    detail,
+    life: ok ? 5000 : undefined,
+  });
 }
 
 async function doPromote() {
   const r = await ops.promoteInstance(props.alias, { ttlSec: 300 });
-  setBanner(r.ok, r.message);
+  notify(r.ok, r.ok ? 'Promoted' : 'Promote failed', r.message);
   if (r.ok) emit('changed');
 }
 
@@ -50,13 +62,13 @@ async function doToggleEnabled() {
   // null/undefined → assume enabled; toggle the explicit flag.
   const next = props.disabled === true; // currently disabled → enable
   const r = await ops.setInstanceState(props.alias, { enabled: next });
-  setBanner(r.ok, r.message);
+  notify(r.ok, r.ok ? (next ? 'Enabled' : 'Disabled') : 'Update failed', r.message);
   if (r.ok) emit('changed');
 }
 
 async function onExpelConfirm() {
   const r = await ops.expelInstance(props.alias, false);
-  setBanner(r.ok, r.message);
+  notify(r.ok, r.ok ? 'Expelled' : 'Expel failed', r.message);
   expelOpen.value = false;
   if (r.ok) emit('changed');
 }
@@ -64,9 +76,10 @@ async function onExpelConfirm() {
 
 <template>
   <div class="webui-instance-actions">
-    <button
-      type="button"
-      class="webui-instance-actions__btn"
+    <Button
+      label="Promote"
+      size="small"
+      outlined
       :disabled="ops.pending || isLeader"
       :title="
         isLeader
@@ -74,12 +87,11 @@ async function onExpelConfirm() {
           : 'promote to leader for 5 min (supervised override)'
       "
       @click="doPromote"
-    >
-      Promote
-    </button>
-    <button
-      type="button"
-      class="webui-instance-actions__btn"
+    />
+    <Button
+      :label="disabled ? 'Enable' : 'Disable'"
+      size="small"
+      outlined
       :disabled="ops.pending"
       :title="
         disabled
@@ -87,28 +99,15 @@ async function onExpelConfirm() {
           : 'mark disabled — agent stops considering it for promotion'
       "
       @click="doToggleEnabled"
-    >
-      {{ disabled ? 'Enable' : 'Disable' }}
-    </button>
-    <button
-      type="button"
-      class="webui-instance-actions__btn webui-instance-actions__btn--danger"
+    />
+    <Button
+      label="Expel…"
+      size="small"
+      severity="danger"
+      outlined
       :disabled="ops.pending"
       @click="expelOpen = true"
-    >
-      Expel…
-    </button>
-    <p
-      v-if="banner"
-      :class="[
-        'webui-instance-actions__msg',
-        banner.severity === 'err'
-          ? 'webui-instance-actions__msg--err'
-          : 'webui-instance-actions__msg--ok',
-      ]"
-    >
-      {{ banner.text }}
-    </p>
+    />
     <DestructiveActionDialog
       :open="expelOpen"
       title="Expel instance"
@@ -135,57 +134,5 @@ async function onExpelConfirm() {
   align-items: center;
   gap: 0.35rem;
   flex-wrap: wrap;
-}
-
-.webui-instance-actions__btn {
-  padding: 0.25rem 0.6rem;
-  font-size: 0.78rem;
-  border-radius: 4px;
-  border: 1px solid var(--webui-border);
-  background: var(--webui-bg);
-  color: var(--webui-text);
-  cursor: pointer;
-}
-
-.webui-instance-actions__btn:not(:disabled):hover {
-  border-color: var(--webui-accent);
-  color: var(--webui-accent);
-}
-
-.webui-instance-actions__btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.35;
-}
-
-.webui-instance-actions__btn--danger {
-  color: var(--webui-danger);
-  border-color: rgba(248, 81, 73, 0.5);
-}
-
-.webui-instance-actions__btn--danger:not(:disabled):hover {
-  border-color: var(--webui-danger);
-  color: var(--webui-danger);
-  background: rgba(248, 81, 73, 0.08);
-}
-
-.webui-instance-actions__msg {
-  flex-basis: 100%;
-  margin: 0.25rem 0 0 0;
-  font-size: 0.75rem;
-  padding: 0.25rem 0.5rem;
-  border-radius: 4px;
-  border: 1px solid transparent;
-}
-
-.webui-instance-actions__msg--ok {
-  background: rgba(63, 185, 80, 0.1);
-  border-color: rgba(63, 185, 80, 0.3);
-  color: var(--webui-success);
-}
-
-.webui-instance-actions__msg--err {
-  background: rgba(248, 81, 73, 0.1);
-  border-color: rgba(248, 81, 73, 0.3);
-  color: var(--webui-danger);
 }
 </style>

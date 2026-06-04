@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import Button from 'primevue/button';
 import ToggleSwitch from 'primevue/toggleswitch';
+import Message from 'primevue/message';
 
 const text = ref('');
 const error = ref<string | null>(null);
@@ -61,12 +62,12 @@ onBeforeUnmount(stopTimer);
         </label>
       </div>
     </header>
-    <p v-if="error" class="webui-metrics__error">{{ error }}</p>
+    <Message v-if="error" severity="error" variant="simple" size="small">{{ error }}</Message>
     <pre class="webui-metrics__body">{{ text }}</pre>
-    <p class="webui-metrics__hint">
+    <Message size="small" severity="secondary" variant="simple">
       Endpoint: <code>GET /api/metrics/webui</code>. App-level metrics from the Tarantool
       <code>metrics</code> rock live under <code>GET /api/metrics</code>.
-    </p>
+    </Message>
   </section>
 </template>
 
@@ -107,12 +108,5 @@ onBeforeUnmount(stopTimer);
   overflow: auto;
   white-space: pre;
   max-height: 60vh;
-}
-.webui-metrics__hint {
-  color: var(--webui-text-muted);
-  font-size: 0.85rem;
-}
-.webui-metrics__error {
-  color: var(--p-message-error-color, #d83535);
 }
 </style>

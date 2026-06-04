@@ -2,6 +2,8 @@
 import { useRoute } from 'vue-router';
 import { computed } from 'vue';
 
+import Toast from 'primevue/toast';
+
 import { Sidebar } from '@/widgets/sidebar';
 import { TopBar } from '@/widgets/top-bar';
 
@@ -38,6 +40,7 @@ const hideShell = computed(() => route.meta?.hideShell === true);
       </main>
     </div>
   </div>
+  <Toast position="bottom-right" />
 </template>
 
 <style scoped>

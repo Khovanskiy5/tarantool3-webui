@@ -364,10 +364,10 @@ function onCancel() {
     @hide="onCancel"
   >
     <div class="fo-body">
-      <p class="fo-lede">
+      <Message size="small" severity="secondary" variant="simple">
         Choose how the cluster decides who is the read-write leader. Empty fields keep the current
         cluster value untouched.
-      </p>
+      </Message>
       <Fluid>
         <!-- ── Mode picker ───────────────────────────────────────── -->
         <div class="r-field">
@@ -540,9 +540,15 @@ function onCancel() {
       </Fluid>
     </div>
     <template #footer>
-      <span v-if="validationErrors.length > 0" class="fo-foot-hint">
+      <Message
+        v-if="validationErrors.length > 0"
+        severity="error"
+        variant="simple"
+        size="small"
+        class="fo-foot-hint"
+      >
         Fix the highlighted fields to enable Apply.
-      </span>
+      </Message>
       <Button label="Cancel" severity="secondary" text :disabled="ops.pending" @click="onCancel" />
       <Button
         label="Preview"
@@ -572,11 +578,6 @@ function onCancel() {
   display: flex;
   flex-direction: column;
   gap: 1.1rem;
-}
-.fo-lede {
-  margin: 0;
-  font-size: 0.88rem;
-  color: var(--p-text-muted-color, var(--webui-text-muted));
 }
 .r-field {
   display: flex;
@@ -651,8 +652,6 @@ function onCancel() {
 }
 .fo-foot-hint {
   margin: 0 auto 0 0;
-  font-size: 0.78rem;
-  color: var(--p-message-error-color, var(--webui-danger, #d83535));
 }
 :deep(.p-message-text code),
 :deep(.fo-blurb-what code),

@@ -253,7 +253,7 @@ function close() {
       <div v-for="(r, i) in rows" :key="i" class="dx-tf__row">
         <label class="dx-tf__label">
           <span>{{ r.name }}</span>
-          <small>{{ r.type }}<span v-if="r.is_nullable"> · nullable</span></small>
+          <span class="dx-tf__type">{{ r.type }}<span v-if="r.is_nullable"> · nullable</span></span>
         </label>
         <div class="dx-tf__value">
           <BinaryField v-if="r.is_binary" v-model="r.binary" :disabled="r.is_null" />
@@ -330,7 +330,7 @@ function close() {
   gap: 0.1rem;
   padding-top: 0.3rem;
 }
-.dx-tf__label small {
+.dx-tf__type {
   color: var(--webui-text-muted);
   font-size: 0.7rem;
 }

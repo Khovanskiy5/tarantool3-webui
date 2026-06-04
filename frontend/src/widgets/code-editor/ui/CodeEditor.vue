@@ -10,7 +10,7 @@
 // understands at build time without a custom plugin.
 
 import { onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
-import type * as Monaco from 'monaco-editor';
+import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api';
 
 const props = withDefaults(
   defineProps<{
@@ -65,7 +65,7 @@ const initMonacoEnv = async () => {
 const mountEditor = async () => {
   if (container.value == null) return;
   await initMonacoEnv();
-  monacoMod = await import('monaco-editor');
+  monacoMod = await import('monaco-editor/esm/vs/editor/editor.api');
   // Pull in the language contribution for the requested mode. The
   // `basic-languages` package ships everything we need; importing
   // by id registers the tokenizer with Monaco. Wrapped in pcall-

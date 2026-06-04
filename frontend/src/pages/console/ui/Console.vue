@@ -15,7 +15,7 @@ import { CodeEditor } from '@/widgets/code-editor';
 // instance's name+uuid so an operator switching the SelectButton
 // gets an identity probe in either dialect.
 const DEFAULT_LUA = 'return box.info.name, box.info.uuid';
-const DEFAULT_SQL = 'SELECT "name", "uuid" FROM "_cluster"';
+const DEFAULT_SQL = 'SELECT "name", "uuid" FROM "_cluster";';
 
 const lang = ref<'lua' | 'sql'>('lua');
 const code = ref(DEFAULT_LUA);

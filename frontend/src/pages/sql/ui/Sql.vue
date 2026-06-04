@@ -16,7 +16,7 @@
 -->
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue';
-import type * as Monaco from 'monaco-editor';
+import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api';
 import DataTable from 'primevue/datatable';
 import Column from 'primevue/column';
 import Button from 'primevue/button';
@@ -94,7 +94,7 @@ const editorLoading = ref(true);
 // view, the SQL equivalent of /console's `return box.info.name,
 // box.info.uuid`. An operator switching pages gets the same kind
 // of "is this the right peer?" answer in either dialect.
-const initialSql = `-- Workbench / SQL\n--\n-- Run with Cmd+Enter or the Run button. Separate statements\n-- with \`;;\` (double semicolon). Single \`;\` stays inside the\n-- statement as a literal.\n\nSELECT "name", "uuid" FROM "_cluster";;\n`;
+const initialSql = `-- Workbench / SQL\n--\n-- Run with Cmd+Enter or the Run button. Separate statements\n-- with \`;;\` (double semicolon). Single \`;\` stays inside the\n-- statement as a literal.\n\nSELECT "name", "uuid" FROM "_cluster";\n`;
 const currentSql = ref(initialSql);
 const result = ref<SqlResponse | null>(null);
 const explain = ref<ExplainResponse | null>(null);
@@ -126,14 +126,14 @@ const savingNow = ref(false);
 // space because a fresh install should not need a write to be
 // useful, and these are dialect-stable across deployments.
 const BUILTIN_SNIPPETS: { name: string; sql: string }[] = [
-  { name: 'cluster identity', sql: 'SELECT "name", "uuid" FROM "_cluster"' },
+  { name: 'cluster identity', sql: 'SELECT "name", "uuid" FROM "_cluster";' },
   {
     name: 'spaces overview',
     sql: "SELECT id, name, engine FROM \"_vspace\" WHERE name NOT LIKE '\\_%' ESCAPE '\\'",
   },
-  { name: 'index list', sql: 'SELECT id, name, type FROM "_vindex" LIMIT 50' },
-  { name: 'users + roles', sql: 'SELECT id, name, type FROM "_vuser"' },
-  { name: 'session settings', sql: 'SELECT name, value FROM "_session_settings"' },
+  { name: 'index list', sql: 'SELECT id, name, type FROM "_vindex" LIMIT 50;' },
+  { name: 'users + roles', sql: 'SELECT id, name, type FROM "_vuser";' },
+  { name: 'session settings', sql: 'SELECT name, value FROM "_session_settings";' },
 ];
 
 // ── Monaco bootstrap (shared bundle with config-editor) ───────────
@@ -149,7 +149,7 @@ const mountEditor = async () => {
   if (editorContainer.value == null) return;
   editorLoading.value = true;
   await initMonacoEnv();
-  const monaco = await import('monaco-editor');
+  const monaco = await import('monaco-editor/esm/vs/editor/editor.api');
   await import('monaco-editor/esm/vs/basic-languages/sql/sql.contribution');
 
   monacoEditor.value = monaco.editor.create(editorContainer.value, {
@@ -482,7 +482,7 @@ function renderCell(v: unknown): string {
           >
             <span class="webui-sql__list-name" @click="loadIntoEditor(s.sql)">
               {{ s.name }}
-              <small class="webui-sql__list-owner">@{{ s.owner }}</small>
+              <span class="webui-sql__list-owner">@{{ s.owner }}</span>
             </span>
             <Button
               v-if="s.owner === currentUser()"

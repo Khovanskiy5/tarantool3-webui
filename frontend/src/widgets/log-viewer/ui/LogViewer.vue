@@ -9,7 +9,7 @@
 // only feeds us the joined text + a `stickToBottom` flag.
 
 import { onBeforeUnmount, onMounted, ref, shallowRef, watch, nextTick } from 'vue';
-import type * as Monaco from 'monaco-editor';
+import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api';
 
 const props = withDefaults(
   defineProps<{
@@ -125,7 +125,7 @@ const applyAnchor = () => {
 const mountEditor = async () => {
   if (container.value == null) return;
   await initMonacoEnv();
-  monacoMod = await import('monaco-editor');
+  monacoMod = await import('monaco-editor/esm/vs/editor/editor.api');
 
   const themeId = registerWebuiTheme(monacoMod);
   editor.value = monacoMod.editor.create(container.value, {

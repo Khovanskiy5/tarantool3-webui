@@ -16,6 +16,9 @@
  *     re-read what they are about to destroy.
  */
 import { computed, nextTick, ref, watch } from 'vue';
+import Button from 'primevue/button';
+import InputText from 'primevue/inputtext';
+import Message from 'primevue/message';
 
 const props = defineProps<{
   open: boolean;
@@ -45,7 +48,7 @@ const emit = defineEmits<{
 }>();
 
 const input = ref('');
-const inputEl = ref<HTMLInputElement | null>(null);
+const inputEl = ref<{ $el?: HTMLInputElement } | null>(null);
 
 watch(
   () => props.open,
@@ -53,7 +56,7 @@ watch(
     if (now) {
       input.value = '';
       await nextTick();
-      inputEl.value?.focus();
+      inputEl.value?.$el?.focus();
     }
   },
 );
@@ -79,22 +82,24 @@ function onCancel() {
           <h2 class="webui-destructive-dialog__title">{{ title }}</h2>
         </header>
         <div class="webui-destructive-dialog__body">
-          <p class="webui-destructive-dialog__description">
+          <Message severity="error" variant="simple" size="small">
             {{ description }}
-          </p>
-          <label class="webui-destructive-dialog__label">
-            {{ prompt || `Type ${expected} to confirm:` }}
-            <input
+          </Message>
+          <div class="webui-destructive-dialog__field">
+            <label class="webui-destructive-dialog__label" for="webui-destructive-input">
+              {{ prompt || `Type ${expected} to confirm:` }}
+            </label>
+            <InputText
+              id="webui-destructive-input"
               ref="inputEl"
               v-model="input"
-              type="text"
               autocomplete="off"
               spellcheck="false"
               class="webui-destructive-dialog__input"
               :disabled="pending"
               @keyup.enter="onConfirm"
             />
-          </label>
+          </div>
           <!-- Optional caller-provided extras (per-flow options like
                "Reset attached sequence" for truncate). Rendered AFTER
                the confirm input so the type-to-confirm gate stays the
@@ -103,22 +108,13 @@ function onCancel() {
           <slot name="extras" />
         </div>
         <footer class="webui-destructive-dialog__foot">
-          <button
-            type="button"
-            class="webui-destructive-dialog__btn webui-destructive-dialog__btn--ghost"
-            :disabled="pending"
-            @click="onCancel"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            class="webui-destructive-dialog__btn webui-destructive-dialog__btn--danger"
+          <Button label="Cancel" severity="secondary" text :disabled="pending" @click="onCancel" />
+          <Button
+            :label="confirmLabel || 'Confirm'"
+            severity="danger"
             :disabled="!matches || pending"
             @click="onConfirm"
-          >
-            {{ confirmLabel || 'Confirm' }}
-          </button>
+          />
         </footer>
       </div>
     </div>
@@ -172,17 +168,13 @@ function onCancel() {
   gap: 1rem;
 }
 
-.webui-destructive-dialog__description {
-  margin: 0;
-  font-size: 0.92rem;
-  line-height: 1.45;
-  color: var(--webui-text-muted);
-}
-
-.webui-destructive-dialog__label {
+.webui-destructive-dialog__field {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+.webui-destructive-dialog__label {
   font-size: 0.9rem;
   font-weight: 500;
   color: var(--webui-text);
@@ -190,17 +182,6 @@ function onCancel() {
 
 .webui-destructive-dialog__input {
   font-family: var(--webui-font-mono);
-  font-size: 0.95rem;
-  padding: 0.5rem 0.65rem;
-  border: 1px solid var(--webui-border);
-  border-radius: 5px;
-  background: var(--webui-bg);
-  color: var(--webui-text);
-}
-
-.webui-destructive-dialog__input:focus {
-  outline: 2px solid var(--webui-accent);
-  outline-offset: -1px;
 }
 
 .webui-destructive-dialog__foot {
@@ -209,42 +190,5 @@ function onCancel() {
   justify-content: flex-end;
   gap: 0.5rem;
   border-top: 1px solid var(--webui-border);
-}
-
-.webui-destructive-dialog__btn {
-  padding: 0.5rem 1rem;
-  font-size: 0.92rem;
-  border-radius: 5px;
-  cursor: pointer;
-  border: 1px solid transparent;
-  font-weight: 500;
-}
-
-.webui-destructive-dialog__btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.4;
-}
-
-.webui-destructive-dialog__btn--ghost {
-  background: transparent;
-  border-color: var(--webui-border);
-  color: var(--webui-text);
-}
-
-.webui-destructive-dialog__btn--ghost:not(:disabled):hover {
-  border-color: var(--webui-accent);
-  color: var(--webui-accent);
-}
-
-.webui-destructive-dialog__btn--danger {
-  background: var(--webui-danger);
-  color: #0e1117;
-  border-color: var(--webui-danger);
-}
-
-.webui-destructive-dialog__btn--danger:not(:disabled):hover {
-  background: #fa6c66;
-  border-color: #fa6c66;
-  color: #0e1117;
 }
 </style>

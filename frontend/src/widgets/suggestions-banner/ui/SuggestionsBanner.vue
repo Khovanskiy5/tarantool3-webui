@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia';
 import { computed, ref } from 'vue';
+import Button from 'primevue/button';
 import Dialog from 'primevue/dialog';
 import Message from 'primevue/message';
 
@@ -80,14 +81,14 @@ function runRestartFailover(alias: string) {
       <li v-for="s in forceApply" :key="s.id">
         <strong>{{ s.instanceAlias }}</strong>
         <span class="webui-suggestions-banner__reason">{{ s.reason }}</span>
-        <button
-          type="button"
-          class="webui-suggestions-banner__action"
+        <Button
+          label="Reload config"
+          icon="pi pi-sync"
+          severity="secondary"
+          size="small"
           :disabled="assessOpen"
           @click="runForceApply(s.instanceUuid)"
-        >
-          Reload config
-        </button>
+        />
       </li>
     </ul>
 
@@ -95,28 +96,28 @@ function runRestartFailover(alias: string) {
       <li v-for="s in restartReplication" :key="s.id">
         <strong>{{ s.instanceAlias }}</strong>
         <span class="webui-suggestions-banner__reason">{{ s.reason }}</span>
-        <button
-          type="button"
-          class="webui-suggestions-banner__action"
+        <Button
+          label="Restart replication"
+          icon="pi pi-replay"
+          severity="secondary"
+          size="small"
           :disabled="assessOpen"
           @click="runRestartReplication(s.instanceUuid)"
-        >
-          Restart replication
-        </button>
+        />
         <!--
           Escalation for a split-brain follower that won't recover via
           box.cfg{replication=...}. `dangerous` — the shared panel gates
           it behind acknowledge + a typed token; the backend refuses if
           the target owns the synchronous queue.
         -->
-        <button
-          type="button"
-          class="webui-suggestions-banner__action webui-suggestions-banner__action--danger"
+        <Button
+          label="Re-bootstrap"
+          icon="pi pi-exclamation-triangle"
+          severity="danger"
+          size="small"
           :disabled="assessOpen"
           @click="runRebootstrap(s.instanceAlias)"
-        >
-          Re-bootstrap
-        </button>
+        />
       </li>
     </ul>
 
@@ -124,26 +125,27 @@ function runRestartFailover(alias: string) {
       <li v-for="s in restartFailover" :key="s.id">
         <strong>{{ s.instanceAlias }}</strong>
         <span class="webui-suggestions-banner__reason">{{ s.reason }}</span>
-        <button
-          type="button"
-          class="webui-suggestions-banner__action"
+        <Button
+          label="Restart failover agent"
+          icon="pi pi-replay"
+          severity="secondary"
+          size="small"
           :disabled="assessOpen"
           @click="runRestartFailover(s.instanceAlias)"
-        >
-          Restart failover agent
-        </button>
+        />
       </li>
     </ul>
 
-    <p
+    <Message
       v-if="lastResult"
-      :class="[
-        'webui-suggestions-banner__result',
-        resultOk ? 'webui-suggestions-banner__result--ok' : 'webui-suggestions-banner__result--err',
-      ]"
+      :severity="resultOk ? 'success' : 'error'"
+      variant="simple"
+      size="small"
+      :closable="false"
+      class="webui-suggestions-banner__result"
     >
       {{ resultText }}
-    </p>
+    </Message>
 
     <!-- Shared risk-assessment dialog (preflight -> panel -> enforced apply). -->
     <Dialog
@@ -223,38 +225,8 @@ function runRestartFailover(alias: string) {
   white-space: nowrap;
 }
 
-.webui-suggestions-banner__action {
-  background: var(--webui-accent);
-  color: var(--webui-bg);
-  border: none;
-  border-radius: var(--webui-radius);
-  padding: 0.25rem 0.7rem;
-  font-weight: 600;
-  cursor: pointer;
-  font: inherit;
-  font-size: 0.8rem;
-  font-weight: 700;
-}
-
-.webui-suggestions-banner__action:disabled {
-  opacity: 0.6;
-  cursor: progress;
-}
-
-.webui-suggestions-banner__action--danger {
-  background: var(--webui-danger, #c0392b);
-  color: #fff;
-}
-
 .webui-suggestions-banner__result {
   margin: 0.5rem 0 0;
   font-size: 0.8rem;
-}
-
-.webui-suggestions-banner__result--ok {
-  color: var(--webui-success);
-}
-.webui-suggestions-banner__result--err {
-  color: var(--webui-danger);
 }
 </style>

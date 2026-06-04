@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref } from 'vue';
+import Button from 'primevue/button';
+import { computed, onBeforeUnmount, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { withTag } from '@/shared/lib/log';
@@ -9,6 +10,10 @@ const logger = withTag('network-error-page');
 
 const reconnecting = ref(false);
 const attemptCount = ref(0);
+
+const retryLabel = computed(() =>
+  reconnecting.value ? t('pages.network_error.reconnecting') : t('common.retry'),
+);
 
 const retry = () => {
   reconnecting.value = true;
@@ -32,10 +37,14 @@ onBeforeUnmount(() => {
     <p class="webui-error-page__description">
       {{ t('pages.network_error.description') }}
     </p>
-    <button type="button" class="webui-error-page__action" :disabled="reconnecting" @click="retry">
-      <span v-if="reconnecting">{{ t('pages.network_error.reconnecting') }}</span>
-      <span v-else>{{ t('common.retry') }}</span>
-    </button>
+    <Button
+      :label="retryLabel"
+      icon="pi pi-refresh"
+      severity="primary"
+      :loading="reconnecting"
+      :disabled="reconnecting"
+      @click="retry"
+    />
   </section>
 </template>
 
@@ -64,24 +73,5 @@ onBeforeUnmount(() => {
   max-width: 32rem;
   color: var(--webui-text-muted);
   margin-bottom: 2rem;
-}
-
-.webui-error-page__action {
-  background: var(--webui-accent);
-  color: var(--webui-bg);
-  border: none;
-  border-radius: var(--webui-radius);
-  padding: 0.5rem 1.25rem;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.webui-error-page__action:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.webui-error-page__action:not(:disabled):hover {
-  filter: brightness(1.1);
 }
 </style>

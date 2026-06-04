@@ -11,6 +11,7 @@ import { createApp, watch } from 'vue';
 import PrimeVue from 'primevue/config';
 import Aura from '@primevue/themes/aura';
 import Tooltip from 'primevue/tooltip';
+import ToastService from 'primevue/toastservice';
 
 import App from './App.vue';
 import { router } from './router';
@@ -25,6 +26,8 @@ import 'primeicons/primeicons.css';
 
 import { info } from '@/shared/lib/log';
 import { APP_VERSION } from '@/shared/config';
+import { wsClient } from '@/shared/api/ws';
+import { useSessionStore } from '@/entities/session';
 
 const app = createApp(App);
 
@@ -50,6 +53,12 @@ app.use(PrimeVue, {
 // the Aura dark theme bridge already configured above.
 app.directive('tooltip', Tooltip);
 
+// Toast service backs the `useToast()` composable. Action results that
+// are too long or too transient for an inline banner (promote/expel
+// backend messages, etc.) surface as a corner toast via the single
+// `<Toast />` mounted in App.vue.
+app.use(ToastService);
+
 installUrql(app);
 
 // Wait for the router's initial navigation to settle before painting
@@ -67,18 +76,15 @@ router.isReady().finally(() => {
   // cookie, so an anonymous connect from the /login page would loop
   // through endless reconnect attempts and spam the console. Watch
   // session.isAuthenticated and let the WS singleton track its state.
-  Promise.all([import('@/shared/api/ws'), import('@/entities/session')]).then(
-    ([{ wsClient }, { useSessionStore }]) => {
-      const session = useSessionStore();
-      watch(
-        () => session.isAuthenticated,
-        (isAuth) => {
-          if (isAuth) wsClient.connect();
-          else wsClient.disconnect();
-        },
-        { immediate: true },
-      );
-      info('webui SPA mounted', { app_version: APP_VERSION });
+  // The store must be resolved after `app.mount()` so Pinia is active.
+  const session = useSessionStore();
+  watch(
+    () => session.isAuthenticated,
+    (isAuth) => {
+      if (isAuth) wsClient.connect();
+      else wsClient.disconnect();
     },
+    { immediate: true },
   );
+  info('webui SPA mounted', { app_version: APP_VERSION });
 });

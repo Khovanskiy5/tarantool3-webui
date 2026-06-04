@@ -13,6 +13,7 @@ import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
 import Dropdown from 'primevue/dropdown';
 import Card from 'primevue/card';
+import Fluid from 'primevue/fluid';
 
 import { getClient } from '@/shared/api/graphql';
 import { CodeEditor } from '@/widgets/code-editor';
@@ -198,11 +199,15 @@ onMounted(async () => {
       <Card class="webui-bootstrap__card">
         <template #title>Cluster identity</template>
         <template #content>
-          <div class="webui-bootstrap__field">
-            <label for="clusterName">Cluster name</label>
-            <InputText id="clusterName" v-model="clusterName" placeholder="my-cluster" />
-            <small>Letters, digits, dash, underscore, dot. Used in the YAML header.</small>
-          </div>
+          <Fluid>
+            <div class="r-field">
+              <label for="clusterName">Cluster name</label>
+              <InputText id="clusterName" v-model="clusterName" placeholder="my-cluster" />
+              <Message size="small" severity="secondary" variant="simple">
+                Letters, digits, dash, underscore, dot. Used in the YAML header.
+              </Message>
+            </div>
+          </Fluid>
         </template>
       </Card>
 
@@ -215,9 +220,9 @@ onMounted(async () => {
             option-label="label"
             option-value="value"
           />
-          <p v-if="selectedTplMeta" class="webui-bootstrap__desc">
+          <Message v-if="selectedTplMeta" size="small" severity="secondary" variant="simple">
             {{ selectedTplMeta.description }}
-          </p>
+          </Message>
         </template>
       </Card>
 
@@ -266,22 +271,18 @@ onMounted(async () => {
 .webui-bootstrap__card {
   background: var(--webui-bg-elevated);
 }
-.webui-bootstrap__field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-.webui-bootstrap__field small {
-  color: var(--webui-text-muted);
-  font-size: 0.78rem;
-}
-.webui-bootstrap__desc {
-  color: var(--webui-text-muted);
-  margin: 0.5rem 0 0;
-  font-size: 0.85rem;
-}
 .webui-bootstrap__actions {
   display: flex;
   gap: 0.5rem;
+}
+.r-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.r-field label {
+  font-size: 0.875rem;
+  font-weight: 600;
 }
 </style>

@@ -13,6 +13,9 @@
  * cadence (already wired via WS in the cluster store).
  */
 import { computed, ref } from 'vue';
+import Button from 'primevue/button';
+import InputNumber from 'primevue/inputnumber';
+import Message from 'primevue/message';
 
 import { useClusterOpsStore } from '../model/store';
 
@@ -66,65 +69,54 @@ async function doResume() {
         Failover PAUSED — auto-resume in
         <strong>{{ expiresInSec != null ? formatExpiry(expiresInSec) : '?' }}</strong>
       </span>
-      <button
-        type="button"
-        class="webui-cluster-toolbar__btn webui-cluster-toolbar__btn--solid"
+      <Button
+        label="Resume now"
+        size="small"
+        severity="warn"
         :disabled="ops.pending"
         @click="doResume"
-      >
-        Resume now
-      </button>
+      />
     </div>
     <div v-else class="webui-cluster-toolbar__row">
-      <button
+      <Button
         v-if="!showTtlForm"
-        type="button"
-        class="webui-cluster-toolbar__btn"
+        label="Pause failover…"
+        icon="pi pi-pause"
+        size="small"
+        outlined
         :disabled="ops.pending"
         @click="showTtlForm = true"
-      >
-        Pause failover…
-      </button>
+      />
       <div v-else class="webui-cluster-toolbar__ttl-form">
-        <label class="webui-cluster-toolbar__ttl-label">
-          TTL (seconds)
-          <input
-            v-model.number="ttlInput"
-            type="number"
-            min="60"
-            max="86400"
-            class="webui-cluster-toolbar__ttl-input"
-          />
-        </label>
-        <button
-          type="button"
-          class="webui-cluster-toolbar__btn webui-cluster-toolbar__btn--solid"
-          :disabled="ops.pending"
-          @click="doPause"
+        <label class="webui-cluster-toolbar__ttl-label" for="webui-toolbar-ttl"
+          >TTL (seconds)</label
         >
-          Confirm pause
-        </button>
-        <button
-          type="button"
-          class="webui-cluster-toolbar__btn"
+        <InputNumber
+          v-model="ttlInput"
+          input-id="webui-toolbar-ttl"
+          :min="60"
+          :max="86400"
+          :use-grouping="false"
+          class="webui-cluster-toolbar__ttl-input"
+        />
+        <Button label="Confirm pause" size="small" :disabled="ops.pending" @click="doPause" />
+        <Button
+          label="Cancel"
+          size="small"
+          text
           :disabled="ops.pending"
           @click="showTtlForm = false"
-        >
-          Cancel
-        </button>
+        />
       </div>
     </div>
-    <p
+    <Message
       v-if="banner"
-      :class="[
-        'webui-cluster-toolbar__msg',
-        banner.severity === 'err'
-          ? 'webui-cluster-toolbar__msg--err'
-          : 'webui-cluster-toolbar__msg--ok',
-      ]"
+      :severity="banner.severity === 'err' ? 'error' : 'success'"
+      variant="simple"
+      size="small"
     >
       {{ banner.text }}
-    </p>
+    </Message>
   </div>
 </template>
 
@@ -173,74 +165,11 @@ async function doResume() {
 }
 
 .webui-cluster-toolbar__ttl-label {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
   font-size: 0.85rem;
   color: var(--webui-text-muted);
 }
 
 .webui-cluster-toolbar__ttl-input {
   width: 88px;
-  padding: 0.3rem 0.45rem;
-  border: 1px solid var(--webui-border);
-  border-radius: 4px;
-  font-family: var(--webui-font-mono);
-  font-size: 0.9rem;
-  background: var(--webui-bg);
-  color: var(--webui-text);
-}
-
-.webui-cluster-toolbar__btn {
-  padding: 0.4rem 0.85rem;
-  font-size: 0.88rem;
-  border-radius: 5px;
-  border: 1px solid var(--webui-border);
-  background: var(--webui-bg);
-  color: var(--webui-text);
-  cursor: pointer;
-}
-
-.webui-cluster-toolbar__btn:not(:disabled):hover {
-  border-color: var(--webui-accent);
-  color: var(--webui-accent);
-}
-
-.webui-cluster-toolbar__btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
-}
-
-.webui-cluster-toolbar__btn--solid {
-  background: var(--webui-accent);
-  color: #0e1117;
-  border-color: var(--webui-accent);
-  font-weight: 600;
-}
-
-.webui-cluster-toolbar__btn--solid:not(:disabled):hover {
-  background: #6cb8e3;
-  border-color: #6cb8e3;
-  color: #0e1117;
-}
-
-.webui-cluster-toolbar__msg {
-  margin: 0;
-  font-size: 0.85rem;
-  padding: 0.4rem 0.65rem;
-  border-radius: 4px;
-  border: 1px solid transparent;
-}
-
-.webui-cluster-toolbar__msg--ok {
-  background: rgba(63, 185, 80, 0.12);
-  border-color: rgba(63, 185, 80, 0.4);
-  color: var(--webui-success);
-}
-
-.webui-cluster-toolbar__msg--err {
-  background: rgba(248, 81, 73, 0.12);
-  border-color: rgba(248, 81, 73, 0.4);
-  color: var(--webui-danger);
 }
 </style>

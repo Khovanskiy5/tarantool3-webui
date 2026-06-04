@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import Button from 'primevue/button';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 
@@ -15,9 +16,12 @@ const goHome = () => router.push('/');
     <p class="webui-error-page__description">
       {{ t('pages.forbidden.description') }}
     </p>
-    <button type="button" class="webui-error-page__action" @click="goHome">
-      {{ t('common.back_to_dashboard') }}
-    </button>
+    <Button
+      :label="t('common.back_to_dashboard')"
+      icon="pi pi-home"
+      severity="primary"
+      @click="goHome"
+    />
   </section>
 </template>
 
@@ -47,19 +51,5 @@ const goHome = () => router.push('/');
   max-width: 32rem;
   color: var(--webui-text-muted);
   margin-bottom: 2rem;
-}
-
-.webui-error-page__action {
-  background: var(--webui-accent);
-  color: var(--webui-bg);
-  border: none;
-  border-radius: var(--webui-radius);
-  padding: 0.5rem 1.25rem;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.webui-error-page__action:hover {
-  filter: brightness(1.1);
 }
 </style>

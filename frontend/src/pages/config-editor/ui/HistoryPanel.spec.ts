@@ -109,7 +109,7 @@ describe('HistoryPanel', () => {
     const wrapper = mountPanel();
     await flushPromises();
 
-    const footer = wrapper.find('.webui-history__floor');
+    const footer = wrapper.find('.webui-history__foot');
     expect(footer.exists()).toBe(true);
     expect(footer.text()).toContain('#5');
     expect(footer.text()).toContain('MAX_HISTORY');
@@ -123,7 +123,7 @@ describe('HistoryPanel', () => {
     const wrapper = mountPanel(null);
     await flushPromises();
 
-    expect(wrapper.find('.webui-history__empty').exists()).toBe(true);
+    expect(wrapper.text()).toContain('No committed revisions yet');
     expect(wrapper.findAll('.webui-history__row')).toHaveLength(0);
   });
 
@@ -132,9 +132,8 @@ describe('HistoryPanel', () => {
     const wrapper = mountPanel(null);
     await flushPromises();
 
-    const error = wrapper.find('.webui-history__error');
-    expect(error.exists()).toBe(true);
-    expect(error.text()).toContain('HISTORY_LIST_FAILED');
+    expect(wrapper.text()).toContain('HISTORY_LIST_FAILED');
+    expect(wrapper.findAll('.webui-history__row')).toHaveLength(0);
   });
 
   it('emits select-revision with the revision number when View is clicked', async () => {

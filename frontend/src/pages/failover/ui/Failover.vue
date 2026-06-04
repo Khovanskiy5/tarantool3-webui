@@ -332,11 +332,11 @@ onMounted(load);
         <h2>Raft election state</h2>
         <Tag :value="`${elections.length} peer(s)`" severity="secondary" />
       </header>
-      <p class="webui-failover__hint">
+      <Message size="small" severity="secondary" variant="simple">
         One row per instance, snapshotted from <code>box.info.election</code>. The instance whose
         <strong>State</strong> is <code>leader</code> is the current RW peer. Followers vote within
         a <em>term</em>; a term bump means a new election just happened.
-      </p>
+      </Message>
       <DataTable
         v-if="elections.length > 0"
         :value="elections"
@@ -358,10 +358,10 @@ onMounted(load);
           </template>
         </Column>
       </DataTable>
-      <p v-else class="webui-failover__hint">
+      <Message v-else severity="info" variant="simple" size="small" :closable="false">
         No election state reported yet — the cluster is still bootstrapping or peers are
         unreachable.
-      </p>
+      </Message>
     </section>
 
     <section v-if="agent && agent.enabled" class="webui-failover__sp">
@@ -381,22 +381,22 @@ onMounted(load);
           severity="secondary"
         />
       </header>
-      <p v-if="agent.last_error" class="webui-failover__err">
+      <Message v-if="agent.last_error" severity="error" variant="simple" size="small">
         {{ agent.last_error }}
-      </p>
-      <p class="webui-failover__hint">
+      </Message>
+      <Message size="small" severity="secondary" variant="simple">
         Open-source replacement for Tarantool Enterprise's <code>supervised</code> failover. Every
         peer competes for a <strong>coordinator lease</strong> in etcd (TTL 10 s); the winner probes
         every instance, picks the best leader per replicaset and writes the appointment back into
         etcd. Each peer's <strong>watcher</strong> reads its replicaset's appointment and calls
         <code>box.ctl.promote/demote</code> accordingly.
-      </p>
+      </Message>
       <h3 class="webui-failover__subhead">Appointments written by the coordinator</h3>
-      <p class="webui-failover__hint">
+      <Message size="small" severity="secondary" variant="simple">
         Source of truth — read straight from
         <code>/tarantool/webui/failover/replicasets/&lt;rs&gt;/leader</code> in etcd, so every
         peer's view here is identical.
-      </p>
+      </Message>
       <DataTable :value="agent.appointments" data-key="replicaset" size="small" striped-rows>
         <Column field="replicaset" header="Replicaset" />
         <Column header="Appointed leader">
@@ -414,7 +414,7 @@ onMounted(load);
         </Column>
       </DataTable>
       <h3 class="webui-failover__subhead">Watcher (this peer)</h3>
-      <p class="webui-failover__hint">
+      <Message size="small" severity="secondary" variant="simple">
         On <code>{{ agent.self_alias ?? '—' }}</code> (replicaset
         <code>{{ agent.watcher_replicaset ?? '—' }}</code
         >): sees <code>{{ agent.watcher_last_leader ?? '—' }}</code> as the appointed leader. This
@@ -427,7 +427,7 @@ onMounted(load);
               : 'unknown'
         }}</strong
         >.
-      </p>
+      </Message>
     </section>
 
     <section v-if="liveness !== null" class="webui-failover__sp">
@@ -442,7 +442,7 @@ onMounted(load);
         />
         <Tag :value="`${liveness.entries.length} record(s)`" severity="info" />
       </header>
-      <p class="webui-failover__hint">
+      <Message size="small" severity="secondary" variant="simple">
         Open-source equivalent of Tarantool Enterprise's top-level
         <code>stateboard</code>. Each peer with
         <code>roles_cfg.webui.state_reporter.enabled: true</code> publishes a JSON snapshot of its
@@ -450,7 +450,7 @@ onMounted(load);
         so the key vanishes on its own when the process dies. A <strong>stale</strong> row means the
         lease expired without a renewal — usually a crash or a network partition; the iproto poller
         above will agree shortly.
-      </p>
+      </Message>
       <DataTable
         v-if="liveness.entries.length > 0"
         :value="liveness.entries"
@@ -498,10 +498,10 @@ onMounted(load);
           </template>
         </Column>
       </DataTable>
-      <p v-else class="webui-failover__hint">
+      <Message v-else severity="info" variant="simple" size="small" :closable="false">
         No liveness records in etcd. Enable the reporter on at least one peer:
         <code>roles_cfg.webui.state_reporter.enabled: true</code>.
-      </p>
+      </Message>
     </section>
 
     <section class="webui-failover__sp">
@@ -509,12 +509,12 @@ onMounted(load);
         <h2>Commands history</h2>
         <Tag :value="`${commands.length} recent`" severity="secondary" />
       </header>
-      <p class="webui-failover__hint">
+      <Message size="small" severity="secondary" variant="simple">
         Audit log of every failover-affecting mutation an operator issued through the UI —
         <code>setFailoverMode</code>, <code>promote</code>, leader handoffs and so on. Stored in the
         cluster-wide replicated <code>_webui_failover_commands</code> space; the current leader
         prunes entries older than 30 days.
-      </p>
+      </Message>
       <DataTable
         :value="commands"
         data-key="id"
@@ -579,12 +579,12 @@ onMounted(load);
         <h2>External state provider</h2>
         <Tag :value="`kind: ${sp.kind}`" severity="info" />
       </header>
-      <p class="webui-failover__hint">
+      <Message size="small" severity="secondary" variant="simple">
         With <code>replication.failover: supervised</code>, the community agent's elected
         coordinator writes appointments through this external state provider. The probe below checks
         each endpoint via <code>HTTP GET /version</code> — only reachability is verified; lease
         ownership lives inside the provider and is not exposed here.
-      </p>
+      </Message>
       <DataTable :value="sp.endpoints ?? []" data-key="uri" size="small">
         <Column field="uri" header="Endpoint">
           <template #body="{ data }">
@@ -661,14 +661,6 @@ onMounted(load);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--webui-text-muted);
-}
-.webui-failover__hint {
-  color: var(--webui-text-muted);
-  font-size: 0.85rem;
-  margin: 0;
-}
-.webui-failover__hint code {
-  font-family: var(--webui-font-mono);
 }
 .webui-failover__params {
   display: inline-block;

@@ -8,6 +8,7 @@
 
 import { computed, onMounted, ref, watch } from 'vue';
 import Button from 'primevue/button';
+import Message from 'primevue/message';
 
 import { getClient } from '@/shared/api/graphql';
 
@@ -146,11 +147,17 @@ const hasMore = computed(() => page.value.more);
       />
     </header>
 
-    <p v-if="error" class="webui-history__error" role="alert">{{ error }}</p>
+    <Message v-if="error" severity="error" variant="simple" size="small">{{ error }}</Message>
 
-    <p v-if="!loading && totalShown === 0 && !error" class="webui-history__empty">
+    <Message
+      v-if="!loading && totalShown === 0 && !error"
+      severity="info"
+      variant="simple"
+      size="small"
+      :closable="false"
+    >
       No committed revisions yet.
-    </p>
+    </Message>
 
     <ul v-if="totalShown > 0" class="webui-history__list">
       <li
@@ -218,16 +225,16 @@ const hasMore = computed(() => page.value.more);
     </ul>
 
     <footer class="webui-history__foot">
-      <p v-if="totalShown > 0" class="webui-history__count">
+      <Message v-if="totalShown > 0" size="small" severity="secondary" variant="simple">
         Showing {{ totalShown }} revision<span v-if="totalShown !== 1">s</span>
         <span v-if="hasMore"> (more available — refine via API)</span>
-      </p>
-      <p v-if="oldest != null" class="webui-history__floor">
+      </Message>
+      <Message v-if="oldest != null" size="small" severity="secondary" variant="simple">
         Oldest available: <code>#{{ oldest }}</code>
         <span class="webui-history__floor-hint">
           — earlier revisions aged out beyond MAX_HISTORY (200)
         </span>
-      </p>
+      </Message>
     </footer>
   </aside>
 </template>
@@ -256,16 +263,6 @@ const hasMore = computed(() => page.value.more);
   margin: 0;
   font-size: 1rem;
   font-weight: 600;
-}
-.webui-history__error {
-  color: var(--webui-danger, #c0392b);
-  font-size: 0.85rem;
-  margin: 0;
-}
-.webui-history__empty {
-  color: var(--webui-text-muted, #8a93a6);
-  font-size: 0.85rem;
-  margin: 0;
 }
 .webui-history__list {
   list-style: none;
@@ -335,12 +332,6 @@ const hasMore = computed(() => page.value.more);
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
-}
-.webui-history__count {
-  margin: 0;
-}
-.webui-history__floor {
-  margin: 0;
 }
 .webui-history__floor-hint {
   opacity: 0.8;

@@ -9,7 +9,7 @@
 // avoids stale models bleeding across compare invocations.
 
 import { nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
-import type * as Monaco from 'monaco-editor';
+import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api';
 import Button from 'primevue/button';
 
 const props = defineProps<{
@@ -45,7 +45,7 @@ const mount = async () => {
   if (container.value == null) return;
   loading.value = true;
   await initMonacoEnv();
-  monacoMod = await import('monaco-editor');
+  monacoMod = await import('monaco-editor/esm/vs/editor/editor.api');
   await import('monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution');
 
   const originalModel = monacoMod.editor.createModel(props.original, 'yaml');

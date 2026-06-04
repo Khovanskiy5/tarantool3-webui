@@ -245,11 +245,21 @@ onMounted(load);
             <span title="retried">retry {{ data.retried }}</span> ·
             <span title="dead-lettered">dlq {{ data.dead_lettered }}</span>
           </div>
-          <small v-if="data.last_ok_at" class="webui-webhooks__hint"
-            >last ok: {{ fmtTime(data.last_ok_at) }}</small
+          <Message
+            v-if="data.last_ok_at"
+            size="small"
+            severity="secondary"
+            variant="simple"
+            class="webui-webhooks__hint"
+            >last ok: {{ fmtTime(data.last_ok_at) }}</Message
           >
-          <small v-if="data.last_error" class="webui-webhooks__err"
-            >last err: <code>{{ data.last_error }}</code></small
+          <Message
+            v-if="data.last_error"
+            size="small"
+            severity="error"
+            variant="simple"
+            class="webui-webhooks__err"
+            >last err: <code>{{ data.last_error }}</code></Message
           >
         </template>
       </Column>

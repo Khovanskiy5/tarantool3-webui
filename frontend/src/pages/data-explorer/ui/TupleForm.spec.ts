@@ -93,8 +93,7 @@ interface MountOverrides {
 }
 
 function mountForm(overrides: MountOverrides = {}): MountReturn {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const props: any = {
+  const props = {
     visible: true,
     space: baseSpace,
     mode: overrides.mode ?? 'create',
