@@ -166,6 +166,31 @@ function M.install()
         return { ok = true, message = 'graceful restart scheduled' }
     end)
 
+    -- Restart the supervised failover agent fiber on this peer (RC-7).
+    -- The `restart_failover` recovery action fans this out to the
+    -- selected instances so a wedged agent loop is rebuilt from the
+    -- instance's own running config (STATE.config.failover) — no config
+    -- edit, no data touched. Stop+start drops and re-acquires the
+    -- coordinator lease; the coordinator re-elects on the next tick.
+    rawset(_G, 'webui_restart_failover_remote', function()
+        local st_ok, lstate = pcall(require, 'webui.lifecycle.state')
+        if not st_ok then return { err = 'lifecycle state unavailable' } end
+        local fo_ok, fo = pcall(require, 'webui.failover')
+        if not fo_ok then return { err = 'failover module unavailable' } end
+        local STATE = lstate.STATE
+        local fo_cfg = (STATE and STATE.config or {}).failover or {}
+        if fo_cfg.agent ~= true then
+            return { ok = false, err = 'failover agent not enabled here' }
+        end
+        local started, err = fo.restart(fo_cfg)
+        if started == true then
+            STATE.failover = fo
+            return { ok = true }
+        end
+        STATE.failover = nil
+        return { ok = false, err = tostring(err or 'restart failed') }
+    end)
+
     -- Mirror the committed cluster YAML to the on-disk file on this
     -- peer. The two-phase commit pipeline fans this call out to every
     -- instance after the etcd put lands so the file (recovery snapshot)

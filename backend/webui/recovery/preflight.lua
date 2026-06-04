@@ -135,11 +135,12 @@ EXEC = {
     topology_fix       = { 'webui.recovery.topology_fix',   'apply' },
     wal_quarantine     = { 'webui.recovery.wal_repair',     'quarantine' },
     split_brain_resolve = { 'webui.recovery.split_brain',   'resolve' },
-    -- Analogous functions with a clean adapter (RC-3). promote / restart_
-    -- failover stay behind their existing mutations until RC-5 wires the UI.
+    -- Analogous functions with a clean adapter (RC-3 / RC-7). `promote`
+    -- stays behind its existing mutation until the UI routes it.
     restart_replication = { 'webui.recovery.ops', 'exec_restart_replication' },
     force_apply         = { 'webui.recovery.ops', 'exec_force_apply' },
     rebootstrap         = { 'webui.recovery.ops', 'exec_rebootstrap' },
+    restart_failover    = { 'webui.recovery.ops', 'exec_restart_failover' },
 }
 
 -- Run the real mutation for a mutating action.

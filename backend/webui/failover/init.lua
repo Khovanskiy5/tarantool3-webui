@@ -303,6 +303,19 @@ function M.stop()
     watcher.stop()
 end
 
+-- Full restart of the agent + watcher fibers: stop, then start fresh
+-- from `opts`. Unlike reconfigure() (which keeps the coordinator lease
+-- and only bounces the watchdog), this DROPS the lease and re-runs
+-- start() — the loops restart and the coordinator re-elects on the next
+-- tick. The recovery `restart_failover` action uses it to recover a
+-- wedged agent fiber. `opts` is the same failover cfg block start() took
+-- (the caller passes `STATE.config.failover`). Returns (started, err)
+-- like start(); a disabled agent (`agent ~= true`) returns (false, ...).
+function M.restart(opts)
+    M.stop()
+    return M.start(opts or {})
+end
+
 function M.status()
     return {
         agent         = agent.status(),

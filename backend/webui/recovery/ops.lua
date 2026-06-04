@@ -247,4 +247,53 @@ function M.exec_rebootstrap(payload, root)
         results = { { peer = alias, ok = good, msg = msg } } }
 end
 
+-- restart_failover — bounce the supervised failover agent fiber on the
+-- selected instance(s) via the remote shim. `caution`: it rebuilds the
+-- agent loops from each instance's own config and re-elects the
+-- coordinator; no config edit, no tuple data touched. Accepts
+-- `payload.aliases` (array) or a single `payload.alias`.
+function M.exec_restart_failover(payload, root)
+    payload = payload or {}
+    local aliases = payload.aliases
+    if type(aliases) ~= 'table' or #aliases == 0 then
+        local single = payload.alias or payload.target_alias
+        aliases = (type(single) == 'string' and single ~= '') and { single } or {}
+    end
+    if #aliases == 0 then
+        return { ok = false, action = 'restart_failover', results = {},
+            error = 'aliases is required (array of instance aliases)' }
+    end
+    local ok_r, rpc = pcall(require, 'webui.cluster.rpc')
+    if not ok_r then
+        return { ok = false, action = 'restart_failover', results = {},
+            error = 'rpc module unavailable' }
+    end
+    local ok, per = pcall(rpc.map_call, 'webui_restart_failover_remote', {},
+        { timeout = 5, peers = aliases })
+    local results = {}
+    local all_good = true
+    for _, alias in ipairs(aliases) do
+        local r = ok and type(per) == 'table' and per[alias] or nil
+        local v = type(r) == 'table' and r.value or nil
+        local good = type(r) == 'table' and r.ok == true
+            and type(v) == 'table' and v.ok == true
+        local msg
+        if not ok then
+            msg = tostring(per)
+        elseif r == nil then
+            msg = 'no response from ' .. alias
+        elseif type(v) == 'table' and v.err then
+            msg = tostring(v.err)
+        elseif good then
+            msg = 'failover agent restarted on ' .. alias
+        else
+            msg = 'restart failed on ' .. alias
+        end
+        if not good then all_good = false end
+        results[#results + 1] = { peer = alias, ok = good, msg = msg }
+    end
+    local _ = root
+    return { ok = all_good, action = 'restart_failover', results = results }
+end
+
 return M

@@ -95,3 +95,60 @@ g.test_promote_force_inconsistency_is_dangerous = function()
     t.assert_equals(a.dataLoss, true)
     t.assert_equals(a.confirm.token, 'PROMOTE tt-2')
 end
+
+-- ── exec_restart_failover (RC-7) — fan-out via rpc.map_call ──────────
+
+local function install_rpc(map_fn)
+    package.loaded['webui.cluster.rpc'] = { map_call = map_fn }
+end
+
+g.after_each(function()
+    package.loaded['webui.cluster.rpc'] = nil
+end)
+
+g.test_exec_restart_failover_requires_aliases = function()
+    local res = ops.exec_restart_failover({})
+    t.assert_equals(res.ok, false)
+    t.assert_str_contains(res.error, 'aliases is required')
+end
+
+g.test_exec_restart_failover_ok_for_each_peer = function()
+    install_rpc(function(_fn, _args, opts)
+        local out = {}
+        for _, alias in ipairs(opts.peers) do
+            out[alias] = { ok = true, value = { ok = true } }
+        end
+        return out
+    end)
+    local res = ops.exec_restart_failover({ aliases = { 'tt-1', 'tt-2' } })
+    t.assert_equals(res.ok, true)
+    t.assert_equals(res.action, 'restart_failover')
+    t.assert_equals(#res.results, 2)
+    -- Result rows match the recoveryAction contract { peer, ok, msg }.
+    t.assert_equals(res.results[1].peer, 'tt-1')
+    t.assert_equals(res.results[1].ok, true)
+    t.assert_str_contains(res.results[1].msg, 'restarted')
+end
+
+g.test_exec_restart_failover_accepts_single_alias = function()
+    install_rpc(function(_fn, _args, opts)
+        return { [opts.peers[1]] = { ok = true, value = { ok = true } } }
+    end)
+    local res = ops.exec_restart_failover({ alias = 'tt-3' })
+    t.assert_equals(res.ok, true)
+    t.assert_equals(res.results[1].peer, 'tt-3')
+end
+
+g.test_exec_restart_failover_surfaces_shim_error = function()
+    install_rpc(function(_fn, _args, opts)
+        local out = {}
+        for _, alias in ipairs(opts.peers) do
+            out[alias] = { ok = true, value = { ok = false, err = 'failover agent not enabled here' } }
+        end
+        return out
+    end)
+    local res = ops.exec_restart_failover({ aliases = { 'tt-3' } })
+    t.assert_equals(res.ok, false)
+    t.assert_equals(res.results[1].ok, false)
+    t.assert_str_contains(res.results[1].msg, 'not enabled')
+end
