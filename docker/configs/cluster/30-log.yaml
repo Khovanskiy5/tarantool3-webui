@@ -1,4 +1,19 @@
 log:
-  level: 5
-  to: file
-  file: var/log/tarantool.log
+  level: 4
+  format: json
+  # Tee the JSON log stream to BOTH a file and the process stdout:
+  #   - file   → the in-UI tail (`GET /api/logs`) reads this file;
+  #   - stdout → `docker logs` / compose / aggregators capture it
+  #              (tarantool runs as pid 1, so tee's stdout is the
+  #              container stream).
+  # `to: file` and `to: stderr` are mutually exclusive, so a pipe
+  # to `tee` is the only way to get both at once.
+  #   - mkdir -p: Tarantool only auto-creates the log dir for
+  #     `to: file`; under `to: pipe` we must ensure it ourselves,
+  #     and the data volume can shadow the image's empty dir.
+  #   - exec: replace the shell so `tee` receives SIGTERM directly
+  #     on shutdown instead of the wrapping `sh`.
+  #   - stdbuf -oL: line-buffer tee's stdout so `docker logs` stays
+  #     live instead of lagging behind a block buffer.
+  to: pipe
+  pipe: mkdir -p /opt/webui/var/lib/var/log && exec stdbuf -oL tee -a /opt/webui/var/lib/var/log/tarantool.log

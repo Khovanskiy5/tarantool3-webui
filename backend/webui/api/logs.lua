@@ -38,19 +38,39 @@ local LEVEL_RANK = {
 -- Resolve the log file path. Tarantool accepts:
 --   `file:/abs/path`, `file:rel/path`, or just `/abs/path` /
 --   `rel/path` when `log.to: file`.
--- Returns absolute path or nil if logs go to stderr / pipe / syslog.
+-- Returns absolute path or nil if logs go to stderr / syslog / a
+-- pipe that does not tee to a file.
 local function resolve_log_path()
     if rawget(_G, 'box') == nil or type(box.cfg) ~= 'table' then
         return nil
     end
     local raw = box.cfg.log
     if type(raw) ~= 'string' or raw == '' then return nil end
-    -- A `|`-prefix means piped to a shell command — no file.
-    if raw:sub(1, 1) == '|' then return nil end
-    -- A `syslog:` prefix means rsyslog — no file we can tail.
-    if raw:lower():sub(1, 7) == 'syslog:' then return nil end
-    local path = raw
-    if raw:lower():sub(1, 5) == 'file:' then path = raw:sub(6) end
+    local path
+    -- Piped logging (`log.to: pipe`). Tarantool exposes the command
+    -- as `| <cmd>` (legacy box.cfg) or `pipe:<cmd>` (3.x declarative
+    -- config). We still tail a file when the pipe tees to one — the
+    -- container setup pipes to `tee <file>` so `docker logs` and this
+    -- in-UI viewer both see the stream. Recover the file as the `tee`
+    -- target, i.e. the last token of the command. A pipe without
+    -- `tee` has no file we can read.
+    local pipe_cmd
+    if raw:sub(1, 1) == '|' then
+        pipe_cmd = raw:sub(2)
+    elseif raw:lower():sub(1, 5) == 'pipe:' then
+        pipe_cmd = raw:sub(6)
+    end
+    if pipe_cmd ~= nil then
+        if pipe_cmd:find('%f[%w]tee%f[%W]') == nil then return nil end
+        path = pipe_cmd:match('(%S+)%s*$')
+        if path == nil then return nil end
+    elseif raw:lower():sub(1, 7) == 'syslog:' then
+        -- A `syslog:` prefix means rsyslog — no file we can tail.
+        return nil
+    else
+        path = raw
+        if raw:lower():sub(1, 5) == 'file:' then path = raw:sub(6) end
+    end
     -- Resolve relative-to-work_dir the same way Tarantool does
     -- internally for log I/O; otherwise our `fio.open` looks in
     -- the process CWD which is unrelated to the data dir.
@@ -125,12 +145,35 @@ local function tail_lines(path, max_lines)
     return lines, nil, file_size
 end
 
--- Extract the severity letter from a Tarantool log line. Format
--- is `2026-06-01 09:30:00.000 [pid] main/... LEVEL> message`,
--- where LEVEL is a single uppercase letter. Returns 'I' (info)
--- when the parse fails so the line is not silently dropped by
--- the level filter.
+-- Map Tarantool's JSON `level` word (`log.format: json`) to the
+-- single-letter code the rest of the filter speaks.
+local LEVEL_WORD = {
+    FATAL   = 'F',
+    SYSERROR = 'S',
+    SYSTEM  = 'S',
+    ERROR   = 'E',
+    CRIT    = 'C',
+    WARN    = 'W',
+    INFO    = 'I',
+    VERBOSE = 'V',
+    DEBUG   = 'D',
+}
+
+-- Extract the severity letter from a Tarantool log line. Two
+-- formats are supported:
+--   * plain — `2026-06-01 09:30:00.000 [pid] main/... LEVEL> msg`,
+--     where LEVEL is a single uppercase letter.
+--   * json  — `{"time":...,"level":"INFO",...}` (log.format: json).
+-- Returns 'I' (info) when the parse fails so the line is not
+-- silently dropped by the level filter.
 local function level_of(line)
+    if line:sub(1, 1) == '{' then
+        local ok, obj = pcall(json.decode, line)
+        if ok and type(obj) == 'table' and type(obj.level) == 'string' then
+            return LEVEL_WORD[obj.level:upper()] or 'I'
+        end
+        return 'I'
+    end
     local letter = line:match('%s+([FSECWIVD])>%s')
     return letter or 'I'
 end
@@ -163,8 +206,9 @@ function M.tail(query)
     if path == nil then
         return {
             ok = false, code = 'NOT_CONFIGURED',
-            message = 'Tarantool log is not a file (configure '
-                .. '`log.to: file` in cluster YAML to enable tail).',
+            message = 'Tarantool log is not readable as a file '
+                .. '(set `log.to: file`, or pipe to `tee <file>`, '
+                .. 'in cluster YAML to enable tail).',
         }
     end
 

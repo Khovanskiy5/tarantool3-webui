@@ -28,7 +28,7 @@ make dev-down     # teardown + удалить volumes (форсирует пер
 | `05-box.yaml` | box-defaults (`database.use_mvcc_engine` для synchro) |
 | `10-credentials.yaml` | пользователи (replicator, webui_peer, *_dev) |
 | `20-replication.yaml` | `failover: supervised`, synchro-quorum |
-| `30-log.yaml` | лог-файл и уровень |
+| `30-log.yaml` | формат логов (`json`), уровень, вывод (`tee` → файл + stdout) |
 | `40-topology.yaml` | groups → rs-1 → instances (tt-1/2/3) |
 | `50-roles.yaml` | `roles: [webui]` + `roles_cfg.webui` |
 | `60-etcd.yaml` | self-reference `config.etcd` (тот же endpoint, что в стабе) |
@@ -45,6 +45,17 @@ Top-level ключи между файлами не пересекаются, п
 | `http://localhost:2379` | etcd (для `etcdctl`) |
 
 Dev-фикстуры credentials: `admin_dev / admin-dev-password`, `operator_dev / operator-dev-password`, `viewer_dev / viewer-dev-password`, `superuser_dev / superuser-dev-password`.
+
+## Логи
+
+Логи пишутся в формате **JSON** (`log.format: json`) — каждая строка отдельный объект (`time`/`level`/`message`/…), удобно для агрегаторов.
+
+`log.to` — единственный приёмник: либо файл, либо stderr. Чтобы получить **оба** сразу, конфиг использует `log.to: pipe` и теит поток в `tee`:
+
+- **файл** `var/log/tarantool.log` (в контейнере `/opt/webui/var/lib/var/log/tarantool.log`) — его читает встроенный вьювер `GET /api/logs` (`backend/webui/api/logs.lua`; резолвер достаёт путь как аргумент `tee`, а фильтр уровня понимает JSON-строки);
+- **stdout контейнера** — Tarantool стартует как pid 1, поэтому stdout `tee` уходит в поток контейнера: видно в `docker logs` / `make dev-logs` / агрегаторе.
+
+`stdbuf -oL` держит stdout `tee` построчно-буферизованным, чтобы `docker logs` не отставали. Для чисто-контейнерного деплоя (без встроенного вьювера) можно упростить до `log.to: stderr` — тогда файла нет, и `/api/logs` отдаёт `NOT_CONFIGURED`.
 
 ## Production considerations
 
