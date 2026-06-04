@@ -272,10 +272,12 @@ onMounted(load);
     <header class="webui-failover__head">
       <h1>Failover</h1>
       <!-- `mode` is Tarantool's own setting (replication.failover).
-           When the community agent runs on top of failover: off, it
-           is the actual leadership driver — Tarantool 3.x ships the
-           native supervised agent only in Enterprise Edition, so the
-           project bundles an open-source replacement. -->
+           The community agent is the leadership driver in both modes it
+           supports: `supervised` (recommended — instances start RO and
+           the agent writes appointments) and `off` (legacy fallback).
+           Tarantool 3.x ships the native supervised appointment agent
+           only in Enterprise Edition, so the project bundles an
+           open-source replacement. -->
       <Tag :value="`Tarantool mode: ${mode}`" severity="info" />
       <Tag
         v-if="agent !== null && agent.enabled"
@@ -312,9 +314,12 @@ onMounted(load);
         state is shown below.
       </span>
       <span v-else-if="mode === 'supervised'">
-        Tarantool's <strong>native supervised</strong> mode is enabled (Enterprise Edition). An
-        external state provider drives appointments; its endpoints appear in the
-        <em>State provider</em> section.
+        The cluster config sets <code>replication.failover: supervised</code> — the recommended mode
+        for this build. Tarantool starts every instance read-only and does not pick leaders itself;
+        the <strong>community agent</strong> elects a coordinator that writes appointments to the
+        external state provider (etcd) shown in the <em>State provider</em> section below. Tarantool's
+        built-in appointment agent for this mode is Enterprise-only, so this open-source build ships
+        its own.
       </span>
       <span v-else
         >Current Tarantool failover mode: <code>{{ mode }}</code
@@ -575,8 +580,8 @@ onMounted(load);
         <Tag :value="`kind: ${sp.kind}`" severity="info" />
       </header>
       <p class="webui-failover__hint">
-        Tarantool's native <code>supervised</code> mode (Enterprise Edition) writes appointments
-        through this external state provider. The probe below checks each endpoint via
+        With <code>replication.failover: supervised</code>, the community agent's elected coordinator
+        writes appointments through this external state provider. The probe below checks each endpoint via
         <code>HTTP GET /version</code> — only reachability is verified; lease ownership lives inside
         the provider and is not exposed here.
       </p>
