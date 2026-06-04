@@ -145,6 +145,40 @@ g5.test_handles_missing_synchro = function()
     t.assert_equals(ir._limbo_settled({}, 1, false), false)
 end
 
+local g6 = t.group('recovery.identity_reset.laggards')
+
+g6.test_no_laggards_when_all_reached_full_topology = function()
+    -- want=3: both peers report 3 replication URIs → caught up.
+    local res = {
+        ['tt-2'] = { ok = true, value = 3 },
+        ['tt-4'] = { ok = true, value = 3 },
+    }
+    t.assert_equals(ir._laggards({ 'tt-2', 'tt-4' }, res, 3), {})
+end
+
+g6.test_peer_below_full_size_is_a_laggard = function()
+    -- tt-4 still at 2 URIs (stuck in the EXPEL view, target missing).
+    local res = {
+        ['tt-2'] = { ok = true, value = 3 },
+        ['tt-4'] = { ok = true, value = 2 },
+    }
+    t.assert_equals(ir._laggards({ 'tt-2', 'tt-4' }, res, 3), { 'tt-4' })
+end
+
+g6.test_rpc_failure_counts_as_laggard = function()
+    -- No response / rpc error → can't confirm, treat as laggard so we retry.
+    local res = { ['tt-2'] = { ok = false, err = 'timeout' } }
+    t.assert_equals(ir._laggards({ 'tt-2', 'tt-5' }, res, 3), { 'tt-2', 'tt-5' })
+end
+
+g6.test_empty_result_all_laggards = function()
+    t.assert_equals(ir._laggards({ 'tt-2', 'tt-3' }, nil, 3), { 'tt-2', 'tt-3' })
+end
+
+g6.test_no_peers_no_laggards = function()
+    t.assert_equals(ir._laggards({}, {}, 3), {})
+end
+
 -- run() input guard runs before any box/leader access, so it is unit
 -- testable. The full phase machine (expel -> wipe -> re-add -> verify)
 -- is exercised by the integration recipe on the dev cluster (it is too
@@ -175,5 +209,7 @@ g3.test_module_exposes_orchestrator_surface = function()
     t.assert_type(ir.pick_fresh_id, 'function')
     t.assert_type(ir.preregister_row, 'function')
     t.assert_type(ir.wait_limbo_settled, 'function')
+    t.assert_type(ir.ensure_peers_replicating, 'function')
+    t.assert_type(ir._laggards, 'function')
     t.assert_type(ir._run_phases, 'function')
 end

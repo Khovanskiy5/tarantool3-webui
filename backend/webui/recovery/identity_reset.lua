@@ -46,6 +46,7 @@ M.RELOAD_RPC_TIMEOUT = 15      -- seconds
 M.FORWARD_TIMEOUT    = 240     -- seconds (whole orchestration over rpc)
 M.LIMBO_SETTLE_TIMEOUT = 30    -- seconds to wait for the leader limbo to settle
 M.PAUSE_TTL          = 300     -- seconds: failover pause held during the flow
+M.PEER_SYNC_TIMEOUT  = 30      -- seconds to wait for peers to pick up the rejoin
 
 -- ── pure helpers (no box; unit-testable) ────────────────────────────
 
@@ -103,6 +104,34 @@ function M._pick_fresh_id(used_ids, vclock)
         end
     end
     return nil
+end
+
+-- Given the verify peer list, a map_eval result keyed by alias
+-- ({ [alias] = { ok = bool, value = <replication-uri-count> } }) and the
+-- leader's own replication-list size `want`, return the aliases that have
+-- NOT yet caught up to the full topology (rpc failed, or fewer URIs than
+-- the leader). Pure so the laggard decision is unit-testable without
+-- rpc/box.
+--
+-- We compare box.cfg.replication SIZE, not box.info.replication contents:
+-- box.info.replication carries a row for every `_cluster`-registered peer
+-- (it replicates in), so the target appears there even on a peer that
+-- never reloaded the re-added config — a false "caught up". The peer's
+-- box.cfg.replication list only grows back to the full size once it
+-- actually re-reads the RE-ADD config, which is the signal we want.
+function M._laggards(peers, res, want)
+    res = res or {}
+    want = want or 0
+    local out = {}
+    for _, alias in ipairs(peers or {}) do
+        local r = res[alias]
+        local count = (type(r) == 'table' and r.ok == true
+            and tonumber(r.value)) or nil
+        if count == nil or count < want then
+            table.insert(out, alias)
+        end
+    end
+    return out
 end
 
 -- ── box-touching wrappers (run on the RW leader) ────────────────────
@@ -400,6 +429,56 @@ local function reload_cluster(target, skip_self)
         peers = peers, skip_self = skip_self == true })
 end
 
+-- After RE-ADD, confirm every surviving peer ACTUALLY re-read the config
+-- that puts the rejoined target back — its box.cfg.replication list has
+-- grown to the full topology size (= the leader's). The RE-ADD reload
+-- fan-out is best-effort: a peer that missed (or raced) the reload RPC
+-- stays frozen in the EXPEL view (target absent from its
+-- box.cfg.replication), so the target is invisible from that peer and
+-- never replicates to/from it, with NO self-healing until the next config
+-- edit. Re-issue reload to laggards and re-check, bounded. The target
+-- itself already rejoined (verify_rejoin) — a stubborn laggard is a
+-- degraded condition, not a flow failure, so the caller treats the return
+-- as a warning, not a hard error.
+-- peers: aliases to verify (excludes leader-self and the target).
+-- -> (true, nil) | (false, { laggard_aliases }).
+function M.ensure_peers_replicating(target, peers, opts)
+    opts = opts or {}
+    local timeout = opts.timeout or M.PEER_SYNC_TIMEOUT
+    local step    = opts.step or M.POLL_STEP
+    if type(peers) ~= 'table' or #peers == 0 then return true end
+    -- The full topology size, taken from THIS leader (it reloaded the
+    -- RE-ADD config in skip_self=false mode, so its list is authoritative).
+    local want = #((rawget(_G, 'box') and box.cfg.replication) or {})
+    local rpc = require('webui.cluster.rpc')
+    local expr = 'return #(box.cfg.replication or {})'
+    local started = fiber.clock()
+    while true do
+        local res = nil
+        pcall(function()
+            res = rpc.map_eval(expr, {},
+                { timeout = M.RELOAD_RPC_TIMEOUT, peers = peers })
+        end)
+        local laggards = M._laggards(peers, res, want)
+        if #laggards == 0 then
+            logger.info('ensure_peers_replicating: all peers caught up', {
+                target = target, peers = peers, want = want })
+            return true
+        end
+        if (fiber.clock() - started) >= timeout then
+            logger.warn('ensure_peers_replicating: laggards remain', {
+                target = target, laggards = laggards, want = want })
+            return false, laggards
+        end
+        -- Re-issue the reload to just the laggards, then wait a beat.
+        pcall(rpc.map_call, 'webui_config_reload_remote', {},
+            { timeout = M.RELOAD_RPC_TIMEOUT, peers = laggards })
+        logger.info('ensure_peers_replicating: re-reloaded laggards', {
+            laggards = laggards, want = want })
+        fiber.sleep(step)
+    end
+end
+
 -- ── orchestrator ────────────────────────────────────────────────────
 
 -- Pause the supervised failover agent for the duration of the rebootstrap
@@ -672,6 +751,25 @@ function M._run_phases(target, root)
     end)
     if not ok then return fail('verify_rejoin', msg) end
 
+    -- Phase SYNC_PEERS (non-fatal): make sure every OTHER surviving peer
+    -- actually picked up the rejoined target — the RE-ADD reload fan-out is
+    -- best-effort and a peer that missed it would keep the target invisible
+    -- (absent from its box.cfg.replication) with no self-healing. We
+    -- re-reload laggards and re-check; the target has already rejoined, so a
+    -- stubborn laggard is surfaced as a WARNING in the result rather than
+    -- failing the (successful) rebootstrap.
+    local peer_warning = nil
+    phase('sync_peers', function()
+        local peers = reload_peer_aliases(target)
+        if #peers == 0 then return true, 'no other peers to sync' end
+        local synced, laggards = M.ensure_peers_replicating(target, peers)
+        if synced then return true, 'all peers picked up the re-added target' end
+        peer_warning = 'peers did not re-read the re-added config: '
+            .. table.concat(laggards, ',') .. ' — reload them by hand '
+            .. '(config:reload()) if it persists'
+        return true, 'WARN: ' .. peer_warning
+    end)
+
     pcall(function()
         local audit = require('webui.audit.log')
         audit.record({
@@ -689,7 +787,8 @@ function M._run_phases(target, root)
     return { ok = true, action = 'rebootstrap',
         results = { { peer = target, ok = true,
             msg = 'clean rebootstrap: new _cluster id ' .. tostring(new_id) } },
-        new_id = new_id, new_uuid = new_uuid, phases = phases }
+        new_id = new_id, new_uuid = new_uuid, warning = peer_warning,
+        phases = phases }
 end
 
 -- run(payload, root) — entry point used by the recovery executor.
