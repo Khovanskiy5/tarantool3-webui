@@ -192,8 +192,36 @@ end
 -- expands in Phase F/G.
 function M.detect_refresh_vshard(_)    return {} end
 function M.detect_refine_uri(_)        return {} end
-function M.detect_restart_failover(_)  return {} end
 function M.detect_bootstrap_vshard(_)  return {} end
+
+-- restart_failover (RC-7) — a reachable instance whose config enables the
+-- supervised failover agent, but whose agent loop is NOT alive (never
+-- started, precondition failed, or the loop fiber died silently). The
+-- action bounces the agent fiber; the coordinator re-elects on the next
+-- tick. We only key off `config_enabled` + a dead/absent agent so a
+-- legacy/off instance (agent intentionally disabled) never trips it.
+function M.detect_restart_failover(snapshot)
+    snapshot = snapshot or { servers = {} }
+    local out = {}
+    for alias, server in pairs(snapshot.servers or {}) do
+        local fo = (server.reachable == true) and server.failover or nil
+        if type(fo) == 'table' and fo.config_enabled == true
+            and (fo.agent_enabled ~= true or fo.agent_running ~= true) then
+            local why = (fo.agent_enabled ~= true)
+                and 'not started' or 'loop fiber is dead'
+            out[#out + 1] = {
+                id     = 'restart_failover:' .. tostring(server.uuid or alias),
+                alias  = alias,
+                uuid   = server.uuid,
+                reason = string.format(
+                    'failover agent enabled in config but %s on %s',
+                    why, alias),
+            }
+        end
+    end
+    table.sort(out, function(a, b) return a.alias < b.alias end)
+    return out
+end
 
 -- Combine every detector into one map. Keys mirror the GraphQL
 -- field names so the resolver can return the struct as-is.

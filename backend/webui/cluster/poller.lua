@@ -145,6 +145,27 @@ M.PROBE_SRC = [[
         end),
         config_status = type(cfg_info) == 'table' and cfg_info.status or nil,
         config_alerts = type(cfg_info) == 'table' and map_alerts(cfg_info.alerts) or {},
+        -- Supervised failover agent health (for the restart_failover
+        -- suggestion): whether the operator enabled the agent here vs
+        -- whether its loop fibers are actually alive.
+        failover = safe(function()
+            local fo_ok, fo = pcall(require, 'webui.failover')
+            if not fo_ok then return nil end
+            local st = fo.status() or {}
+            local agent = st.agent or {}
+            local watcher = st.watcher or {}
+            local enabled_cfg = false
+            local ls_ok, ls = pcall(require, 'webui.lifecycle.state')
+            if ls_ok and ls.STATE and ls.STATE.config then
+                enabled_cfg = (ls.STATE.config.failover or {}).agent == true
+            end
+            return {
+                config_enabled  = enabled_cfg,
+                agent_enabled   = agent.enabled == true,
+                agent_running   = agent.running == true,
+                watcher_running = watcher.running == true,
+            }
+        end),
     }
 ]]
 
@@ -286,6 +307,24 @@ local function collect_local_probe()
         end),
         config_status = type(cfg_info) == 'table' and cfg_info.status or nil,
         config_alerts = config_alerts,
+        failover = safe_call(function()
+            local fo_ok, fo = pcall(require, 'webui.failover')
+            if not fo_ok then return nil end
+            local st = fo.status() or {}
+            local agent = st.agent or {}
+            local watcher = st.watcher or {}
+            local enabled_cfg = false
+            local ls_ok, ls = pcall(require, 'webui.lifecycle.state')
+            if ls_ok and ls.STATE and ls.STATE.config then
+                enabled_cfg = (ls.STATE.config.failover or {}).agent == true
+            end
+            return {
+                config_enabled  = enabled_cfg,
+                agent_enabled   = agent.enabled == true,
+                agent_running   = agent.running == true,
+                watcher_running = watcher.running == true,
+            }
+        end),
     }
 end
 

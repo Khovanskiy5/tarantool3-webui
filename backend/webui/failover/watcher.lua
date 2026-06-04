@@ -658,6 +658,8 @@ end
 function M.status()
     return {
         enabled    = STATE.enabled,
+        -- Liveness of the watcher loop fiber (see agent.status().running).
+        running    = STATE.fiber ~= nil and STATE.fiber:status() ~= 'dead',
         self_alias = STATE.self_alias,
         replicaset = STATE.replicaset,
         last_seen  = STATE.last_seen,

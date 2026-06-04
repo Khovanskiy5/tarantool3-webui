@@ -24,7 +24,7 @@ query SuggestionsOverview {
       id
     }
     restartFailover {
-      id
+      ...RestartFailoverFields
     }
     bootstrapVshard {
       id
@@ -64,6 +64,13 @@ fragment ForceApplyFields on ForceApplySuggestion {
 }
 
 fragment RestartReplicationFields on RestartReplicationSuggestion {
+  id
+  instanceAlias
+  instanceUuid
+  reason
+}
+
+fragment RestartFailoverFields on RestartFailoverSuggestion {
   id
   instanceAlias
   instanceUuid

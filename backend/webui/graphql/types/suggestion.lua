@@ -82,12 +82,14 @@ M.RefineUriSuggestion = types.object {
 
 M.RestartFailoverSuggestion = types.object {
     name = 'RestartFailoverSuggestion',
-    description = 'Supervised failover coordinator is unresponsive; '
-        .. 'populated in Task 46.',
+    description = 'The supervised failover agent is enabled on this instance '
+        .. 'but its loop is not running; restart the agent fiber.',
     fields = {
         id = { kind = types.string.nonNull },
-        coordinatorEndpoint = { kind = types.string,
-            resolve = function(root) return root.coordinator_endpoint end },
+        instanceAlias = { kind = types.string.nonNull,
+            resolve = function(root) return root.alias end },
+        instanceUuid = { kind = types.string,
+            resolve = function(root) return root.uuid end },
         reason = { kind = types.string.nonNull },
     },
 }

@@ -137,6 +137,79 @@ g.test_restart_replication_silent_on_healthy_follow = function()
     t.assert_equals(#out, 0)
 end
 
+-- ── detect_restart_failover (RC-7) ──────────────────────────────────
+
+g.test_restart_failover_emits_when_agent_enabled_but_dead = function()
+    local out = sg.detect_restart_failover({
+        servers = {
+            ['tt-1'] = {
+                reachable = true, uuid = 'u1',
+                failover = { config_enabled = true,
+                    agent_enabled = true, agent_running = false },
+            },
+        },
+    })
+    t.assert_equals(#out, 1)
+    t.assert_equals(out[1].alias, 'tt-1')
+    t.assert_equals(out[1].uuid, 'u1')
+    t.assert_str_contains(out[1].id, 'restart_failover:')
+    t.assert_str_contains(out[1].reason, 'loop fiber is dead')
+end
+
+g.test_restart_failover_emits_when_enabled_but_not_started = function()
+    local out = sg.detect_restart_failover({
+        servers = {
+            ['tt-2'] = {
+                reachable = true, uuid = 'u2',
+                failover = { config_enabled = true,
+                    agent_enabled = false, agent_running = false },
+            },
+        },
+    })
+    t.assert_equals(#out, 1)
+    t.assert_str_contains(out[1].reason, 'not started')
+end
+
+g.test_restart_failover_silent_when_agent_healthy = function()
+    local out = sg.detect_restart_failover({
+        servers = {
+            ['tt-1'] = {
+                reachable = true, uuid = 'u1',
+                failover = { config_enabled = true,
+                    agent_enabled = true, agent_running = true },
+            },
+        },
+    })
+    t.assert_equals(#out, 0)
+end
+
+g.test_restart_failover_silent_when_agent_disabled_in_config = function()
+    -- Agent intentionally off (legacy/disabled) — never a fix candidate.
+    local out = sg.detect_restart_failover({
+        servers = {
+            ['tt-1'] = {
+                reachable = true, uuid = 'u1',
+                failover = { config_enabled = false,
+                    agent_enabled = false, agent_running = false },
+            },
+        },
+    })
+    t.assert_equals(#out, 0)
+end
+
+g.test_restart_failover_skips_unreachable = function()
+    local out = sg.detect_restart_failover({
+        servers = {
+            ['tt-1'] = {
+                reachable = false, uuid = 'u1',
+                failover = { config_enabled = true,
+                    agent_enabled = true, agent_running = false },
+            },
+        },
+    })
+    t.assert_equals(#out, 0)
+end
+
 -- ── scan combines + stable shape ────────────────────────────────────
 
 g.test_scan_returns_all_seven_lists = function()

@@ -16,6 +16,7 @@ const { data, total } = storeToRefs(store);
 
 const forceApply = computed(() => data.value?.forceApply ?? []);
 const restartReplication = computed(() => data.value?.restartReplication ?? []);
+const restartFailover = computed(() => data.value?.restartFailover ?? []);
 
 // RC-6: the banner's actions now run through the SAME assessment model
 // as the recovery-page wizards — read-only `recoveryPreflight` ->
@@ -61,6 +62,10 @@ function runRestartReplication(uuid: string | null | undefined) {
 
 function runRebootstrap(alias: string) {
   void openAssessment('rebootstrap', JSON.stringify({ alias }));
+}
+
+function runRestartFailover(alias: string) {
+  void openAssessment('restart_failover', JSON.stringify({ aliases: [alias] }));
 }
 </script>
 
@@ -111,6 +116,21 @@ function runRebootstrap(alias: string) {
           @click="runRebootstrap(s.instanceAlias)"
         >
           Re-bootstrap
+        </button>
+      </li>
+    </ul>
+
+    <ul v-if="restartFailover.length > 0" class="webui-suggestions-banner__list">
+      <li v-for="s in restartFailover" :key="s.id">
+        <strong>{{ s.instanceAlias }}</strong>
+        <span class="webui-suggestions-banner__reason">{{ s.reason }}</span>
+        <button
+          type="button"
+          class="webui-suggestions-banner__action"
+          :disabled="assessOpen"
+          @click="runRestartFailover(s.instanceAlias)"
+        >
+          Restart failover agent
         </button>
       </li>
     </ul>

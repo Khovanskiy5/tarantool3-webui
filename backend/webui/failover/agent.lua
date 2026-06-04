@@ -936,6 +936,11 @@ function M.status()
     end)
     return {
         enabled         = STATE.enabled,
+        -- Liveness of the coordinator/election loop fiber. `enabled` can
+        -- stay true after a silent fiber death; `running` is the real
+        -- "is the loop alive" signal the restart_failover detector keys on.
+        running         = STATE.election_fiber ~= nil
+            and STATE.election_fiber:status() ~= 'dead',
         self_alias      = STATE.self_alias,
         coordinator     = STATE.coordinator,
         is_coordinator  = STATE.is_coordinator,

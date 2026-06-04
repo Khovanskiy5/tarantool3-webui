@@ -157,6 +157,9 @@ function M.merge_probe(server, probe)
     end
     server.election      = probe.election or server.election
     server.clock         = probe.clock or server.clock
+    -- Supervised failover agent health (drives the restart_failover
+    -- suggestion): config_enabled + agent_enabled + agent_running.
+    if probe.failover ~= nil then server.failover = probe.failover end
     server.reachable     = true
     return server
 end

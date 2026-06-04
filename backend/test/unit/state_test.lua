@@ -109,6 +109,19 @@ g.test_merge_probe_with_nil_returns_server_unchanged = function()
     t.assert_equals(s.status, 'unknown')
 end
 
+g.test_merge_probe_carries_failover_health = function()
+    -- The restart_failover detector reads server.failover off the
+    -- snapshot, so merge_probe must carry the probe's failover block.
+    local s = state.blank_server('tt-1')
+    state.merge_probe(s, {
+        failover = { config_enabled = true,
+            agent_enabled = false, agent_running = false },
+    })
+    t.assert_type(s.failover, 'table')
+    t.assert_equals(s.failover.config_enabled, true)
+    t.assert_equals(s.failover.agent_enabled, false)
+end
+
 -- ── build_next_state ────────────────────────────────────────────────
 
 g.test_build_next_state_with_only_topology = function()
