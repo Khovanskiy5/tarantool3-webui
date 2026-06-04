@@ -64,12 +64,17 @@ lint-frontend: ## Run ESLint and prettier check on the frontend.
 	cd $(FRONTEND_DIR) && $(BUN) run lint
 
 .PHONY: lint-fix
-lint-fix: ## Auto-fix lint issues where possible.
+lint-fix: ## Auto-fix lint AND formatting issues on the frontend (eslint --fix + prettier --write).
 	cd $(FRONTEND_DIR) && $(BUN) run lint:fix
+	cd $(FRONTEND_DIR) && $(BUN) run format:fix
 
 .PHONY: format-frontend
 format-frontend: ## Check frontend code formatting (prettier).
 	cd $(FRONTEND_DIR) && $(BUN) run format
+
+.PHONY: format-fix
+format-fix: ## Auto-fix frontend formatting (prettier --write).
+	cd $(FRONTEND_DIR) && $(BUN) run format:fix
 
 .PHONY: type-check-frontend
 type-check-frontend: ## Run TypeScript type-check on the frontend (vue-tsc).

@@ -317,9 +317,9 @@ onMounted(load);
         The cluster config sets <code>replication.failover: supervised</code> — the recommended mode
         for this build. Tarantool starts every instance read-only and does not pick leaders itself;
         the <strong>community agent</strong> elects a coordinator that writes appointments to the
-        external state provider (etcd) shown in the <em>State provider</em> section below. Tarantool's
-        built-in appointment agent for this mode is Enterprise-only, so this open-source build ships
-        its own.
+        external state provider (etcd) shown in the <em>State provider</em> section below.
+        Tarantool's built-in appointment agent for this mode is Enterprise-only, so this open-source
+        build ships its own.
       </span>
       <span v-else
         >Current Tarantool failover mode: <code>{{ mode }}</code
@@ -580,10 +580,10 @@ onMounted(load);
         <Tag :value="`kind: ${sp.kind}`" severity="info" />
       </header>
       <p class="webui-failover__hint">
-        With <code>replication.failover: supervised</code>, the community agent's elected coordinator
-        writes appointments through this external state provider. The probe below checks each endpoint via
-        <code>HTTP GET /version</code> — only reachability is verified; lease ownership lives inside
-        the provider and is not exposed here.
+        With <code>replication.failover: supervised</code>, the community agent's elected
+        coordinator writes appointments through this external state provider. The probe below checks
+        each endpoint via <code>HTTP GET /version</code> — only reachability is verified; lease
+        ownership lives inside the provider and is not exposed here.
       </p>
       <DataTable :value="sp.endpoints ?? []" data-key="uri" size="small">
         <Column field="uri" header="Endpoint">
