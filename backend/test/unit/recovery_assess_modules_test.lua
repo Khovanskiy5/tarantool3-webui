@@ -78,6 +78,48 @@ g.test_takeover_queue_busy_precondition = function()
     t.assert_equals(busy_pc.ok, false)
 end
 
+-- ── leader_takeover: limbo-lag (peers behind the candidate) ───────────
+
+g.test_peers_behind_none_when_all_caught_up = function()
+    t.assert_equals(takeover._peers_behind({ [1] = 10 },
+        { ['tt-2'] = { [1] = 10 }, ['tt-3'] = { [1] = 12 } }), {})
+end
+
+g.test_peers_behind_flags_laggard = function()
+    -- tt-3 at lsn 9 has not replicated up to the candidate's 10 → behind.
+    t.assert_equals(takeover._peers_behind({ [1] = 10 },
+        { ['tt-2'] = { [1] = 10 }, ['tt-3'] = { [1] = 9 } }), { 'tt-3' })
+end
+
+g.test_peers_behind_sorted_and_multiple = function()
+    t.assert_equals(takeover._peers_behind({ [1] = 50 },
+        { ['tt-4'] = { [1] = 1 }, ['tt-2'] = { [1] = 1 } }), { 'tt-2', 'tt-4' })
+end
+
+g.test_peers_behind_empty_input = function()
+    t.assert_equals(takeover._peers_behind({ [1] = 10 }, {}), {})
+    t.assert_equals(takeover._peers_behind({ [1] = 10 }, nil), {})
+end
+
+g.test_takeover_surfaces_lagging_peer_precondition = function()
+    -- No owner; candidate tt-2 DOMINATES tt-3 (safe), but tt-3 is behind on
+    -- the candidate's lsn → the limbo-lag precondition is surfaced (still
+    -- caution, no data loss — it is a catch-up note, not a dominance fail).
+    local snap = { peers = {
+        peer({ alias = 'tt-2', vclock = { [1] = 10 } }),
+        peer({ alias = 'tt-3', vclock = { [1] = 4 } }),
+    } }
+    local a = takeover.assess({ target_alias = 'tt-2' }, nil, snap)
+    t.assert_equals(a.risk, 'caution')
+    t.assert_equals(a.dataLoss, false)
+    local lag_pc
+    for _, pc in ipairs(a.preconditions) do
+        if pc.label == 'Peers will catch up to candidate first' then lag_pc = pc end
+    end
+    t.assert_not_equals(lag_pc, nil)
+    t.assert_str_contains(lag_pc.detail, 'tt-3')
+end
+
 -- ── orphan ───────────────────────────────────────────────────────────
 
 g.test_orphan_force_reconnect_is_safe = function()
