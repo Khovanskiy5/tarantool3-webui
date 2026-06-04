@@ -101,6 +101,60 @@ g.test_orphan_solo_promote_is_dangerous = function()
     t.assert_equals(a.risk, 'dangerous')
 end
 
+-- ── rebootstrap safety preconditions (quorum / owner / reachable) ────
+
+-- Pick a precondition's ok flag by a substring of its label.
+local function precond_ok(list, needle)
+    for _, pc in ipairs(list) do
+        if pc.label:find(needle, 1, true) then return pc.ok end
+    end
+    return nil
+end
+
+g.test_rebootstrap_preconditions_all_pass_with_healthy_trio = function()
+    local snap = { peers = {
+        peer({ alias = 'tt-1', queue_owner = true, reachable = true }),
+        peer({ alias = 'tt-2', reachable = true }),
+        peer({ alias = 'tt-3', reachable = true }),
+    } }
+    local pc = orphan._rebootstrap_preconditions(snap, 'tt-3')
+    t.assert_equals(precond_ok(pc, 'queue owner'), true)
+    t.assert_equals(precond_ok(pc, 'reachable over iproto'), true)
+    t.assert_equals(precond_ok(pc, 'synchro quorum after expel'), true)
+end
+
+g.test_rebootstrap_quorum_fails_when_a_peer_is_down = function()
+    -- target tt-3; tt-2 already down → after expel only tt-1 reachable,
+    -- quorum 2 not met.
+    local snap = { peers = {
+        peer({ alias = 'tt-1', queue_owner = true, reachable = true }),
+        peer({ alias = 'tt-2', reachable = false }),
+        peer({ alias = 'tt-3', reachable = true }),
+    } }
+    local pc = orphan._rebootstrap_preconditions(snap, 'tt-3')
+    t.assert_equals(precond_ok(pc, 'synchro quorum after expel'), false)
+end
+
+g.test_rebootstrap_rejects_queue_owner_target = function()
+    local snap = { peers = {
+        peer({ alias = 'tt-1', queue_owner = true, reachable = true }),
+        peer({ alias = 'tt-2', reachable = true }),
+        peer({ alias = 'tt-3', reachable = true }),
+    } }
+    local pc = orphan._rebootstrap_preconditions(snap, 'tt-1')
+    t.assert_equals(precond_ok(pc, 'queue owner'), false)
+end
+
+g.test_rebootstrap_rejects_unreachable_target = function()
+    local snap = { peers = {
+        peer({ alias = 'tt-1', queue_owner = true, reachable = true }),
+        peer({ alias = 'tt-2', reachable = true }),
+        peer({ alias = 'tt-3', reachable = false }),
+    } }
+    local pc = orphan._rebootstrap_preconditions(snap, 'tt-3')
+    t.assert_equals(precond_ok(pc, 'reachable over iproto'), false)
+end
+
 -- ── quorum_loss ──────────────────────────────────────────────────────
 
 g.test_quorum_is_dangerous_with_failsafe_precondition_ok = function()

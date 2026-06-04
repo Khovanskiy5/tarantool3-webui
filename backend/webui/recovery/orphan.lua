@@ -64,6 +64,58 @@ local function fanout(expr, alias)
     return true, 'dispatched on ' .. alias
 end
 
+-- Safety preconditions specific to the clean rebootstrap (expel + re-add).
+-- Pure over the recovery snapshot so it is unit-testable. Returns an array
+-- of { ok, label, detail } ready to splice into the assessment.
+--
+--   * target is NOT the synchro queue owner (wiping the leader loses
+--     uncommitted synchro txns; also guarantees the orchestrator, which
+--     runs on the leader, is never the node being wiped);
+--   * target is reachable over iproto (the orchestrator dispatches the
+--     wipe to it by RPC — a fully-down node must be wiped by hand);
+--   * the peers that remain after the expel still hold the synchro quorum
+--     (for N/2+1 with N=3, the post-expel set is 2 nodes, quorum 2 — both
+--     must be alive; zero fault tolerance during the window).
+function M._rebootstrap_preconditions(snap, target)
+    local idx = assess.index_peers(snap)
+    local peers = idx.peers or {}
+    local total = #peers
+    local tgt = idx.by_alias[target]
+
+    local owner_alias = idx.owner and idx.owner.alias or nil
+    local not_owner = owner_alias ~= target
+    local reachable = tgt ~= nil and tgt.reachable == true
+
+    local after = math.max(total - 1, 0)
+    local quorum_after = math.floor(after / 2) + 1
+    local alive_excl = 0
+    for _, p in ipairs(peers) do
+        if p.alias ~= target and p.reachable == true then
+            alive_excl = alive_excl + 1
+        end
+    end
+    local quorum_ok = total > 0 and alive_excl >= quorum_after
+
+    return {
+        { ok = not_owner,
+          label = 'Target is not the synchro queue owner',
+          detail = 'Re-bootstrapping the writable leader loses uncommitted '
+              .. 'synchronous writes — promote a healthy peer first.' },
+        { ok = reachable,
+          label = 'Target reachable over iproto',
+          detail = 'The orchestrator dispatches the wipe to ' .. tostring(target)
+              .. ' by RPC; a fully-down node must be wiped manually.' },
+        { ok = quorum_ok,
+          label = 'Remaining peers hold synchro quorum after expel',
+          detail = 'After expelling ' .. tostring(target) .. ' the replicaset '
+              .. 'is ' .. tostring(after) .. ' node(s) (quorum '
+              .. tostring(quorum_after) .. '); ' .. tostring(alive_excl)
+              .. ' reachable. Zero fault tolerance for sync writes during '
+              .. 'the rebootstrap window — restore a third node first if a '
+              .. 'peer is already down.' },
+    }
+end
+
 -- assess(payload, root) → Assessment (read-only). force_reconnect never
 -- loses commits (safe) but cannot heal a diverged orphan; rebootstrap
 -- wipes the node (dangerous); solo_promote forks a partitioned node
@@ -104,6 +156,9 @@ function M.assess(payload, _root, snap)
             .confirm('ORPHAN ' .. tostring(target),
                 'I accept wiping ' .. tostring(target))
         for _, pc in ipairs(assess.universal_preconditions()) do
+            b.precondition(pc.ok, pc.label, pc.detail)
+        end
+        for _, pc in ipairs(M._rebootstrap_preconditions(snap, target)) do
             b.precondition(pc.ok, pc.label, pc.detail)
         end
     elseif action == 'solo_promote' then

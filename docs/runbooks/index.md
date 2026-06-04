@@ -16,6 +16,7 @@
 | [split-brain-recovery.md](split-brain-recovery.md) | Восстановить кластер после split-brain (LSN-конфликты, "Split-Brain discovered" в логах). |
 | [failover-issues.md](failover-issues.md) | Разбор failover/etcd issue'ов: coordinator-stuck, etcd-quorum-lost, failover-suppressed, divergent-rejoin, alien, orphan. |
 | [recovery-overview.md](recovery-overview.md) | Обзор страницы /cluster-recovery: модель риска (safe/caution/dangerous) и универсальный порядок для опасных действий. |
+| [rebootstrap.md](rebootstrap.md) | Чистый re-bootstrap follower'а со сбросом идентичности (новый `_cluster` id, чтобы пиры снова реплицировали ОТ ноды). |
 | [leader-takeover.md](leader-takeover.md) | Аварийно назначить владельца synchro-очереди, когда владельца нет / он недоступен (vclock-доминирование, switchover). |
 | [topology-fix.md](topology-fix.md) | Починить URI репликации в топологии, когда applier завис на мёртвом адресе. |
 | [wal-repair.md](wal-repair.md) | Восстановить повреждённый xlog (хвостовое vs серединное повреждение, rejoin vs quarantine). |
@@ -36,7 +37,7 @@
 
 * **Rollback config:** `/config-editor` → "History" → выбрать предыдущую ревизию → "Force apply". Создаёт новый commit с YAML из той ревизии + fan-out reload.
 * **Pause failover на время разборок:** `/failover` → "Settings…" → или прямо через `pauseFailover(ttl_sec: 1800)`. Координатор перестаёт двигать лидерство, можно спокойно разбираться.
-* **Manual rebootstrap follower'а:** `rebootstrapInstance(alias)` — wipe'ает WAL/snap'ы у follower'а и бутстрапит его заново из живых peer'ов. Не делать на лидере (он откажет — потеря committed-but-unconfirmed данных).
+* **Manual rebootstrap follower'а:** `rebootstrapInstance(alias)` — стирает WAL/snap follower'а и бутстрапит его заново со сбросом идентичности (новый `_cluster` id, чтобы пиры снова реплицировали ОТ него). Полная процедура и инварианты — в [rebootstrap.md](rebootstrap.md). Не делать на лидере (он откажет — потеря committed-but-unconfirmed данных).
 * **Логи:** `docker logs webui-tt-X --tail 200`. Backend пишет JSON-строки с tag'ами `twophase` / `failover.agent` / `webui.cluster_ops` — `grep -F '"tag":"failover.agent"'` сразу даёт картину состояния агента.
 
 См. также: [`../operations.md`](../operations.md) — общее описание операционной модели, [`../troubleshooting.md`](../troubleshooting.md) — разбор частых ошибок.

@@ -303,6 +303,32 @@ function M._run_on_leader(target, root)
 
     logger.info('identity_reset: start', { target = target })
 
+    -- Enforce the data-safety preconditions against a FRESH snapshot
+    -- before touching the config: refuse if expelling the target would
+    -- break the synchro quorum or the target is the queue owner. The
+    -- assessment surfaces these too, but re-checking here means a stale
+    -- UI (or a direct caller) can never push an unsafe expel through.
+    do
+        local ok_s, snap = pcall(function()
+            return require('webui.recovery.snapshot').build()
+        end)
+        if ok_s and type(snap) == 'table' then
+            local orphan = require('webui.recovery.orphan')
+            for _, pc in ipairs(orphan._rebootstrap_preconditions(snap, target)) do
+                if pc.ok == false
+                    and not pc.label:find('reachable', 1, true) then
+                    logger.warn('identity_reset refused: precondition', {
+                        target = target, precondition = pc.label })
+                    return { ok = false, action = 'rebootstrap',
+                        results = { { peer = target, ok = false,
+                            msg = 'precondition failed: ' .. pc.label } },
+                        error = 'PRECONDITION_FAILED: ' .. pc.label,
+                        phases = phases }
+                end
+            end
+        end
+    end
+
     -- Capture the target's current id before we touch anything.
     local old_row = M._find_cluster_row(M.cluster_rows(), target)
     local old_id = old_row and old_row.id or nil
