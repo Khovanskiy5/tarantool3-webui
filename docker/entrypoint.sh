@@ -60,6 +60,22 @@ fi
 # it with an empty volume.
 mkdir -p "${TT_WORK_DIR}"
 
+# Re-bootstrap wipe. The clean-rebootstrap recovery flow drops a marker
+# file and exits; here — with no tarantool process running — we erase this
+# instance's snap/xlog/vinyl before starting. Wiping from inside a live
+# process races the WAL writer thread, which can recreate one last xlog
+# after the wipe; that stray file (old uuid) then breaks the next boot
+# against the re-added config's pinned uuid. Wiping here is race-free.
+# The marker lives at the work-dir root, outside the wiped instance dir,
+# so it survives the wipe; we remove it right after.
+WIPE_MARKER="${TT_WORK_DIR}/.rebootstrap-wipe"
+if [[ -f "${WIPE_MARKER}" ]]; then
+    DATA_DIR="${TT_WORK_DIR}/var/lib/${INSTANCE_NAME}"
+    printf '[entrypoint] rebootstrap marker present — wiping %s\n' "${DATA_DIR}"
+    rm -rf "${DATA_DIR}" 2>/dev/null || true
+    rm -f "${WIPE_MARKER}" 2>/dev/null || true
+fi
+
 # Export normalised env so the role and tarantool itself see consistent
 # values regardless of whether the caller used the WEBUI_* or TT_*
 # spelling.

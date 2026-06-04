@@ -94,6 +94,23 @@ local function quiesce_self()
     pcall(function() box.cfg{ wal_mode = 'none' } end)
 end
 
+-- Drop a marker at the work-dir root (outside the wiped instance dir, so it
+-- survives the wipe) telling the container entrypoint to erase this
+-- instance's data dir BEFORE the next tarantool starts. That is the
+-- authoritative, race-free wipe: the in-process nuke below is only a
+-- best-effort fallback for an image whose entrypoint predates the marker.
+-- → (true) | (false, err).
+local function write_wipe_marker()
+    local work_dir = (box.cfg and box.cfg.work_dir) or '/opt/webui/var/lib'
+    local path = work_dir .. '/.rebootstrap-wipe'
+    local ok, f = pcall(fio.open, path,
+        { 'O_WRONLY', 'O_CREAT', 'O_TRUNC' }, tonumber('644', 8))
+    if not ok or f == nil then return false, tostring(f) end
+    pcall(function() f:write('rebootstrap\n') end)
+    pcall(function() f:close() end)
+    return true
+end
+
 -- Erase this instance's snap/xlog/vinyl work dirs. → (deleted, failed,
 -- dirs) as arrays of paths.
 --
@@ -186,14 +203,20 @@ function M.rebootstrap_handler(req)
         }
     end
 
-    -- Quiesce NOW so no new data is accepted/replayed; the actual wipe runs
-    -- last, inside the exit fiber, right before os.exit. Identity (uuid /
-    -- `_cluster` row) is managed by the orchestrator on the leader, NOT here.
+    -- Quiesce NOW so no new data is accepted/replayed. The authoritative
+    -- wipe happens in the container entrypoint on the next start (race-free,
+    -- no WAL writer running) — drop the marker that triggers it. The
+    -- in-process nuke in the exit fiber is only a best-effort fallback.
+    -- Identity (uuid / `_cluster` row) is managed by the orchestrator on
+    -- the leader, NOT here.
     quiesce_self()
     local self_name = box.info.name
+    local marker_ok, marker_err = write_wipe_marker()
 
     logger.warn('rebootstrap initiated', {
         instance = self_name, request_id = request_id,
+        wipe_marker = marker_ok == true,
+        marker_err = (not marker_ok) and tostring(marker_err) or nil,
     })
 
     -- Flush the HTTP response first, THEN wipe, THEN exit immediately. The
