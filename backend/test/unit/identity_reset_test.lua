@@ -82,6 +82,69 @@ g2.test_empty_entry_is_disconnected = function()
     t.assert_equals(ir._is_disconnected({}), true)
 end
 
+local g4 = t.group('recovery.identity_reset.pick_fresh_id')
+
+g4.test_picks_lowest_free_clean_id = function()
+    -- ids 1,2 registered; vclock has history only for them → next clean id is 3.
+    t.assert_equals(ir._pick_fresh_id({ [1] = true, [2] = true },
+        { [1] = 100, [2] = 50 }), 3)
+end
+
+g4.test_skips_freed_id_with_vclock_history = function()
+    -- id 3 was expelled (not in _cluster) but its vclock component is
+    -- non-zero — reusing it would resurrect a stale relay position, so it
+    -- must be skipped in favour of a truly unused id (4).
+    t.assert_equals(ir._pick_fresh_id({ [1] = true, [2] = true },
+        { [1] = 100, [2] = 50, [3] = 7 }), 4)
+end
+
+g4.test_zero_vclock_component_is_reusable = function()
+    -- A registered-then-removed id whose vclock reads 0 never wrote
+    -- anything and is safe to assign.
+    t.assert_equals(ir._pick_fresh_id({ [1] = true },
+        { [1] = 100, [2] = 0 }), 2)
+end
+
+g4.test_returns_nil_when_exhausted = function()
+    local used, vclock = {}, {}
+    for id = 1, 31 do used[id] = true; vclock[id] = id end
+    t.assert_equals(ir._pick_fresh_id(used, vclock), nil)
+end
+
+g4.test_handles_nil_input = function()
+    -- Empty cluster / fresh vclock → id 1 is the first clean slot.
+    t.assert_equals(ir._pick_fresh_id(nil, nil), 1)
+end
+
+local g5 = t.group('recovery.identity_reset.limbo_settled')
+
+g5.test_owned_and_writable_is_settled = function()
+    -- Leader owns the queue (owner == self id) and is writable → settled.
+    t.assert_equals(ir._limbo_settled({ queue = { owner = 1 } }, 1, false), true)
+end
+
+g5.test_read_only_is_not_settled = function()
+    -- A frozen/demoted leader is RO; its checkpoint would poison the join.
+    t.assert_equals(ir._limbo_settled({ queue = { owner = 1 } }, 1, true), false)
+end
+
+g5.test_foreign_owner_is_not_settled = function()
+    -- Queue owned by another node (or 0 after a demote) → not settled.
+    t.assert_equals(ir._limbo_settled({ queue = { owner = 3 } }, 1, false), false)
+    t.assert_equals(ir._limbo_settled({ queue = { owner = 0 } }, 1, false), false)
+end
+
+g5.test_busy_limbo_is_not_settled = function()
+    -- An in-flight limbo operation → wait it out.
+    t.assert_equals(ir._limbo_settled({ queue = { owner = 1, busy = true } },
+        1, false), false)
+end
+
+g5.test_handles_missing_synchro = function()
+    t.assert_equals(ir._limbo_settled(nil, 1, false), false)
+    t.assert_equals(ir._limbo_settled({}, 1, false), false)
+end
+
 -- run() input guard runs before any box/leader access, so it is unit
 -- testable. The full phase machine (expel -> wipe -> re-add -> verify)
 -- is exercised by the integration recipe on the dev cluster (it is too
@@ -108,4 +171,9 @@ g3.test_module_exposes_orchestrator_surface = function()
     t.assert_type(ir.snapshot_master, 'function')
     t.assert_type(ir.expel_cluster_row, 'function')
     t.assert_type(ir.wait_peer_disconnected, 'function')
+    t.assert_type(ir.wait_peer_connected, 'function')
+    t.assert_type(ir.pick_fresh_id, 'function')
+    t.assert_type(ir.preregister_row, 'function')
+    t.assert_type(ir.wait_limbo_settled, 'function')
+    t.assert_type(ir._run_phases, 'function')
 end

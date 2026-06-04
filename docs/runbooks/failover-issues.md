@@ -73,7 +73,7 @@ docker exec webui-etcd-1 etcdctl get --prefix /tarantool/webui/state/by-name/ --
 
 1. Обычно само-разрешается за секунды — подожди.
 2. Если залип надолго — репликация заклинила: проверь `box.info.replication[*].upstream.status` на инстансе, сетевую связность с пирами, нет ли расхождения (тогда → [`divergent-rejoin`](#divergent-rejoin) / split-brain).
-3. Для залипшего orphan на странице `/cluster-recovery` есть визард **Orphan resolve**: `force_reconnect` (безопасный реконнект репликации), `rebootstrap` (опасно — wipe) или `solo_promote` (опасно — изоляция). См. [recovery-overview.md](recovery-overview.md).
+3. Для залипшего orphan на странице `/cluster-recovery` есть визард **Orphan resolve**: `force_reconnect` (безопасный реконнект репликации), `rebootstrap` (опасно — wipe) или `solo_promote` (опасно — изоляция). Когда какой выбирать — матрица решения в [orphan-resolve.md](orphan-resolve.md).
 
 ## <a id="two-rw"></a> два RW / split-brain (critical)
 

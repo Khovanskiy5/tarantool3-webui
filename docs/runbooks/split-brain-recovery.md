@@ -128,9 +128,14 @@ mutation { resumeFailover { applied } }
 
 * Никогда не делай `docker rm -f` / `kill -9` / `--force-recreate` без `pauseFailover` first.
 * Используй `docker compose down` (SIGTERM + graceful) вместо `docker kill`.
-* Установи `stop_grace_period: 10s` в compose чтобы agent.stop успел сделать `box.ctl.demote()` и drain'нуть limbo.
+* Установи `stop_grace_period: 10s` в compose чтобы agent.stop успел сделать `box.ctl.demote()` и drain'нуть limbo (это путь **реального** shutdown — там demote нужен).
 * Synchro quorum ≥ N/2+1 (см. [failover-mode.md](failover-mode.md)).
 * Регулярно проверяй /issues — issues scanner ловит split-brain через `check_replication` и поднимает CRITICAL alert.
+
+**Структурная защита (уже в коде):**
+
+* **Config-reload не демоутит лидера** (Patroni-принцип «reload ≠ failover»). Раньше `apply()` на каждый reload бросал роль → `agent.stop()` делал graceful demote → бамп term'а → re-promote; эта чехарда term'ов отравляла limbo любой ноды, которая в этот момент джойнилась (она наследовала старый term и застревала в split-brain против следующего `PROMOTE`). Теперь demote делается только на реальном shutdown/SIGTERM. Это убрало главный источник split-brain'а при re-bootstrap'е / правках топологии.
+* **Re-bootstrap ждёт устаканивания limbo** перед join-снапшотом и сам ставит паузу failover — нода всегда джойнится из чекпойнта с чистым limbo текущего term'а. См. [rebootstrap.md](rebootstrap.md).
 
 ## См. также
 

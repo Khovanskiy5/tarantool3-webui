@@ -51,12 +51,15 @@
 
 > Принцип: **сначала сохрани данные, потом стирай**. Re-bootstrap и quarantine необратимы.
 
-> **Re-bootstrap СБРАСЫВАЕТ идентичность** (даёт ноде новый `_cluster` id), а не сохраняет старый. В full-mesh кластере пиры отслеживают позицию репликации по `_cluster` **id** (компоненте vclock), а не по uuid. Если стёртая нода переиспользует свой id, её перемотанный WAL отвергается пирами с `invalid xlog order` — и они уже **не могут реплицировать ОТ неё**, даже если сама нода стала здоровым follower'ом. Фикс — дать ноде **новый id**: это требует expel'а её строки из `_cluster`, а чисто это делается только через конфиг. Полная процедура и инварианты проверки — в [rebootstrap.md](rebootstrap.md).
+> **Re-bootstrap СБРАСЫВАЕТ идентичность** (даёт ноде vclock-чистый `_cluster` id + свежий uuid), а не сохраняет старый. В full-mesh кластере пиры отслеживают позицию репликации по `_cluster` **id** (компоненте vclock), а не по uuid. Если стёртая нода переиспользует id, под которым уже были записи, её перемотанный WAL отвергается пирами с `invalid xlog order` — и они уже **не могут реплицировать ОТ неё**, даже если сама нода стала здоровым follower'ом. Фикс — дать ноде **чистый id** (нулевая компонента vclock): это требует expel'а её строки из `_cluster`, а чисто это делается только через конфиг. Полная процедура и инварианты проверки — в [rebootstrap.md](rebootstrap.md).
+
+> **Config-reload не делает failover.** Правка cluster-config (включая шаги re-bootstrap'а) больше **не демоутит лидера**: раньше любой `config:reload()` бросал webui-роль (`apply()` = stop→start), а `stop()` агента делал graceful demote → бамп raft-term → re-promote, и эта чехарда term'ов отравляла synchro-limbo любой ноды, что джойнилась в этот момент. Теперь по Patroni-принципу «reload ≠ failover» demote делается только на реальном shutdown/SIGTERM, а не на reload. Если ты видишь скачки `box.info.election.term` на обычной правке конфига — это регрессия, см. [failover-issues.md](failover-issues.md) и [`../failover.md`](../failover.md).
 
 ## Конкретные процедуры
 
 | Действие | Runbook |
 |---|---|
+| Разрулить залипший orphan (force_reconnect / rebootstrap / solo_promote) | [orphan-resolve.md](orphan-resolve.md) |
 | Чистый re-bootstrap follower'а (сброс идентичности) | [rebootstrap.md](rebootstrap.md) |
 | Сделать узел владельцем synchro-очереди (takeover / force-promote) | [leader-takeover.md](leader-takeover.md) |
 | Разрешить split-brain (два владельца очереди) | [split-brain-recovery.md](split-brain-recovery.md) |

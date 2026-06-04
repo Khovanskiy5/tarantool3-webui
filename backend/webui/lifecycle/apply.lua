@@ -32,7 +32,12 @@ function M.apply(cfg)
         return start.start(cfg)
     end
 
-    local ok, err = stop.stop()
+    -- reload=true: this is a config roll, not a shutdown. The stop must
+    -- NOT hand off leadership (demote) — the same instance restarts its
+    -- role immediately below, and a demote/re-promote only churns the raft
+    -- term (poisoning any peer mid-JOIN). See lifecycle/stop + failover
+    -- agent.stop. Mirrors Patroni: reload never triggers a failover.
+    local ok, err = stop.stop({ reload = true })
     if not ok then
         return nil, err
     end

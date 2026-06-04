@@ -32,8 +32,17 @@ local logger = log_util.with_tag('init')
 
 local M = {}
 
-function M.stop()
+-- M.stop(opts) — opts.reload marks a config-reload-induced stop (the
+-- role's apply() does stop→start to absorb new options without bouncing
+-- the process). On a reload the same instance re-takes its role at once,
+-- so leadership must NOT be handed off: a demote here churns the raft term
+-- and poisons any peer mid-JOIN with a stale-term synchro limbo. The flag
+-- is threaded into the failover agent's drain decision (mirrors Patroni,
+-- where reload never demotes). A real shutdown / role-removal passes no
+-- opts and drains as before.
+function M.stop(opts)
     local STATE = state.STATE
+    local reload = opts ~= nil and opts.reload == true
 
     if STATE.status == 'uninitialized' or STATE.status == 'stopped' then
         logger.debug('stop invoked while not running', {
@@ -44,7 +53,7 @@ function M.stop()
 
     STATE.status = 'stopping'
     local uptime = STATE.started_at and (fiber.time() - STATE.started_at) or 0
-    logger.info('webui role stopping', { uptime_sec = uptime })
+    logger.info('webui role stopping', { uptime_sec = uptime, reload = reload })
 
     -- Phase 0a: graceful synchro-queue drain (FO-9). When the failover
     -- agent manages leadership, agent.stop() (Phase 0) drains as part of
@@ -53,7 +62,8 @@ function M.stop()
     -- on EVERY mode — otherwise a hung sync txn becomes ER_SPLIT_BRAIN on
     -- the survivors after restart. A hard kill -9 bypasses this; there
     -- the is_sync limbo term fence + survivor self-fencing are the net.
-    if STATE.failover == nil then
+    -- Skipped on reload: the leader keeps its limbo across a stop/start.
+    if STATE.failover == nil and not reload then
         pcall(function()
             require('webui.failover.drain').drain_synchro_queue(3)
         end)
@@ -67,7 +77,7 @@ function M.stop()
     -- synchronously, so by the time the next phase starts, a
     -- surviving peer can claim coordinator within ~1s.
     if STATE.failover ~= nil then
-        pcall(function() STATE.failover.stop() end)
+        pcall(function() STATE.failover.stop({ reload = reload }) end)
         STATE.failover = nil
     end
 

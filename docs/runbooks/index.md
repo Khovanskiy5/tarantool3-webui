@@ -16,7 +16,8 @@
 | [split-brain-recovery.md](split-brain-recovery.md) | Восстановить кластер после split-brain (LSN-конфликты, "Split-Brain discovered" в логах). |
 | [failover-issues.md](failover-issues.md) | Разбор failover/etcd issue'ов: coordinator-stuck, etcd-quorum-lost, failover-suppressed, divergent-rejoin, alien, orphan. |
 | [recovery-overview.md](recovery-overview.md) | Обзор страницы /cluster-recovery: модель риска (safe/caution/dangerous) и универсальный порядок для опасных действий. |
-| [rebootstrap.md](rebootstrap.md) | Чистый re-bootstrap follower'а со сбросом идентичности (новый `_cluster` id, чтобы пиры снова реплицировали ОТ ноды). |
+| [orphan-resolve.md](orphan-resolve.md) | Разрулить залипший orphan: когда force_reconnect (safe), когда rebootstrap (опасно), когда solo_promote (дизастер). |
+| [rebootstrap.md](rebootstrap.md) | Чистый re-bootstrap follower'а со сбросом идентичности (vclock-чистый `_cluster` id + свежий uuid, чтобы пиры снова реплицировали ОТ ноды). |
 | [leader-takeover.md](leader-takeover.md) | Аварийно назначить владельца synchro-очереди, когда владельца нет / он недоступен (vclock-доминирование, switchover). |
 | [topology-fix.md](topology-fix.md) | Починить URI репликации в топологии, когда applier завис на мёртвом адресе. |
 | [wal-repair.md](wal-repair.md) | Восстановить повреждённый xlog (хвостовое vs серединное повреждение, rejoin vs quarantine). |

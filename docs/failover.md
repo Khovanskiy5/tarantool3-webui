@@ -76,6 +76,7 @@ Anti-flap (FO-6): φ-accrual детектор смерти лидера + suppre
 | **Watchdog / STONITH** (Patroni watchdog) | Зависший лидер не остаётся RW дольше lease | **FO-15** dead-man-switch (`os.exit` к hard-deadline) |
 | **Failsafe-режим** (Patroni failsafe) | Доступность при потере DCS без split-brain | **FO-16** opt-in: RW только если ВСЕ пиры подтвердили |
 | **Pause / maintenance** (Patroni pause) | Плановое обслуживание без авто-failover | **FO-19** pause-ключ: self-fence/watchdog/авто-демоут off |
+| **Reload ≠ failover** (Patroni reload) | Правка конфига не двигает лидерство — нет ложного демоута/term-чехарды | **FO-22** config-reload-induced `stop()` пропускает synchro-drain/demote (`opts.reload` через `apply→stop→agent.stop`); demote только на реальном shutdown/SIGTERM |
 | **Rolling-restart / switchover** (patronictl) | Не убить большинство, не ронять лидера резко | **FO-12** majority-guard + demote-first + restart-lock |
 | **Weak-subjectivity rejoin** (blockchain; Kafka KIP-320) | Долго-мёртвая нода не пропихивает дивергентный хвост | **FO-18** checkpoint + term-mismatch детект → rebootstrap/оператор |
 | **Anti-affinity / failure domains** | Падение одного домена не роняет кворум сразу | Документировано (см. [`operations.md`](operations.md) → etcd HA) |

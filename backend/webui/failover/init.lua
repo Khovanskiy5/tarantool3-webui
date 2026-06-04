@@ -298,8 +298,11 @@ function M.reconfigure(opts)
     return a == true and w == true
 end
 
-function M.stop()
-    agent.stop()
+-- M.stop(opts) — opts.reload is forwarded to agent.stop so a
+-- config-reload-induced stop skips the synchro drain/demote (it would only
+-- churn the raft term; the same instance re-takes its role immediately).
+function M.stop(opts)
+    agent.stop(opts)
     watcher.stop()
 end
 

@@ -39,10 +39,13 @@ M.DISCONNECT_TIMEOUT = 10      -- seconds
 M.WIPE_SETTLE        = 3       -- seconds to let the wiped process exit
 M.POLL_STEP          = 0.5     -- seconds
 M.SNAPSHOT_TIMEOUT   = 60      -- seconds (box.snapshot can be slow)
+M.NAME_FREE_TIMEOUT  = 15      -- seconds to wait for the old name to free
 M.REJOIN_TIMEOUT     = 60      -- seconds to wait for the fresh JOIN
 M.WIPE_RPC_TIMEOUT   = 15      -- seconds
 M.RELOAD_RPC_TIMEOUT = 15      -- seconds
 M.FORWARD_TIMEOUT    = 240     -- seconds (whole orchestration over rpc)
+M.LIMBO_SETTLE_TIMEOUT = 30    -- seconds to wait for the leader limbo to settle
+M.PAUSE_TTL          = 300     -- seconds: failover pause held during the flow
 
 -- ── pure helpers (no box; unit-testable) ────────────────────────────
 
@@ -77,6 +80,29 @@ function M._is_disconnected(entry)
     if status_active(up) then return false end
     if status_active(down) then return false end
     return true
+end
+
+-- Pick the lowest `_cluster` id (1..31) that is free to assign cleanly:
+-- not currently registered AND with a zero component in the cluster
+-- vclock. Reusing an id whose vclock component is non-zero resurrects a
+-- stale relay position at the peers ("invalid xlog order"), so such ids
+-- are skipped even when their `_cluster` row is already gone — this is
+-- exactly the footgun that the whole identity-reset flow exists to avoid.
+-- used_ids: { [id]=true }, vclock: { [id]=lsn }. -> id | nil (exhausted).
+--
+-- VCLOCK_MAX-1 = 31 is the hard ceiling on replica ids; nil means every
+-- slot is either live or carries history, and the caller must surface an
+-- exhaustion error rather than risk an unsafe reuse.
+function M._pick_fresh_id(used_ids, vclock)
+    used_ids = used_ids or {}
+    vclock = vclock or {}
+    for id = 1, 31 do
+        local v = vclock[id]
+        if not used_ids[id] and (v == nil or v == 0) then
+            return id
+        end
+    end
+    return nil
 end
 
 -- ── box-touching wrappers (run on the RW leader) ────────────────────
@@ -139,6 +165,133 @@ function M.wait_peer_disconnected(target_id, opts)
             return false, elapsed
         end
         fiber.sleep(step)
+    end
+end
+
+-- Poll the local replication view until the target (by id) establishes a
+-- LIVE link — used to confirm the fresh JOIN actually completed, rather
+-- than just the pre-registered row being present (which appears the
+-- instant we insert it). Inverse of wait_peer_disconnected.
+-- -> (true, elapsed) | (false, elapsed) on timeout.
+function M.wait_peer_connected(target_id, opts)
+    opts = opts or {}
+    local timeout = opts.timeout or M.REJOIN_TIMEOUT
+    local step    = opts.step or M.POLL_STEP
+    local started = fiber.clock()
+    while true do
+        local entry = (box.info.replication or {})[target_id]
+        if entry ~= nil and not M._is_disconnected(entry) then
+            local elapsed = fiber.clock() - started
+            logger.info('wait_peer_connected: target up', {
+                id = target_id, elapsed = elapsed,
+            })
+            return true, elapsed
+        end
+        if (fiber.clock() - started) >= timeout then
+            local elapsed = fiber.clock() - started
+            logger.warn('wait_peer_connected: timeout', {
+                id = target_id, elapsed = elapsed,
+            })
+            return false, elapsed
+        end
+        fiber.sleep(step)
+    end
+end
+
+-- Decide whether the local synchro limbo is settled enough to take a
+-- checkpoint the target can cleanly join from: this node must own the
+-- queue and be writable, with no in-flight limbo operation. Joining off a
+-- transient demoted/frozen checkpoint (owner ≠ self, or RO) gives the
+-- target a stale-term limbo that then rejects the next PROMOTE as a
+-- split-brain (txn_limbo.c: confirmed_lsn > request lsn). Pure for tests.
+function M._limbo_settled(synchro, self_id, ro)
+    if ro == true then return false end
+    local q = (synchro or {}).queue or {}
+    return q.owner ~= nil and q.owner == self_id and q.busy ~= true
+end
+
+-- Poll until the leader's own synchro limbo is settled (see
+-- M._limbo_settled). -> true when settled; false on timeout.
+function M.wait_limbo_settled(opts)
+    opts = opts or {}
+    local timeout = opts.timeout or M.LIMBO_SETTLE_TIMEOUT
+    local step    = opts.step or M.POLL_STEP
+    local started = fiber.clock()
+    while true do
+        if M._limbo_settled(box.info.synchro, box.info.id, box.info.ro) then
+            return true
+        end
+        if (fiber.clock() - started) >= timeout then
+            logger.warn('wait_limbo_settled: timeout', {
+                owner = (((box.info.synchro or {}).queue) or {}).owner,
+                self_id = box.info.id, ro = box.info.ro,
+            })
+            return false
+        end
+        fiber.sleep(step)
+    end
+end
+
+-- Pick a fresh `_cluster` id on the leader from the live space + vclock.
+-- -> id | nil (exhausted). See M._pick_fresh_id for the safety rationale.
+function M.pick_fresh_id()
+    local used = {}
+    if rawget(_G, 'box') and box.space and box.space._cluster then
+        for _, t in box.space._cluster:pairs() do
+            used[t[1]] = true
+        end
+    end
+    local vclock = (box.info and box.info.vclock) or {}
+    return M._pick_fresh_id(used, vclock)
+end
+
+-- Pre-register the target's NEW identity on the leader, BEFORE it rejoins:
+-- insert a fully-formed { id, uuid, name } `_cluster` row. When the wiped
+-- target JOINs with this pinned uuid, the master finds the row already
+-- carrying a real id and the matching name, so box_register_replica is a
+-- no-op (box.cc:4643) and the join never hits the nameless-registration →
+-- name-mismatch crash loop (box.cc:5046). The named row also ships inside
+-- the join snapshot, so the target boots with its name already bound.
+--
+-- Must run on the RW leader, AFTER expel_cluster_row freed the old id and
+-- name. Even then the old `struct replica` may not be collected yet: in a
+-- full mesh the leader holds an applier object to the target, and while
+-- `replica_has_connections` is true (applier ≠ nil OR incoming connection)
+-- the name stays occupied and the insert raises ER_INSTANCE_NAME_DUPLICATE
+-- (box.cc:4883). Orphan collection is async (it runs off the
+-- applier/relay disconnect triggers), so we retry on that specific error
+-- for a bounded window rather than failing the whole rebootstrap on a
+-- transient race. -> (true, nil) | (false, err).
+function M.preregister_row(new_id, new_uuid, name, opts)
+    opts = opts or {}
+    local timeout = opts.timeout or M.NAME_FREE_TIMEOUT
+    local step    = opts.step or M.POLL_STEP
+    local started = fiber.clock()
+    while true do
+        local ok, err = pcall(function()
+            box.space._cluster:insert({ new_id, new_uuid, name })
+        end)
+        if ok then
+            logger.info('preregister_row: inserted', {
+                id = new_id, uuid = new_uuid, name = name,
+            })
+            return true
+        end
+        local emsg = tostring(err)
+        -- Name still held by the not-yet-collected old replica struct;
+        -- wait for orphan collection and retry while we have budget.
+        if emsg:find('Duplicate replica name', 1, true)
+            and (fiber.clock() - started) < timeout then
+            logger.info('preregister_row: name still held, retrying', {
+                name = name, elapsed = fiber.clock() - started,
+            })
+            fiber.sleep(step)
+        else
+            logger.warn('preregister_row failed', {
+                id = new_id, uuid = new_uuid, name = name, err = emsg,
+            })
+            return false, emsg
+        end
     end
 end
 
@@ -249,26 +402,51 @@ end
 
 -- ── orchestrator ────────────────────────────────────────────────────
 
--- Wait (bounded) for the target to rejoin under a brand-new `_cluster`
--- id (≠ old_id). -> (true, new_id) | (false, nil).
-local function wait_fresh_rejoin(target_name, old_id)
-    local started = fiber.clock()
-    while true do
-        local row = M._find_cluster_row(M.cluster_rows(), target_name)
-        if row ~= nil and row.id ~= old_id then
-            return true, row.id
-        end
-        if (fiber.clock() - started) >= M.REJOIN_TIMEOUT then
-            return false
-        end
-        fiber.sleep(M.POLL_STEP)
+-- Pause the supervised failover agent for the duration of the rebootstrap
+-- and return an idempotent "resume" thunk. A re-appointment mid-flow bumps
+-- the raft term while the target is mid-JOIN; the target then inherits a
+-- stale-term limbo and wedges in split-brain against the newer PROMOTE. We
+-- only pause (and later clear) if nobody else holds the pause, so an
+-- operator's longer maintenance pause is never cut short by our cleanup.
+-- The pause carries a TTL, so even a hard crash here self-heals.
+local function pause_failover_guard()
+    local client = select(1, config_client())
+    if client == nil then return function() end end
+    local ok_p, pause = pcall(require, 'webui.failover.pause')
+    if not ok_p then return function() end end
+    if pause.is_active(client) then
+        logger.info('identity_reset: failover already paused; leaving as-is')
+        return function() end          -- someone else owns the pause
+    end
+    local _, err = pause.set(client, M.PAUSE_TTL, 'recovery.identity_reset')
+    if err ~= nil then
+        logger.warn('identity_reset: failover pause failed', { err = tostring(err) })
+        return function() end
+    end
+    logger.info('identity_reset: failover paused for rebootstrap', {
+        ttl_sec = M.PAUSE_TTL })
+    return function()
+        pcall(function() pause.clear(client) end)
+        logger.info('identity_reset: failover pause cleared')
     end
 end
 
--- _run_on_leader(target, root) — the phase machine. Runs ON the RW
+-- _run_on_leader(target, root) — pauses failover, runs the phase machine
+-- (M._run_phases), and ALWAYS resumes failover afterwards. Runs ON the RW
 -- leader (M.run forwards here), so every leader-side op is local and the
 -- orchestrator is never the node being wiped.
 function M._run_on_leader(target, root)
+    local resume_failover = pause_failover_guard()
+    local ok, res = pcall(M._run_phases, target, root)
+    resume_failover()
+    if not ok then error(res) end      -- propagate unexpected raise
+    return res
+end
+
+-- The phase machine proper. Separated from _run_on_leader so the failover
+-- pause is guaranteed to be released on every exit path (each phase fail
+-- returns early), via the single pcall in _run_on_leader.
+function M._run_phases(target, root)
     local phases = {}
     local saved_block = nil      -- instance subtree, for re-add + cleanup
     local expelled_from_config = false
@@ -321,6 +499,10 @@ function M._run_on_leader(target, root)
     -- while still being a brand-NEW id (the old _cluster row is expelled),
     -- so peers relay from it cleanly.
     local new_uuid = require('uuid').str()
+    -- The brand-new `_cluster` id, chosen on the leader once the old row is
+    -- expelled (PRE-REGISTER phase). Pre-binding {new_id, new_uuid, name}
+    -- before the target rejoins is what breaks the name chicken-and-egg.
+    local new_id = nil
 
     logger.info('identity_reset: start', { target = target, new_uuid = new_uuid })
 
@@ -393,10 +575,20 @@ function M._run_on_leader(target, root)
     end)
     if not ok then return fail('wipe_target', msg) end
 
-    -- Phase EXPEL_CLUSTER: wait for the old uuid to fully disconnect,
-    -- delete its `_cluster` row, then checkpoint so the DELETE is not
-    -- relayed during the rejoin JOIN (#4107).
+    -- Phase EXPEL_CLUSTER: wait for the old uuid to fully disconnect, then
+    -- delete its `_cluster` row so its id and name are both free.
     ok, msg = phase('expel_cluster_row', function()
+        -- Drop the leader's OWN applier to the target first. In a full mesh
+        -- the leader keeps an applier object to every peer; while
+        -- applier ≠ nil the target's `struct replica` is not orphan-collected
+        -- even after the row delete, so its NAME stays occupied
+        -- (replication.cc: replica_has_connections) and the upcoming
+        -- pre-register would raise ER_INSTANCE_NAME_DUPLICATE. The target is
+        -- already absent from config (expel_config, skip_self), so a leader
+        -- self-reload recomputes replication without it and tears the
+        -- applier down. (expel_config skipped self precisely to keep this
+        -- connection alive long enough to dispatch the wipe RPC.)
+        pcall(function() require('config'):reload() end)
         -- Settle: the wipe handler defers its os.exit, so wait for the old
         -- process to actually go before we wait on / delete its row (an
         -- orphan target already looks "disconnected", so the poll alone can
@@ -407,15 +599,43 @@ function M._run_on_leader(target, root)
         end
         local e_ok, e_err = M.expel_cluster_row(target)
         if not e_ok then return false, e_err end
-        local s_ok, s_err = M.snapshot_master()
-        if not s_ok then return false, s_err end
-        return true, 'old id expelled + checkpoint'
+        return true, 'old id expelled'
     end)
     if not ok then return fail('expel_cluster_row', msg) end
 
-    -- Phase RE-ADD: put the instance back in config (no uuid pin) +
-    -- reload, so the next restart of the crash-looping target finds
-    -- itself and does a clean fresh JOIN with a new id.
+    -- Phase PRE-REGISTER: bind the target's NEW identity on the leader
+    -- before it rejoins. Pick a fresh id, insert {new_id, new_uuid, name}
+    -- into `_cluster`, then checkpoint so the freed-id DELETE and the new
+    -- INSERT are folded into one consistent snapshot (the rejoin JOIN
+    -- relays from there, #4107). The pre-bound row makes the master's
+    -- join-time registration a no-op and the target boots with its name
+    -- already set — breaking the nameless-registration crash loop.
+    ok, msg = phase('preregister', function()
+        new_id = M.pick_fresh_id()
+        if new_id == nil then
+            return false, 'no free _cluster id (1..31 exhausted)'
+        end
+        -- Wait for THIS leader's synchro limbo to be settled (owns the
+        -- queue, writable, idle) so the checkpoint the target joins from
+        -- carries a clean, current-term limbo. Joining off a transient
+        -- demoted/frozen checkpoint wedges the target in split-brain
+        -- against the next PROMOTE. Failover is paused for the whole flow,
+        -- so once settled the term will not move out from under the join.
+        if not M.wait_limbo_settled({ timeout = M.LIMBO_SETTLE_TIMEOUT }) then
+            return false, 'leader synchro limbo did not settle'
+        end
+        local p_ok, p_err = M.preregister_row(new_id, new_uuid, target)
+        if not p_ok then return false, p_err end
+        local s_ok, s_err = M.snapshot_master()
+        if not s_ok then return false, s_err end
+        return true, 'pre-bound id ' .. tostring(new_id) .. ' + checkpoint'
+    end)
+    if not ok then return fail('preregister', msg) end
+
+    -- Phase RE-ADD: put the instance back in config (with the same uuid we
+    -- just pre-registered) + reload, so the next restart of the
+    -- crash-looping target finds itself and does a clean fresh JOIN onto
+    -- the pre-bound id/name.
     ok, msg = phase('readd_config', function()
         if saved_block == nil then
             return false, 'no saved instance block to re-add'
@@ -439,15 +659,16 @@ function M._run_on_leader(target, root)
     end)
     if not ok then return fail('readd_config', msg) end
 
-    -- Phase VERIFY: the target rejoins under a brand-new id.
-    local new_id
+    -- Phase VERIFY: the target re-establishes a live replication link on
+    -- its pre-bound id. The row itself appeared at PRE-REGISTER time, so a
+    -- presence check would pass instantly; wait for an actual connection
+    -- to confirm the fresh JOIN completed.
     ok, msg = phase('verify_rejoin', function()
-        local r_ok, nid = wait_fresh_rejoin(target, old_id)
-        if not r_ok then
-            return false, 'target did not rejoin with a new id in time'
+        local c_ok = M.wait_peer_connected(new_id, { timeout = M.REJOIN_TIMEOUT })
+        if not c_ok then
+            return false, 'target did not re-establish replication in time'
         end
-        new_id = nid
-        return true, 'rejoined as id ' .. tostring(nid)
+        return true, 'rejoined as id ' .. tostring(new_id)
     end)
     if not ok then return fail('verify_rejoin', msg) end
 

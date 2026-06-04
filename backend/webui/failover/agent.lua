@@ -872,8 +872,18 @@ function M.reconfigure(opts)
     return true
 end
 
-function M.stop()
+-- M.stop(opts) — opts.reload marks a config-reload-induced stop (the
+-- role's apply() does stop→start to pick up new options). On a reload the
+-- SAME instance restarts within the same process and immediately re-takes
+-- its role, so a graceful demote here is pure churn: box.ctl.demote bumps
+-- the raft term, the agent re-promotes on restart, and any node mid-JOIN
+-- inherits the stale term and wedges in split-brain. Mirrors Patroni,
+-- where a reload never triggers a demote/failover — only a real shutdown
+-- or an explicit switchover hands off leadership. So we drain/demote only
+-- when NOT reloading.
+function M.stop(opts)
     if not STATE.enabled then return end
+    local reload = opts ~= nil and opts.reload == true
     STATE.stop_flag = true
     STATE.enabled = false
 
@@ -885,10 +895,16 @@ function M.stop()
     -- ── Graceful synchro queue handover (split-brain prevention) ──
     -- Drain the limbo BEFORE revoking the coordinator lease. Shared
     -- with lifecycle/stop (FO-9) so the drain runs on every shutdown
-    -- path, agent or not. Best-effort + bounded.
-    pcall(function()
-        require('webui.failover.drain').drain_synchro_queue(3)
-    end)
+    -- path, agent or not. Best-effort + bounded. Skipped on reload (see
+    -- the function header): demoting then re-promoting the same leader
+    -- only churns the term.
+    if not reload then
+        pcall(function()
+            require('webui.failover.drain').drain_synchro_queue(3)
+        end)
+    else
+        logger.info('failover agent stop: reload — skipping synchro drain')
+    end
 
     -- Best-effort SYNCHRONOUS release: if we hold the coordinator
     -- lease, revoke it here so a surviving peer can claim the
