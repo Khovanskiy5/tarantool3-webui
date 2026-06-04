@@ -15,6 +15,7 @@ import Message from 'primevue/message';
 import Button from 'primevue/button';
 import Checkbox from 'primevue/checkbox';
 import InputText from 'primevue/inputtext';
+import Fluid from 'primevue/fluid';
 
 import type { Assessment } from '../model/useRecoveryAssessment';
 
@@ -50,6 +51,15 @@ const canApply = computed(() => {
   if (!a || props.busy) return false;
   if (!needsConfirm.value) return true;
   return props.acknowledge === true && props.token.trim() === (a.confirm.token ?? '');
+});
+
+// Red-border the token field once the operator has typed something that
+// doesn't (yet) match — empty stays neutral so the field isn't hostile
+// before they start.
+const tokenInvalid = computed(() => {
+  const a = props.assessment;
+  if (!a) return false;
+  return props.token.length > 0 && props.token.trim() !== (a.confirm.token ?? '');
 });
 
 function copyCommand(cmd: string) {
@@ -125,23 +135,32 @@ function copyCommand(cmd: string) {
       </div>
     </section>
 
-    <section v-if="needsConfirm" class="block confirm">
-      <label class="ack">
+    <section v-if="needsConfirm" class="assessment__confirm">
+      <div class="assessment__ack">
         <Checkbox
+          input-id="assessment-ack"
           :model-value="acknowledge"
           binary
           @update:model-value="emit('update:acknowledge', $event)"
         />
-        <span>{{ assessment.confirm.acknowledge }}</span>
-      </label>
-      <Message severity="warn" variant="simple" size="small">
-        Type <code>{{ assessment.confirm.token }}</code> to confirm.
-      </Message>
-      <InputText
-        :model-value="token"
-        :placeholder="assessment.confirm.token ?? ''"
-        @update:model-value="emit('update:token', $event ?? '')"
-      />
+        <label for="assessment-ack">{{ assessment.confirm.acknowledge }}</label>
+      </div>
+      <Fluid>
+        <div class="r-field">
+          <label for="assessment-token">
+            Type <code>{{ assessment.confirm.token }}</code> to confirm
+          </label>
+          <InputText
+            id="assessment-token"
+            :model-value="token"
+            :invalid="tokenInvalid"
+            :placeholder="assessment.confirm.token ?? ''"
+            autocomplete="off"
+            spellcheck="false"
+            @update:model-value="emit('update:token', $event ?? '')"
+          />
+        </div>
+      </Fluid>
     </section>
 
     <div class="actions">
@@ -224,15 +243,45 @@ function copyCommand(cmd: string) {
 }
 .cmd-row code {
   flex: 1;
-  padding: 0.25rem 0.5rem;
+  padding: 0.35rem 0.5rem;
   background: var(--p-content-background, rgba(0, 0, 0, 0.05));
-  border-radius: 4px;
+  border: 1px solid var(--p-content-border-color);
+  border-radius: var(--p-content-border-radius, 6px);
   overflow-x: auto;
 }
-.confirm .ack {
+
+/* Danger gate: visually set apart from the rest of the panel with a
+   red accent so the type-to-confirm step reads as a deliberate stop. */
+.assessment__confirm {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 0.85rem;
+  border: 1px solid var(--p-content-border-color);
+  border-left: 3px solid var(--p-red-500);
+  border-radius: var(--p-content-border-radius, 6px);
+}
+.assessment__ack {
+  display: flex;
+  align-items: flex-start;
   gap: 0.5rem;
+}
+.assessment__ack label {
+  cursor: pointer;
+  user-select: none;
+  line-height: 1.4;
+}
+.assessment__confirm .r-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.assessment__confirm .r-field label {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.assessment__confirm .r-field code {
+  font-weight: 700;
 }
 .actions {
   display: flex;

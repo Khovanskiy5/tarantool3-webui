@@ -817,8 +817,13 @@ function M.run(payload, root)
         logger.info('identity_reset: forwarding to leader', {
             target = target, leader = leader_alias })
         local rpc = require('webui.cluster.rpc')
+        -- net.box conn:call treats the second arg as the POSITIONAL
+        -- argument list, so the shim's single map argument must be
+        -- wrapped in an array — passing the bare map makes net.box try
+        -- to encode an associative table as the args array and raise
+        -- "Tuple/Key must be MsgPack array". The shim reads args.target.
         local res = rpc.map_call('webui_identity_reset_remote',
-            { target = target },
+            { { target = target } },
             { timeout = M.FORWARD_TIMEOUT, peers = { leader_alias } })
         local r = res and res[leader_alias]
         if not (r and r.ok) then

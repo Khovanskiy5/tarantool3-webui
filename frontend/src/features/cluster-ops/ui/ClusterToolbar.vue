@@ -170,6 +170,13 @@ async function doResume() {
 }
 
 .webui-cluster-toolbar__ttl-input {
-  width: 88px;
+  width: 110px;
+  flex: 0 0 auto;
+}
+/* The class lands on the `.p-inputnumber` wrapper; the inner <input>
+   keeps its own default width and would otherwise overflow the fixed
+   wrapper and overlap the Confirm button. Pin it to the wrapper. */
+.webui-cluster-toolbar__ttl-input :deep(.p-inputnumber-input) {
+  width: 100%;
 }
 </style>

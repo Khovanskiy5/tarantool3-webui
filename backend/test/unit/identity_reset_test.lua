@@ -213,3 +213,46 @@ g3.test_module_exposes_orchestrator_surface = function()
     t.assert_type(ir._laggards, 'function')
     t.assert_type(ir._run_phases, 'function')
 end
+
+-- When the request lands on a NON-leader, run() forwards the whole
+-- orchestration to the leader over rpc.map_call. net.box conn:call treats
+-- its second argument as the POSITIONAL argument list, so the shim's single
+-- map argument must be wrapped in an array. Passing a bare map made net.box
+-- raise "Tuple/Key must be MsgPack array" — the symptom seen when the
+-- rebootstrap was triggered from any peer other than the leader.
+local g7 = t.group('recovery.identity_reset.run_forward')
+
+local saved = {}
+g7.before_each(function()
+    saved.box = rawget(_G, 'box')
+    saved.state = package.loaded['webui.cluster.state']
+    saved.rpc = package.loaded['webui.cluster.rpc']
+end)
+g7.after_each(function()
+    rawset(_G, 'box', saved.box)
+    package.loaded['webui.cluster.state'] = saved.state
+    package.loaded['webui.cluster.rpc'] = saved.rpc
+end)
+
+g7.test_forward_wraps_args_as_msgpack_array = function()
+    rawset(_G, 'box', { info = { name = 'tt-2' } })  -- self is NOT the leader
+    package.loaded['webui.cluster.state'] = {
+        find_leader = function() return 'tt-1' end,
+    }
+    local captured = nil
+    package.loaded['webui.cluster.rpc'] = {
+        map_call = function(_fn, args, _opts)
+            captured = args
+            return { ['tt-1'] = { ok = true,
+                value = { ok = true, action = 'rebootstrap' } } }
+        end,
+    }
+
+    local res = ir.run({ target_alias = 'tt-3' })
+
+    t.assert_type(captured, 'table')
+    t.assert_equals(#captured, 1)                     -- a one-element array…
+    t.assert_equals(captured[1], { target = 'tt-3' }) -- …carrying the map arg
+    t.assert_equals(captured.target, nil)             -- NOT a bare map
+    t.assert_equals(res.ok, true)
+end
