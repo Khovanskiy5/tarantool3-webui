@@ -36,6 +36,7 @@ local M = {}
 
 -- Default bounded-wait budget for the target to drop its connections.
 M.DISCONNECT_TIMEOUT = 10      -- seconds
+M.WIPE_SETTLE        = 3       -- seconds to let the wiped process exit
 M.POLL_STEP          = 0.5     -- seconds
 M.SNAPSHOT_TIMEOUT   = 60      -- seconds (box.snapshot can be slow)
 M.REJOIN_TIMEOUT     = 60      -- seconds to wait for the fresh JOIN
@@ -223,17 +224,27 @@ local function reload_peer_aliases(target)
     return out
 end
 
--- config:reload() on self + every peer (config source is poll-on-demand,
--- so peers will not pick up an etcd edit until told to reload). Best
--- effort: the orchestrator's bounded waits absorb any laggard.
-local function reload_cluster(target)
-    pcall(function() require('config'):reload() end)
+-- config:reload() on the peers (and, unless skip_self, on the leader too).
+-- The config source is poll-on-demand, so peers will not pick up an etcd
+-- edit until told to reload. Best effort: the orchestrator's bounded waits
+-- absorb any laggard.
+--
+-- skip_self is set during EXPEL: reloading the LEADER there would drop the
+-- target from the leader's peer pool, and the leader needs that connection
+-- to dispatch the wipe RPC to the target. The target itself still reads the
+-- expelled config straight from etcd on its restart, so the crash-loop
+-- barrier holds regardless.
+local function reload_cluster(target, skip_self)
+    if not skip_self then
+        pcall(function() require('config'):reload() end)
+    end
     local peers = reload_peer_aliases(target)
     if #peers == 0 then return end
     local rpc = require('webui.cluster.rpc')
     pcall(rpc.map_call, 'webui_config_reload_remote', {},
         { timeout = M.RELOAD_RPC_TIMEOUT, peers = peers })
-    logger.info('reload_cluster: fanned out', { peers = peers })
+    logger.info('reload_cluster: fanned out', {
+        peers = peers, skip_self = skip_self == true })
 end
 
 -- ── orchestrator ────────────────────────────────────────────────────
@@ -301,7 +312,17 @@ function M._run_on_leader(target, root)
             error = tostring(msg), phases = phases }
     end
 
-    logger.info('identity_reset: start', { target = target })
+    -- A freshly generated uuid pinned into the re-added config. This is the
+    -- load-bearing detail for a clean rejoin: with NO pin the wiped node
+    -- bootstraps a RANDOM uuid and writes a nameless snapshot, then dies on
+    -- the next restart ("Instance name … is not set in snapshot and UUID is
+    -- missing in the config", configdata.lua:542, #3740). Pinning a fresh
+    -- uuid makes that check pass AND lets the leader bind the name to it,
+    -- while still being a brand-NEW id (the old _cluster row is expelled),
+    -- so peers relay from it cleanly.
+    local new_uuid = require('uuid').str()
+
+    logger.info('identity_reset: start', { target = target, new_uuid = new_uuid })
 
     -- Enforce the data-safety preconditions against a FRESH snapshot
     -- before touching the config: refuse if expelling the target would
@@ -343,28 +364,30 @@ function M._run_on_leader(target, root)
         local w_ok, werr = config_write(new_yaml)
         if not w_ok then return false, werr end
         expelled_from_config = true
-        reload_cluster(target)
+        -- skip_self: keep the leader's pool connection to the target so the
+        -- next phase can dispatch the wipe RPC to it.
+        reload_cluster(target, true)
         return true, 'expelled (' .. tostring(status) .. ')'
     end)
     if not ok then return fail('expel_config', msg) end
 
     -- Phase WIPE: erase the target's local state; it crash-loops while
     -- absent from config (a synchronisation barrier) until we re-add it.
+    -- The wipe handler returns a 202 BEFORE its deferred os.exit, so a
+    -- successful wipe comes back with a positive response — require it, so
+    -- an unreachable target (e.g. "not connected") fails loudly and triggers
+    -- cleanup rather than silently skipping the wipe.
     ok, msg = phase('wipe_target', function()
         local rpc = require('webui.cluster.rpc')
         local res = rpc.map_call('webui_rebootstrap_remote', {},
             { timeout = M.WIPE_RPC_TIMEOUT, peers = { target } })
         local r = res and res[target]
-        -- The target exits mid-call, so an aborted/closed connection is
-        -- the EXPECTED outcome — treat it as success, not failure.
-        if r and r.ok == false and r.err ~= nil
-            and not tostring(r.err):find('connect') then
-            -- A clean refusal (e.g. queue owner) still comes back as ok=false
-            -- with a non-connection error; surface it.
-            if tostring(r.err):find('FORBIDDEN')
-                or tostring(r.err):find('queue') then
-                return false, r.err
-            end
+        if r == nil then return false, 'no response from ' .. target end
+        if r.ok ~= true then
+            return false, 'wipe rpc failed: ' .. tostring(r.err)
+        end
+        if type(r.value) == 'table' and r.value.err ~= nil then
+            return false, tostring(r.value.message or r.value.err)
         end
         return true, 'wipe dispatched'
     end)
@@ -374,6 +397,11 @@ function M._run_on_leader(target, root)
     -- delete its `_cluster` row, then checkpoint so the DELETE is not
     -- relayed during the rejoin JOIN (#4107).
     ok, msg = phase('expel_cluster_row', function()
+        -- Settle: the wipe handler defers its os.exit, so wait for the old
+        -- process to actually go before we wait on / delete its row (an
+        -- orphan target already looks "disconnected", so the poll alone can
+        -- return instantly while the old process is still up).
+        fiber.sleep(M.WIPE_SETTLE)
         if old_id ~= nil then
             M.wait_peer_disconnected(old_id, { timeout = M.DISCONNECT_TIMEOUT })
         end
@@ -392,10 +420,16 @@ function M._run_on_leader(target, root)
         if saved_block == nil then
             return false, 'no saved instance block to re-add'
         end
+        -- Pin the fresh uuid so the wiped node bootstraps a deterministic,
+        -- name-bound identity instead of a random nameless one.
+        local inst = saved_block.instance
+        if type(inst) ~= 'table' then inst = {} end
+        inst.database = inst.database or {}
+        inst.database.instance_uuid = new_uuid
         local raw, rerr = config_read()
         if raw == nil then return false, rerr end
         local new_yaml, status = yaml_patch.add_instance(raw, target,
-            saved_block.instance, saved_block.group, saved_block.replicaset)
+            inst, saved_block.group, saved_block.replicaset)
         if new_yaml == nil then return false, status end
         local w_ok, werr = config_write(new_yaml)
         if not w_ok then return false, werr end
@@ -429,12 +463,12 @@ function M._run_on_leader(target, root)
     end)
 
     logger.info('identity_reset: done', {
-        target = target, old_id = old_id, new_id = new_id,
+        target = target, old_id = old_id, new_id = new_id, new_uuid = new_uuid,
     })
     return { ok = true, action = 'rebootstrap',
         results = { { peer = target, ok = true,
             msg = 'clean rebootstrap: new _cluster id ' .. tostring(new_id) } },
-        new_id = new_id, phases = phases }
+        new_id = new_id, new_uuid = new_uuid, phases = phases }
 end
 
 -- run(payload, root) — entry point used by the recovery executor.
