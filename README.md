@@ -51,6 +51,7 @@ curl -s -X POST http://localhost:8080/admin/api \
 | [Architecture](docs/architecture.md) | Layout, потоки данных, слои, 2PC, synchro-spaces |
 | [Failover](docs/failover.md) | OSS supervised-parity: инварианты, lease/term/vclockkeeper, тайминги, матрица Enterprise→OSS, issue→runbook |
 | [Operations](docs/operations.md) | Deploy, HAProxy, мониторинг, etcd-HA, pause, безопасные рестарты, каталоги API |
+| [Config reference](docs/config-reference.md) | Полный разбор схемы конфигурации кластера: все параметры, scope-иерархия, EE-пометки |
 | [Security](docs/security.md) | TLS / mTLS, RBAC, audit, peer-auth, threat model |
 | [RBAC matrix](docs/rbac-matrix.md) | Полная матрица ролей × операций |
 | [Troubleshooting](docs/troubleshooting.md) + [Runbooks](docs/runbooks/index.md) | Разбор инцидентов и пошаговые операции |
