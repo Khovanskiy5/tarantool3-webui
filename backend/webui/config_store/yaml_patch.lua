@@ -10,14 +10,22 @@
 -- mangled text from then on.
 --
 -- This module patches the RAW text instead, so untouched lines stay
--- byte-for-byte identical. It handles SCALAR leaf edits only -- set a
--- single value at a known key path, or replace a verbatim value. It
--- deliberately does NOT model structural edits (adding or removing
--- instances / replicasets): a text merge of arbitrary subtrees is not
--- worth the risk, so those callers still re-encode.
+-- byte-for-byte identical. Two layers:
+--   * SCALAR leaf edits -- `set_field` / `replace_value`: set a single
+--     value at a known key path, or replace a verbatim value.
+--   * STRUCTURAL edits -- `render` plus the `remove_instance` /
+--     `add_instance` wrappers: rebuild a whole NEW parsed tree and merge
+--     it back, preserving comments/order on every untouched subtree.
+--     `render` carries a HARD decode-verify invariant and falls back to a
+--     plain re-encode if it can't merge cleanly, so it is never worse
+--     than a round-trip. The clean-rebootstrap orchestrator uses
+--     remove_instance/add_instance to expel and re-add the target.
 --
 
 local yaml = require('yaml')
+
+local log_util = require('webui.log_util')
+local logger   = log_util.with_tag('config_store.yaml_patch')
 
 local M = {}
 
@@ -506,6 +514,126 @@ function M.render(raw, old_parsed, new_parsed)
     end
     -- Fallback: guaranteed-valid re-encode (drops comments, never breaks).
     return yaml.encode(new_parsed)
+end
+
+-- ── instance expel / re-add (structural, comment-preserving) ─────────
+--
+-- Thin wrappers over `render`: decode the raw config, edit the parsed
+-- tree (drop / insert one instance), then render back so comments, key
+-- order and indentation on every untouched subtree survive. `render`
+-- carries the HARD decode-verify invariant, so these never produce YAML
+-- that decodes to something other than the intended tree.
+--
+-- Used by the clean-rebootstrap orchestrator: EXPEL removes the target
+-- instance from config (every peer drops it from replication on reload);
+-- RE-ADD puts the exact same subtree back so the wiped instance rejoins
+-- as a brand-new replica id.
+
+-- Locate the parsed `instances` map that holds `name`, returning the
+-- map plus the discovered group / replicaset names. -> (map, g, rs) | nil.
+local function locate_instances(parsed, name)
+    local path = M.find_instance_path(parsed, name)
+    if path == nil then return nil end
+    local gname, rsname = path[2], path[4]
+    local insts = parsed.groups[gname].replicasets[rsname].instances
+    return insts, gname, rsname
+end
+
+-- remove_instance(raw, name) ->
+--   (new_raw, 'removed', { group, replicaset, instance = <subtree> }) on success;
+--   (raw, 'absent', nil) when the instance is not in the config (idempotent);
+--   (nil, err) on a malformed document.
+--
+-- The third return value carries everything add_instance needs to put the
+-- instance back verbatim, so the orchestrator can save it across the wipe.
+function M.remove_instance(raw, name)
+    if type(raw) ~= 'string' then return nil, 'raw config is not a string' end
+    if type(name) ~= 'string' or name == '' then
+        return nil, 'instance name required'
+    end
+    local ok, parsed = pcall(yaml.decode, raw)
+    if not ok or type(parsed) ~= 'table' then
+        return nil, 'cluster config YAML invalid'
+    end
+    local _, gname, rsname = locate_instances(parsed, name)
+    if gname == nil then
+        logger.debug('remove_instance: absent', { instance = name })
+        return raw, 'absent', nil
+    end
+    local saved = table.deepcopy(
+        parsed.groups[gname].replicasets[rsname].instances[name])
+    local new_parsed = table.deepcopy(parsed)
+    new_parsed.groups[gname].replicasets[rsname].instances[name] = nil
+    local new_raw = M.render(raw, parsed, new_parsed)
+    logger.debug('remove_instance: removed', {
+        instance = name, group = gname, replicaset = rsname,
+    })
+    return new_raw, 'removed', {
+        group = gname, replicaset = rsname, instance = saved,
+    }
+end
+
+-- add_instance(raw, name, instance_tbl[, group_name, replicaset_name]) ->
+--   (new_raw, 'added') on success;
+--   (raw, 'already') when the instance already exists (idempotent);
+--   (nil, err) on a malformed document / unresolved placement.
+--
+-- `instance_tbl` is the PARSED instance body (a table), not raw text, so
+-- render formats it in house style. When group / replicaset are omitted
+-- they are auto-detected, which only works if the config has exactly one
+-- replicaset (the common single-replicaset cluster); otherwise pass them
+-- explicitly (e.g. from remove_instance's third return value).
+function M.add_instance(raw, name, instance_tbl, group_name, replicaset_name)
+    if type(raw) ~= 'string' then return nil, 'raw config is not a string' end
+    if type(name) ~= 'string' or name == '' then
+        return nil, 'instance name required'
+    end
+    if type(instance_tbl) ~= 'table' then
+        return nil, 'instance body must be a table'
+    end
+    local ok, parsed = pcall(yaml.decode, raw)
+    if not ok or type(parsed) ~= 'table' then
+        return nil, 'cluster config YAML invalid'
+    end
+    if M.find_instance_path(parsed, name) ~= nil then
+        logger.debug('add_instance: already present', { instance = name })
+        return raw, 'already'
+    end
+    local gname, rsname = group_name, replicaset_name
+    if gname == nil or rsname == nil then
+        -- Auto-detect the single replicaset; refuse if ambiguous so we
+        -- never silently insert into the wrong place.
+        local found_g, found_rs, count = nil, nil, 0
+        for gn, group in pairs(parsed.groups or {}) do
+            local replicasets = (type(group) == 'table') and group.replicasets or {}
+            for rn in pairs(replicasets) do
+                found_g, found_rs, count = gn, rn, count + 1
+            end
+        end
+        if count ~= 1 then
+            return nil, 'cannot auto-place instance: '
+                .. tostring(count) .. ' replicasets — pass group/replicaset'
+        end
+        gname, rsname = found_g, found_rs
+    end
+    local group = (parsed.groups or {})[gname]
+    local rs = group and (group.replicasets or {})[rsname]
+    if type(rs) ~= 'table' then
+        return nil, 'replicaset ' .. tostring(gname) .. '/'
+            .. tostring(rsname) .. ' not found in config'
+    end
+    local new_parsed = table.deepcopy(parsed)
+    local ninsts = new_parsed.groups[gname].replicasets[rsname].instances
+    if type(ninsts) ~= 'table' then
+        ninsts = {}
+        new_parsed.groups[gname].replicasets[rsname].instances = ninsts
+    end
+    ninsts[name] = table.deepcopy(instance_tbl)
+    local new_raw = M.render(raw, parsed, new_parsed)
+    logger.debug('add_instance: added', {
+        instance = name, group = gname, replicaset = rsname,
+    })
+    return new_raw, 'added'
 end
 
 return M

@@ -317,3 +317,95 @@ g4.test_pin_uuid_on_instance_without_database = function()
             .instances['tt-3'].database.instance_uuid,
         'aaaa-bbbb')
 end
+
+-- ── remove_instance / add_instance (clean-rebootstrap expel/re-add) ──
+
+local g6 = t.group('config_store.yaml_patch.remove_instance')
+
+g6.test_remove_returns_saved_subtree_and_drops_block = function()
+    local raw = sample()
+    local out, status, saved = yaml_patch.remove_instance(raw, 'tt-3')
+    t.assert_equals(status, 'removed')
+    -- tt-3 gone, siblings + comments intact.
+    t.assert_not_str_contains(out, 'uri: tt-3:3301')
+    t.assert_str_contains(out, 'tt-1:        # the bootstrap leader')
+    t.assert_str_contains(out, '# Topology: one replicaset, three peers.')
+    t.assert_equals(yaml.decode(out).groups.default.replicasets['rs-1']
+        .instances['tt-3'], nil)
+    -- saved carries placement + the exact subtree for re-add.
+    t.assert_equals(saved.group, 'default')
+    t.assert_equals(saved.replicaset, 'rs-1')
+    t.assert_equals(saved.instance.iproto.advertise.peer.uri, 'tt-3:3301')
+end
+
+g6.test_remove_absent_is_noop = function()
+    local raw = sample()
+    local out, status, saved = yaml_patch.remove_instance(raw, 'tt-404')
+    t.assert_equals(status, 'absent')
+    t.assert_equals(out, raw) -- byte-identical
+    t.assert_equals(saved, nil)
+end
+
+g6.test_remove_last_instance_yields_empty_map = function()
+    -- Removing every instance must leave `instances: {}`, a real empty
+    -- map (not a bare key that decodes to null).
+    local raw = sample()
+    local out1 = yaml_patch.remove_instance(raw, 'tt-1')
+    local out2 = yaml_patch.remove_instance(out1, 'tt-3')
+    local insts = yaml.decode(out2).groups.default.replicasets['rs-1'].instances
+    t.assert_equals(insts, {})
+end
+
+g6.test_remove_rejects_bad_input = function()
+    t.assert_equals(select(1, yaml_patch.remove_instance(nil, 'tt-1')), nil)
+    t.assert_equals(select(1, yaml_patch.remove_instance(sample(), '')), nil)
+end
+
+local g7 = t.group('config_store.yaml_patch.add_instance')
+
+g7.test_remove_then_add_roundtrip_restores_instance = function()
+    local raw = sample()
+    local removed, _, saved = yaml_patch.remove_instance(raw, 'tt-3')
+    local out, status = yaml_patch.add_instance(
+        removed, 'tt-3', saved.instance, saved.group, saved.replicaset)
+    t.assert_equals(status, 'added')
+    -- tt-3 is back with its uri; comments + sibling preserved.
+    t.assert_equals(yaml.decode(out).groups.default.replicasets['rs-1']
+        .instances['tt-3'].iproto.advertise.peer.uri, 'tt-3:3301')
+    t.assert_str_contains(out, 'tt-1:        # the bootstrap leader')
+    t.assert_str_contains(out, '# Topology: one replicaset, three peers.')
+end
+
+g7.test_add_auto_detects_single_replicaset = function()
+    local raw = sample()
+    local removed, _, saved = yaml_patch.remove_instance(raw, 'tt-3')
+    -- No group/replicaset args: single-replicaset cluster auto-places it.
+    local out, status = yaml_patch.add_instance(removed, 'tt-3', saved.instance)
+    t.assert_equals(status, 'added')
+    t.assert_equals(yaml.decode(out).groups.default.replicasets['rs-1']
+        .instances['tt-3'].iproto.advertise.peer.uri, 'tt-3:3301')
+end
+
+g7.test_add_existing_is_noop = function()
+    local raw = sample()
+    local out, status = yaml_patch.add_instance(raw, 'tt-1', { x = 1 })
+    t.assert_equals(status, 'already')
+    t.assert_equals(out, raw) -- byte-identical, no clobber
+end
+
+g7.test_add_does_not_pin_uuid = function()
+    -- A re-added instance body must not carry database.instance_uuid, so
+    -- the wiped node rejoins with a fresh uuid (new replica id).
+    local raw = sample()
+    local removed, _, saved = yaml_patch.remove_instance(raw, 'tt-3')
+    local out = yaml_patch.add_instance(
+        removed, 'tt-3', saved.instance, saved.group, saved.replicaset)
+    local db = yaml.decode(out).groups.default.replicasets['rs-1']
+        .instances['tt-3'].database
+    t.assert_equals(db, nil)
+end
+
+g7.test_add_rejects_bad_input = function()
+    t.assert_equals(select(1, yaml_patch.add_instance(sample(), 'x', 'notable')), nil)
+    t.assert_equals(select(1, yaml_patch.add_instance(sample(), '', {})), nil)
+end

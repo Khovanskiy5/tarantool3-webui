@@ -38,6 +38,7 @@ g.test_empty_work_dir_returns_path_as_is = function()
     t.assert_equals(diag._resolve_one('rel/path', ''), 'rel/path')
 end
 
--- The rebootstrap identity pin (instances.<name>.database.instance_uuid)
--- now goes through the formatting-preserving webui.config_store.yaml_patch
--- helper; its behaviour is covered in config_store_yaml_patch_test.lua.
+-- The reuse-uuid identity pin was removed: the clean-rebootstrap
+-- orchestrator (webui.recovery.identity_reset) now resets identity via
+-- config expel/re-add (covered in config_store_yaml_patch_test.lua and
+-- the orchestrator tests). The target-side handler only wipes + exits.
