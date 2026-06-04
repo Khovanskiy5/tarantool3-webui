@@ -83,7 +83,7 @@ function copyCommand(cmd: string) {
         <li v-for="(c, i) in assessment.preconditions" :key="i">
           <i :class="c.ok ? 'pi pi-check-circle ok' : 'pi pi-times-circle bad'" />
           <span>{{ c.label }}</span>
-          <small v-if="c.detail" class="detail"> — {{ c.detail }}</small>
+          <span v-if="c.detail" class="detail"> — {{ c.detail }}</span>
         </li>
       </ul>
     </section>
@@ -119,7 +119,9 @@ function copyCommand(cmd: string) {
             @click="copyCommand(fc.command)"
           />
         </div>
-        <small v-if="fc.note">{{ fc.note }}</small>
+        <Message v-if="fc.note" size="small" severity="secondary" variant="simple">{{
+          fc.note
+        }}</Message>
       </div>
     </section>
 

@@ -809,35 +809,36 @@ function quarantineWal(row: WalRow) {
           No replication topology issues detected. Every declared peer is reachable and its URI
           matches what the cluster observes. Nothing to fix.
         </Message>
-        <table v-else class="r-table">
-          <thead>
-            <tr>
-              <th>Peer</th>
-              <th>Reachable</th>
-              <th>Declared URI</th>
-              <th>URI to apply</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="p in tPeers" :key="p.alias">
-              <td>
-                <code>{{ p.alias }}</code>
-              </td>
-              <td>{{ p.reachable ? '✓' : '✗' }}</td>
-              <td>
-                <code>{{ p.declared_uri ?? '—' }}</code>
-              </td>
-              <td>
-                <Fluid v-if="tFixes[p.alias] !== undefined">
-                  <InputText v-model="tFixes[p.alias]" />
-                </Fluid>
-                <Message v-else size="small" severity="secondary" variant="simple">
-                  no change
-                </Message>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <DataTable v-else :value="tPeers" size="small" striped-rows data-key="alias">
+          <Column header="Peer">
+            <template #body="{ data }">
+              <code>{{ data.alias }}</code>
+            </template>
+          </Column>
+          <Column header="Reachable">
+            <template #body="{ data }">
+              <Tag
+                :severity="data.reachable ? 'success' : 'danger'"
+                :value="data.reachable ? 'yes' : 'no'"
+              />
+            </template>
+          </Column>
+          <Column header="Declared URI">
+            <template #body="{ data }">
+              <code>{{ data.declared_uri ?? '—' }}</code>
+            </template>
+          </Column>
+          <Column header="URI to apply">
+            <template #body="{ data }">
+              <Fluid v-if="tFixes[data.alias] !== undefined">
+                <InputText v-model="tFixes[data.alias]" />
+              </Fluid>
+              <Message v-else size="small" severity="secondary" variant="simple">
+                no change
+              </Message>
+            </template>
+          </Column>
+        </DataTable>
         <Message
           v-if="tDiagnosed && tPeers.some((p) => !p.reachable)"
           severity="warn"
@@ -871,37 +872,36 @@ function quarantineWal(row: WalRow) {
           <code>force_recovery = true</code> in cluster YAML to let the bootstrap continue past the
           gap.
         </Message>
-        <table class="r-table">
-          <thead>
-            <tr>
-              <th>File</th>
-              <th>Status</th>
-              <th>Detail</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in wFiles" :key="row.file">
-              <td>
-                <code>{{ row.file }}</code>
-              </td>
-              <td>
-                <Tag :severity="row.ok ? 'success' : 'danger'" :value="row.ok ? 'OK' : 'BAD'" />
-              </td>
-              <td>{{ row.msg }}</td>
-              <td>
-                <Button
-                  v-if="!row.ok"
-                  icon="pi pi-trash"
-                  size="small"
-                  severity="danger"
-                  text
-                  @click="quarantineWal(row)"
-                />
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <Message v-if="wBusy" severity="info" :closable="false">Probing WAL files…</Message>
+        <Message v-else-if="wFiles.length === 0" severity="info" :closable="false">
+          No .xlog files reported for this instance.
+        </Message>
+        <DataTable v-else :value="wFiles" size="small" striped-rows data-key="file">
+          <Column header="File">
+            <template #body="{ data }">
+              <code>{{ data.file }}</code>
+            </template>
+          </Column>
+          <Column header="Status">
+            <template #body="{ data }">
+              <Tag :severity="data.ok ? 'success' : 'danger'" :value="data.ok ? 'OK' : 'BAD'" />
+            </template>
+          </Column>
+          <Column field="msg" header="Detail" />
+          <Column header="">
+            <template #body="{ data }">
+              <Button
+                v-if="!data.ok"
+                icon="pi pi-trash"
+                size="small"
+                severity="danger"
+                text
+                aria-label="Quarantine"
+                @click="quarantineWal(data)"
+              />
+            </template>
+          </Column>
+        </DataTable>
       </div>
       <template #footer>
         <Button label="Close" severity="secondary" text @click="wOpen = false" />
@@ -1038,41 +1038,5 @@ function quarantineWal(row: WalRow) {
 .r-field label {
   font-size: 0.875rem;
   font-weight: 600;
-}
-
-.r-ack {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.875rem;
-}
-.r-ack label {
-  cursor: pointer;
-  user-select: none;
-}
-
-.r-actions {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.r-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.875rem;
-}
-.r-table th,
-.r-table td {
-  text-align: left;
-  padding: 0.625rem 0.75rem;
-  border-bottom: 1px solid var(--p-content-border-color, var(--webui-border));
-  vertical-align: middle;
-}
-.r-table th {
-  font-weight: 600;
-  font-size: 0.75rem;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  color: var(--p-text-muted-color, var(--webui-text-muted));
 }
 </style>
