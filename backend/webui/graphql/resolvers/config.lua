@@ -342,7 +342,11 @@ end
 
 function M.mutation_commit(root, args)
     require_role(root, 'commitConfig')
-    local entry = twophase.get_prepared(args.prepared_id)
+    -- wait_prepared (not get_prepared): the commit click can land on a
+    -- different instance than the prepare, so the precheck must tolerate
+    -- replication lag of the sync `_webui_prepared` space — otherwise the
+    -- resolver raises PREPARED_NOT_FOUND before twophase.commit even runs.
+    local entry = twophase.wait_prepared(args.prepared_id)
     if entry == nil then
         error('PREPARED_NOT_FOUND: ' .. tostring(args.prepared_id))
     end

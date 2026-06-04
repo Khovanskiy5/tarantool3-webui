@@ -227,14 +227,16 @@ roles_cfg:
 
 ### `PREPARED_NOT_FOUND` на commit после prepare
 
-**Симптомы.** UI делает propose, получает prepared_id, потом commit с этим ID возвращает `PREPARED_NOT_FOUND`.
+**Симптомы.** UI делает propose, получает prepared_id, потом commit с этим ID возвращает `PREPARED_NOT_FOUND`. Тот же класс ошибки наблюдался на **rollback** и **force-apply** из таймлайна истории, а также на кнопке **«Discard prepared»**.
 
 **Возможные причины:**
 
 1. **TTL истёк.** Default `PREPARED_TTL_SEC = 300` (5 минут). Garbage collector удалил prepared row.
-2. **Очень старая версия backend'а** (до миграции №4), где prepared был in-memory per-instance. Сейчас `_webui_prepared` — реплицированный sync-space; round-robin balancer не воспроизводит этот баг.
+2. **Гонка с репликацией prepared-спейса.** `_webui_prepared` — реплицированный sync-space. Когда запрос попадает на read-only фолловер, `prepare()` форвардит запись лидеру и возвращается, как только sync-кворум подтвердил; данный фолловер может ещё не входить в этот кворум. Back-to-back `prepare → commit` (rollback / force-apply целиком на сервере, а также интерактивный commit, который round-robin balancer отправил на другой инстанс) тогда читал prepared row **локально** раньше, чем реплика догоняла → ложный `PREPARED_NOT_FOUND`.
 
-**Действие.** Повторить propose → commit. Если воспроизводится — собрать `diagnostics bundle`.
+**Исправление.** `commit()`, `abort()` и precheck-резолвера теперь читают prepared row через `twophase.wait_prepared`, который на read-only-инстансе ждёт репликации до `PREPARED_REPLICATION_WAIT_SEC` (default 3 c) и только потом отдаёт `PREPARED_NOT_FOUND`. На writable-лидере локальный miss считается реальным отсутствием и возвращается мгновенно (бюджет не тратится). Наблюдаемый лаг — единицы миллисекунд.
+
+**Действие.** На актуальной версии гонка закрыта; реальный `PREPARED_NOT_FOUND` означает либо истёкший TTL (повторить propose → commit), либо отсутствие лидера у sync-кворума. Если воспроизводится — собрать `diagnostics bundle`.
 
 ## HTTP / Auth
 

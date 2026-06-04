@@ -322,19 +322,13 @@ function M.apply(payload, root)
 
     -- The prepared bundle lives in a replicated sync space. When apply()
     -- runs on a read-only follower, prepare() forwarded the write to the
-    -- leader; commit() reads it back LOCALLY, so we must wait for it to
-    -- replicate here first — otherwise the back-to-back prepare+commit
-    -- races ahead of replication and hits PREPARED_NOT_FOUND. (The
-    -- interactive editor never sees this: a human pauses between the two
-    -- calls.) Observed replication lag is a few ms; the budget is ample.
+    -- leader; the back-to-back commit() below reads it back LOCALLY and
+    -- can race ahead of replication, hitting PREPARED_NOT_FOUND. Wait for
+    -- the row to replicate via the shared helper (no-op on the leader and
+    -- when the row is already present). Observed lag is a few ms.
     local ok_tp, twophase = pcall(require, 'webui.config_store.twophase')
-    if ok_tp and type(twophase.get_prepared) == 'function' then
-        local fiber = require('fiber')
-        local deadline = fiber.time() + 3
-        while twophase.get_prepared(prep.prepared_id) == nil
-            and fiber.time() < deadline do
-            fiber.sleep(0.02)
-        end
+    if ok_tp and type(twophase.wait_prepared) == 'function' then
+        twophase.wait_prepared(prep.prepared_id)
     end
 
     -- commit: write to etcd, append the audit row, fan out the reload.

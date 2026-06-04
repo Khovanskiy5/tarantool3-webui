@@ -30,6 +30,16 @@ local M = {}
 
 M.PREPARED_TTL_SEC = 300 -- 5 min, same as the plan
 
+-- How long commit()/abort() wait for a freshly-prepared row to
+-- replicate from the leader before declaring PREPARED_NOT_FOUND.
+-- prepare() on a read-only follower forwards the write to the leader
+-- and returns once the sync-quorum acks; THIS follower may not be in
+-- that quorum subset yet, so a back-to-back commit on the same
+-- follower can race ahead of replication. Observed lag is a few ms;
+-- the budget is deliberately generous. Writable instances never wait
+-- (a local miss there is a genuine absence, not lag).
+M.PREPARED_REPLICATION_WAIT_SEC = 3
+
 local function new_prepared_id()
     return string.format('prep-%d-%d', math.floor(fiber.time() * 1000),
         math.random(1, 1000000))
@@ -97,7 +107,12 @@ local function forward_to_leader(fn_name, args)
     return res
 end
 
-local function is_read_only()
+-- Exposed on M (not a local) so unit tests can stub the read-only
+-- decision without a real replica: a follower cannot mutate the sync
+-- space locally, so replication-lag scenarios are only reproducible by
+-- overriding M.is_read_only while keeping the box writable. All internal
+-- call sites go through M.is_read_only() for the same reason.
+function M.is_read_only()
     if rawget(_G, 'box') == nil or box.info == nil then return false end
     return box.info.ro == true
 end
@@ -107,7 +122,7 @@ local function put_prepared(entry)
     if space == nil then
         return nil, 'prepared storage is not bootstrapped'
     end
-    if is_read_only() then
+    if M.is_read_only() then
         local res, err = forward_to_leader('webui_prepared_put_remote',
             { entry })
         if res == nil then return nil, err end
@@ -129,11 +144,51 @@ end
 local function delete_prepared(id)
     local space = storage.prepared()
     if space == nil then return end
-    if is_read_only() then
+    if M.is_read_only() then
         forward_to_leader('webui_prepared_delete_remote', { id })
         return
     end
     pcall(function() space:delete({ id }) end)
+end
+
+-- Look up a prepared row, tolerating replication lag. On a read-only
+-- follower a back-to-back prepare→commit can outrun replication of the
+-- sync `_webui_prepared` space (prepare forwarded the write to the
+-- leader; this follower may not have applied it yet). When that is the
+-- case we poll locally until the row shows up or the budget runs out.
+-- On a writable instance (the leader, which owns the row) a local miss
+-- is a genuine absence, so we never wait.
+--
+-- Does NOT call gc() — commit() already runs gc() at its top, and the
+-- resolver precheck only needs presence, not expiry cleanup.
+function M.wait_prepared(id, timeout)
+    local space = storage.prepared()
+    if space == nil then return nil end
+
+    local entry = tuple_to_entry(space:get({ id }))
+    if entry ~= nil then return entry end
+
+    -- Writable instance: a miss is real, not lag — fail fast.
+    if not M.is_read_only() then return nil end
+
+    local budget = timeout or M.PREPARED_REPLICATION_WAIT_SEC
+    local started = fiber.time()
+    local deadline = started + budget
+    logger.debug('wait_prepared: local miss, waiting for replication',
+        { id = id, ro = true, budget_sec = budget })
+    while fiber.time() < deadline do
+        fiber.sleep(0.02)
+        entry = tuple_to_entry(space:get({ id }))
+        if entry ~= nil then
+            local waited_ms = math.floor((fiber.time() - started) * 1000)
+            logger.debug('wait_prepared: replicated',
+                { id = id, waited_ms = waited_ms })
+            return entry
+        end
+    end
+    logger.warn('wait_prepared: budget exhausted',
+        { id = id, budget_sec = budget })
+    return nil
 end
 
 -- ─────────────────────────────────────────────────────────────────────
@@ -472,11 +527,13 @@ end
 function M.commit(prepared_id, opts)
     gc()
     opts = opts or {}
-    local space = storage.prepared()
-    if space == nil then return nil, 'PREPARED_NOT_FOUND' end
-    local tuple = space:get({ prepared_id })
-    local entry = tuple_to_entry(tuple)
+    -- Tolerate replication lag: a rollback / force-apply (and even an
+    -- interactive commit landing on a different instance than prepare)
+    -- can reach this follower before the prepared row has replicated.
+    local entry = M.wait_prepared(prepared_id, opts.lookup_timeout)
     if entry == nil then
+        logger.warn('commit: prepared not found after replication wait',
+            { id = prepared_id })
         return nil, 'PREPARED_NOT_FOUND'
     end
     if opts.etcd == nil then
@@ -500,8 +557,10 @@ function M.commit(prepared_id, opts)
 end
 
 function M.abort(prepared_id)
-    local space = storage.prepared()
-    if space == nil or space:get({ prepared_id }) == nil then
+    -- Same replication-lag tolerance as commit(): "Discard prepared"
+    -- (and the back-to-back abort() calls in cluster_ops) can land on a
+    -- follower that has not yet applied the prepared row.
+    if M.wait_prepared(prepared_id) == nil then
         return nil, 'PREPARED_NOT_FOUND'
     end
     delete_prepared(prepared_id)
