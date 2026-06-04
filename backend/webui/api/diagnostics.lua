@@ -26,6 +26,7 @@ local fiber = require('fiber')
 
 local state       = require('webui.cluster.state')
 local storage     = require('webui.storage.spaces')
+local yaml_patch  = require('webui.config_store.yaml_patch')
 local issues      = require('webui.cluster.issues')
 local suggestions = require('webui.cluster.suggestions')
 local version     = require('webui.version')
@@ -79,14 +80,6 @@ local function resolve_work_paths()
     return dirs
 end
 
--- Pin this instance's uuid in the cluster config so the wiped instance
--- reclaims the SAME identity on rejoin. In a named Tarantool 3.x cluster
--- the instance NAME is bound to its uuid in `_cluster`; a rejoin with a
--- fresh uuid orphans the name and the instance crash-loops on boot with
--- "Instance name <x> is not set in snapshot and UUID is missing in the
--- config" (src/box/lua/config/configdata.lua). Pinning the uuid keeps the
--- named `_cluster` row valid across the wipe and satisfies that check.
--- Returns (true, nil) on success/no-op, (nil, err) otherwise. (#3740)
 -- Read the live cluster YAML from etcd. → (raw, nil) | (nil, err).
 local function read_cluster_yaml()
     local ok_cl, client_mod = pcall(require, 'webui.config_store.client')
@@ -96,24 +89,6 @@ local function read_cluster_yaml()
     local kv = select(1, client:read_cluster_config())
     if kv == nil or kv.value == nil then return nil, 'no current cluster config' end
     return kv.value
-end
-
--- Set instances.<name>.database.instance_uuid in the parsed config tree.
--- → 'set' | 'already' | 'missing'.
-local function set_instance_uuid(parsed, name, uuid)
-    for _, group in pairs(parsed.groups or {}) do
-        for _, rs in pairs(group.replicasets or {}) do
-            local inst = rs.instances and rs.instances[name]
-            if type(inst) == 'table' then
-                inst.database = (type(inst.database) == 'table')
-                    and inst.database or {}
-                if inst.database.instance_uuid == uuid then return 'already' end
-                inst.database.instance_uuid = uuid
-                return 'set'
-            end
-        end
-    end
-    return 'missing'
 end
 
 -- Write a full cluster YAML straight to etcd. We deliberately bypass the
@@ -160,10 +135,20 @@ local function pin_self_instance_uuid()
     if not ok_p or type(parsed) ~= 'table' then
         return nil, 'cluster config YAML invalid'
     end
-    if set_instance_uuid(parsed, self_name, my_uuid) == 'missing' then
+    -- Patch the RAW text, not the decoded tree: a yaml.encode round-trip
+    -- here would strip every operator comment and the original key order
+    -- from the config that the editor renders verbatim. We only need the
+    -- parsed tree to discover this instance's group / replicaset names.
+    local inst_path = yaml_patch.find_instance_path(parsed, self_name)
+    if inst_path == nil then
         return nil, 'instance ' .. self_name .. ' not found in config'
     end
-    local ok_w, err = commit_cluster_yaml(yaml.encode(parsed))
+    table.insert(inst_path, 'database')
+    table.insert(inst_path, 'instance_uuid')
+    local new_yaml, status = yaml_patch.set_field(raw, inst_path, my_uuid)
+    if new_yaml == nil then return nil, status end
+    if status == 'unchanged' then return my_uuid end
+    local ok_w, err = commit_cluster_yaml(new_yaml)
     if not ok_w then return nil, err end
     return my_uuid
 end
@@ -396,7 +381,5 @@ end
 -- (relative wal_dir silently misses the real data) was hard to
 -- catch without a direct seam.
 M._resolve_one = _resolve_one
--- Pure config-tree edit behind the rebootstrap identity pin; unit-tested.
-M._set_instance_uuid = set_instance_uuid
 
 return M

@@ -23,22 +23,12 @@
 
 local yaml = require('yaml')
 
-local assess   = require('webui.recovery.assess')
-local log_util = require('webui.log_util')
-local logger   = log_util.with_tag('recovery.topology')
+local assess     = require('webui.recovery.assess')
+local yaml_patch = require('webui.config_store.yaml_patch')
+local log_util   = require('webui.log_util')
+local logger     = log_util.with_tag('recovery.topology')
 
 local M = {}
-
--- Replace every verbatim occurrence of `old` with `new` in `s`,
--- treating both as plain strings (no Lua-pattern magic). Returns the
--- patched string and the replacement count. Used to rewrite a single
--- URI in the raw cluster YAML without parsing it, so comments,
--- ordering and formatting survive untouched.
-local function literal_replace(s, old, new)
-    local pat = old:gsub('%W', '%%%0')      -- escape every non-word char
-    local rep = new:gsub('%%', '%%%%')      -- escape % in the replacement
-    return s:gsub(pat, rep)
-end
 
 -- assess(payload, root) → Assessment (read-only). Fixing replication URIs
 -- never touches tuple data, so it is `caution` (a config reload / restart
@@ -256,7 +246,7 @@ function M.apply(payload, root)
             table.insert(skipped,
                 { alias = alias, reason = 'no declared URI to replace' })
         else
-            local patched, n = literal_replace(new_yaml, old_uri, new_uri)
+            local patched, n = yaml_patch.replace_value(new_yaml, old_uri, new_uri)
             if n == 0 then
                 table.insert(skipped, { alias = alias,
                     reason = 'declared URI not found in config text' })

@@ -21,6 +21,7 @@ local json = require('json')
 local topology_edit = require('webui.cluster_ops.topology_edit')
 local twophase      = require('webui.config_store.twophase')
 local config_schema = require('webui.config_store.schema')
+local yaml_patch    = require('webui.config_store.yaml_patch')
 local etcd_client   = require('webui.config_store.client')
 local audit         = require('webui.audit.log')
 local commands      = require('webui.failover.commands')
@@ -282,7 +283,10 @@ local function edit_topology_core(root, edits, apply, audit_action)
         error('NO_CHANGES: the supplied edits leave the config unchanged')
     end
 
-    local new_yaml = yaml.encode(new_cfg)
+    -- Patch the raw text against the old / new trees so operator comments
+    -- and key order survive the structural edit; falls back to a plain
+    -- re-encode if a clean merge is not possible (always valid YAML).
+    local new_yaml = yaml_patch.render(current_yaml, current_parsed, new_cfg)
 
     -- Validate before letting it anywhere near etcd. schema.validate
     -- runs both `config:jsonschema()` and our cross-validators
@@ -1366,7 +1370,9 @@ function M.mutation_set_failover_mode(root, args)
 
     apply_replication_params(new_parsed, params)
 
-    local new_yaml = yaml.encode(new_parsed)
+    -- Preserve comments / key order across the failover-mode rewrite;
+    -- falls back to a re-encode when a clean text merge is impossible.
+    local new_yaml = yaml_patch.render(current_yaml, parsed, new_parsed)
 
     -- Schema cross-validation: if the new mode/params combination
     -- breaks election/leader exclusivity etc., fail before commit.
@@ -1513,16 +1519,19 @@ local function compute_new_election_mode(args)
     return nil
 end
 
--- Deep-copy the parsed YAML and set the instance's
--- `replication.election_mode`, returning the encoded YAML. Used for the
--- raft per-instance electability toggle (topology_edit does not model
--- election_mode, so we patch the instance spec directly).
-local function patch_instance_election_mode(parsed, gname, rsname, alias, em)
-    local new_parsed = topology_edit._deep_copy(parsed)
-    local inst = new_parsed.groups[gname].replicasets[rsname].instances[alias]
-    inst.replication = inst.replication or {}
-    inst.replication.election_mode = em
-    return yaml.encode(new_parsed)
+-- Set the instance's `replication.election_mode` in the RAW cluster
+-- YAML, returning the patched text. Patches the raw text rather than
+-- re-encoding a decoded tree so operator comments, key order and
+-- indentation survive (topology_edit does not model election_mode, so
+-- we patch this single scalar directly).
+local function patch_instance_election_mode(raw, gname, rsname, alias, em)
+    local path = { 'groups', gname, 'replicasets', rsname,
+                   'instances', alias, 'replication', 'election_mode' }
+    local new_yaml, status = yaml_patch.set_field(raw, path, em)
+    if new_yaml == nil then
+        error('PATCH_FAILED: ' .. tostring(status))
+    end
+    return new_yaml
 end
 
 -- supervised / off-with-agent: toggle the etcd-backed disabled set so
@@ -1643,7 +1652,7 @@ local function apply_election_mode_change(root, args, parsed,
             message      = 'election_mode already set to ' .. new_election_mode,
         }
     end
-    local new_yaml = patch_instance_election_mode(parsed, gname, rsname,
+    local new_yaml = patch_instance_election_mode(current_yaml, gname, rsname,
         args.alias, new_election_mode)
     local prepared, prepare_errs = twophase.prepare({
         yaml         = new_yaml,

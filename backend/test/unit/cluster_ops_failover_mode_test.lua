@@ -179,17 +179,25 @@ end
 -- ── patch_instance_election_mode ─────────────────────────────────────
 
 g.test_patch_election_mode_sets_field = function()
-    local parsed = {
-        groups = { g1 = { replicasets = {
-            rs1 = { instances = { i1 = {} } },
-        } } },
-    }
+    -- The helper now patches the RAW YAML text; feed it the source and
+    -- assert the decoded result carries the new election_mode.
+    local raw = table.concat({
+        'groups:',
+        '  g1:',
+        '    replicasets:',
+        '      rs1:',
+        '        instances:',
+        '          i1:',
+        '            iproto:',
+        '              advertise:',
+        '                peer:',
+        '                  uri: i1:3301',
+        '',
+    }, '\n')
     local new_yaml = cluster_ops._patch_instance_election_mode(
-        parsed, 'g1', 'rs1', 'i1', 'voter')
+        raw, 'g1', 'rs1', 'i1', 'voter')
     local decoded = yaml.decode(new_yaml)
     t.assert_equals(
         decoded.groups.g1.replicasets.rs1.instances.i1.replication.election_mode,
         'voter')
-    -- Original parsed is untouched (deep-copied inside the helper).
-    t.assert_equals(parsed.groups.g1.replicasets.rs1.instances.i1.replication, nil)
 end
