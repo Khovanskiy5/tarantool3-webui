@@ -50,6 +50,30 @@ function M.should_fence(state)
     return nil
 end
 
+-- When self-fencing, should we also RELEASE the synchro queue
+-- (box.ctl.demote) rather than just flip read_only? (Task FO-22b.)
+--
+-- `ctx` is the fence context computed by the watcher:
+--   * 'lost_lease' — etcd is reachable and our appointment/CAS was taken
+--     over: a DIFFERENT instance is becoming leader. We must demote so our
+--     ownership is cleared and the new leader's promote does not collide.
+--   * 'dcs_down'   — etcd is unreachable. With no coordinator nobody can be
+--     appointed, so the WHOLE cluster fences and the SAME node resumes on
+--     recovery. Demoting here only churns the limbo: box.ctl.demote clears
+--     our confirmed_lsn, the recovery re-promote then ships lsn 0, and a
+--     lagging follower rejects it as ER_SPLIT_BRAIN. read_only=true alone
+--     fences ALL writes while keeping ownership, so recovery is a clean
+--     read_only=false with no re-promote. (A real new leader elected
+--     elsewhere still wins on heal: its higher-term PROMOTE, carrying the
+--     correct lsn, overrides our frozen term.)
+--
+-- Default to releasing (demote) for any unknown context — the safe,
+-- split-brain-avoiding choice when we cannot prove the cluster fenced as a
+-- whole. -> true to demote, false to keep ownership (read_only only).
+function M.should_release_queue(ctx)
+    return ctx ~= 'dcs_down'
+end
+
 -- Is an appointment stale (from an older coordinator) and must be
 -- ignored? (Task FO-4 control-plane fencing token.)
 --

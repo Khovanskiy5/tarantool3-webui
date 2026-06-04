@@ -432,15 +432,19 @@ local function fencing_loop()
                     since_confirm = fiber.clock()
                         - (STATE.last_leader_confirm_mono or 0),
                 })
-                -- Run demote + read_only=true as ONE guarded unit (S-3),
-                -- atomic w.r.t. promote in the other fiber. demote is
-                -- best-effort INSIDE the unit (pcall) so its failure does
-                -- not skip the critical read_only=true: box.ctl.demote()
-                -- freezes the synchro limbo (blocks sync writes) but in
-                -- supervised mode does NOT clear read_only — verified
-                -- live that async writes still landed without this flip.
+                -- Run (optional demote) + read_only=true as ONE guarded
+                -- unit (S-3), atomic w.r.t. promote in the other fiber.
+                -- read_only=true is the real fence — it blocks BOTH sync
+                -- and async writes. We additionally box.ctl.demote (release
+                -- the queue) ONLY when another instance is taking over
+                -- (lost_lease). On dcs_down the whole cluster fenced and the
+                -- SAME node resumes on recovery, so demoting only churns the
+                -- limbo (clears confirmed_lsn → the recovery re-promote
+                -- ships lsn 0 → a lagging follower rejects it as
+                -- ER_SPLIT_BRAIN). See fencing.should_release_queue.
+                local release_queue = fencing.should_release_queue(ctx)
                 local ok, err = guarded_ctl(function()
-                    pcall(box.ctl.demote)
+                    if release_queue then pcall(box.ctl.demote) end
                     box.cfg({ read_only = true })
                 end)
                 if ok then
@@ -449,7 +453,8 @@ local function fencing_loop()
                     -- Reset the clock so we don't re-fire every probe
                     -- tick while waiting for the next appointment.
                     STATE.last_leader_confirm_mono = fiber.clock()
-                    logger.info('self-fenced: now read-only', { context = ctx })
+                    logger.info('self-fenced: now read-only',
+                        { context = ctx, released_queue = release_queue })
                 else
                     -- err == 'ctl busy' just means a transition is in
                     -- flight; we retry on the next probe tick.

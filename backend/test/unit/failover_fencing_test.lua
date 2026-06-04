@@ -55,6 +55,26 @@ g.test_bad_inputs_never_fence = function()
     }), nil, 'non-positive deadline → never fence')
 end
 
+-- ── should_release_queue (FO-22b: avoid re-promote churn) ──────────
+
+g.test_dcs_down_keeps_ownership = function()
+    -- etcd unreachable → whole cluster fences, SAME node resumes; demoting
+    -- would churn the limbo and split-brain a lagging follower on recovery.
+    t.assert_equals(fencing.should_release_queue('dcs_down'), false)
+end
+
+g.test_lost_lease_releases_queue = function()
+    -- another instance is taking over → release ownership so its promote
+    -- does not collide with ours.
+    t.assert_equals(fencing.should_release_queue('lost_lease'), true)
+end
+
+g.test_unknown_context_releases_by_default = function()
+    -- Can't prove the cluster fenced as a whole → take the safe release.
+    t.assert_equals(fencing.should_release_queue(nil), true)
+    t.assert_equals(fencing.should_release_queue('whatever'), true)
+end
+
 -- ── appointment_is_stale (FO-4 fencing token) ──────────────────────
 
 g.test_lower_term_is_stale = function()

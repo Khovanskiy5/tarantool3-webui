@@ -31,8 +31,9 @@ docker exec webui-etcd-1 etcdctl get --prefix /tarantool/webui/state/by-name/ --
 1. Это деградация, **не порча** — данные целы, split-brain исключён.
 2. Подними недостающие члены etcd: `docker start webui-etcd-2 webui-etcd-3` (или восстанови узлы на их доменах отказа).
 3. Проверь: `docker exec webui-etcd-1 etcdctl endpoint health --endpoints=http://etcd:2379,http://etcd-2:2379,http://etcd-3:2379`.
-4. Как только кворим вернулся — координатор переизбирается, лидер re-promote'ится, issue гаснет. Запись конфига снова разрешена.
+4. Как только кворум вернулся — лидер сам выходит из RO и issue гаснет. На `dcs_down` self-fence **сохраняет владельца synchro-очереди** (это `read_only=true` без `box.ctl.demote`), поэтому возврат — чистый `read_only=false` **без re-promote и без term-чехарды**: тот же узел резюмится, ни один follower не ловит split-brain (FO-22b). Запись конфига снова разрешена.
 5. **Не** пытайся форсить запись в minority-партицию — etcd сам отвергнет (нет кворума).
+6. **Если всё же видишь** `Split-Brain discovered` на каком-то follower'е после возврата кворума (например на сборке без FO-22b, где self-fence демоутил) — это limbo-рассинхрон, не порча данных; вылечи застрявший узел rebootstrap'ом от лидера (см. [rebootstrap.md](rebootstrap.md) / [orphan-resolve.md](orphan-resolve.md)).
 
 ## <a id="failover-suppressed"></a> `failover-suppressed` (warning)
 
