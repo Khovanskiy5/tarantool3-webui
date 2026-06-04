@@ -134,6 +134,18 @@ local function commit_cluster_yaml(new_yaml)
     return true
 end
 
+-- Pin this instance's CURRENT uuid in config before a rebootstrap, so the
+-- wiped instance reclaims the SAME identity on rejoin. → (uuid, nil) |
+-- (nil, err).
+--
+-- The named `_cluster` row (uuid -> name) is KEPT, so on restart:
+--   * the row already carries the instance name, so box.cc's identity
+--     check passes (no "Instance name mismatch" / "not set in snapshot");
+--   * reusing the uuid avoids re-registering a new replica id.
+-- Reusing the uuid would normally risk "invalid xlog order" on peers (the
+-- uuid's LSN rewinds with the wipe) — but the rebootstrap QUIESCES the
+-- instance before wiping, so no fresh xlog is written under the old uuid
+-- and the peers' relay re-syncs cleanly. (#3740)
 local function pin_self_instance_uuid()
     local self_name = box.info and box.info.name
     local my_uuid   = box.info and box.info.uuid
@@ -148,12 +160,12 @@ local function pin_self_instance_uuid()
     if not ok_p or type(parsed) ~= 'table' then
         return nil, 'cluster config YAML invalid'
     end
-    local outcome = set_instance_uuid(parsed, self_name, my_uuid)
-    if outcome == 'missing' then
+    if set_instance_uuid(parsed, self_name, my_uuid) == 'missing' then
         return nil, 'instance ' .. self_name .. ' not found in config'
     end
-    if outcome == 'already' then return true end  -- idempotent
-    return commit_cluster_yaml(yaml.encode(parsed))
+    local ok_w, err = commit_cluster_yaml(yaml.encode(parsed))
+    if not ok_w then return nil, err end
+    return my_uuid
 end
 
 -- POST /api/diagnostics/rebootstrap.
@@ -207,18 +219,15 @@ function M.rebootstrap_handler(req)
         }
     end
 
-    -- Preserve our identity across the wipe: pin our instance_uuid in the
-    -- cluster config and KEEP the named `_cluster` row. In a named
-    -- Tarantool 3.x cluster the name is bound to the uuid; if we instead
-    -- dropped the `_cluster` row and rejoined with a fresh uuid, the new
-    -- snapshot would have no name and the instance would crash-loop on
-    -- "Instance name ... is not set in snapshot". Pinning keeps the uuid
-    -- stable so the rejoin re-syncs cleanly under the existing name.
-    --
-    -- This is a HARD precondition: if we can't pin it, abort instead of
-    -- wiping the instance into an unbootable state.
-    local pin_ok, pin_err = pin_self_instance_uuid()
-    if not pin_ok then
+    -- Preserve identity across the wipe: pin our CURRENT uuid in config and
+    -- KEEP the named `_cluster` row. On restart the instance reclaims the
+    -- same uuid; the row already carries its name, so box.cc's identity
+    -- check passes and there is no crash loop ("Instance name ... is not
+    -- set in snapshot" / "Instance name mismatch"). A fresh uuid would
+    -- instead orphan the name. HARD precondition: if we can't pin it, abort
+    -- rather than wipe the instance into an unbootable state. (#3740)
+    local pin_uuid, pin_err = pin_self_instance_uuid()
+    if pin_uuid == nil then
         logger.warn('rebootstrap aborted: could not pin instance_uuid', {
             instance = box.info.name, err = tostring(pin_err),
         })
@@ -234,6 +243,16 @@ function M.rebootstrap_handler(req)
             } }),
         }
     end
+
+    -- Quiesce BEFORE wiping. The process keeps running for a beat after the
+    -- wipe (so the HTTP reply flushes) before os.exit; if replication is
+    -- still live it keeps appending WAL under our uuid — both leaving a
+    -- stray xlog in the just-emptied dir and rewinding the uuid's LSN, so
+    -- peers reject the rejoin with "invalid xlog order". Detaching
+    -- replication + going read-only stops all WAL writes, so the dir stays
+    -- empty and the peers' relay re-syncs cleanly on restart.
+    pcall(function() box.cfg{ replication = {} } end)
+    pcall(function() box.cfg{ read_only = true } end)
 
     local dirs = resolve_work_paths()
     local deleted = {}
