@@ -80,13 +80,18 @@ local function resolve_work_paths()
     return dirs
 end
 
--- Detach replication + go read-only so the instance stops accepting and
--- replaying data while we prepare to wipe. Does NOT by itself stop every
--- background xlog write, which is why nuke_workdirs() runs LAST, right
--- before os.exit (see rebootstrap_handler).
+-- Detach replication + go read-only + stop checkpoints so the instance
+-- stops accepting and replaying data while we prepare to wipe. The WAL
+-- writer thread can still flush/rotate one more xlog even after this
+-- (read_only does not stop it), so the wipe also runs in a loop right
+-- before os.exit (see rebootstrap_handler) to catch any straggler.
+-- wal_mode='none' is attempted (best effort: non-dynamic on some builds,
+-- the pcall absorbs the failure and the nuke loop is the real safety net).
 local function quiesce_self()
     pcall(function() box.cfg{ replication = {} } end)
     pcall(function() box.cfg{ read_only = true } end)
+    pcall(function() box.cfg{ checkpoint_interval = 0 } end)
+    pcall(function() box.cfg{ wal_mode = 'none' } end)
 end
 
 -- Erase this instance's snap/xlog/vinyl work dirs. → (deleted, failed,
@@ -192,17 +197,26 @@ function M.rebootstrap_handler(req)
     })
 
     -- Flush the HTTP response first, THEN wipe, THEN exit immediately. The
-    -- wipe must be the last act (see nuke_workdirs): doing it before a
-    -- yield would let the WAL engine recreate an xlog that survives the
-    -- wipe and breaks the next boot.
+    -- wipe must be the last act: the WAL writer thread can recreate one
+    -- more xlog even after quiesce, and a leftover xlog (old uuid) makes the
+    -- next boot die on "invalid instance UUID" against the re-added config's
+    -- pinned uuid. Nuke in a loop until a pass deletes nothing — the last
+    -- pass confirms the dir is clean immediately before os.exit.
     fiber.create(function()
         fiber.self():name('webui_rebootstrap_exit', { truncate = true })
         fiber.sleep(0.5)
-        local deleted, failed, dirs = nuke_workdirs()
+        local passes, total_deleted, failed, dirs = 0, 0, {}, nil
+        for _ = 1, 8 do
+            local deleted
+            deleted, failed, dirs = nuke_workdirs()
+            passes = passes + 1
+            total_deleted = total_deleted + #deleted
+            if #deleted == 0 then break end   -- nothing left to remove
+        end
         logger.warn('rebootstrap: wiped, exiting process; Docker restart '
             .. 'policy will bring the container back', {
-            instance = self_name, deleted_count = #deleted,
-            failed_count = #failed, dirs = dirs,
+            instance = self_name, deleted_count = total_deleted,
+            passes = passes, failed_count = #failed, dirs = dirs,
         })
         os.exit(0)
     end)
