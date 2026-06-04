@@ -217,8 +217,12 @@ function M.exec_force_apply(payload, root)
     return exec_suggestion('force_apply', 'force_apply', payload or {}, root)
 end
 
--- rebootstrap one alias via the existing remote shim (same path the
--- orphan/lifecycle rebootstrap uses).
+-- rebootstrap one alias via the clean identity-reset orchestrator. The
+-- orchestrator forwards itself to the RW leader (so it never runs on the
+-- node being wiped) and resets the target's `_cluster` identity by
+-- expelling it from config + `_cluster`, wiping, and re-adding it so it
+-- rejoins as a brand-new replica id — which is what lets peers replicate
+-- FROM it again in a full mesh.
 function M.exec_rebootstrap(payload, root)
     payload = payload or {}
     local alias = payload.alias or payload.target_alias
@@ -226,25 +230,18 @@ function M.exec_rebootstrap(payload, root)
         return { ok = false, action = 'rebootstrap', results = {},
             error = 'alias is required' }
     end
-    local ok_r, rpc = pcall(require, 'webui.cluster.rpc')
-    if not ok_r then
+    local ok_ir, ir = pcall(require, 'webui.recovery.identity_reset')
+    if not ok_ir then
         return { ok = false, action = 'rebootstrap', results = {},
-            error = 'rpc module unavailable' }
+            error = 'identity_reset module unavailable' }
     end
-    local ok, per = pcall(rpc.map_call, 'webui_rebootstrap_remote', {},
-        { timeout = 5, peers = { alias } })
-    local r = ok and type(per) == 'table' and per[alias] or nil
-    local good = r ~= nil and r.ok == true
-        and not (type(r.value) == 'table' and r.value.err)
-    local msg
-    if not ok then msg = tostring(per)
-    elseif r == nil then msg = 'no response from ' .. alias
-    elseif type(r.value) == 'table' and r.value.err then
-        msg = tostring(r.value.message or r.value.err)
-    else msg = 'rebootstrap dispatched on ' .. alias end
-    local _ = root
-    return { ok = good, action = 'rebootstrap',
-        results = { { peer = alias, ok = good, msg = msg } } }
+    local ok, res = pcall(ir.run, { target_alias = alias }, root)
+    if not ok then
+        return { ok = false, action = 'rebootstrap',
+            results = { { peer = alias, ok = false, msg = tostring(res) } },
+            error = tostring(res) }
+    end
+    return res
 end
 
 -- restart_failover — bounce the supervised failover agent fiber on the

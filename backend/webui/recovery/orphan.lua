@@ -87,11 +87,18 @@ function M.assess(payload, _root, snap)
                 .. '(dangerous) is required.')
     elseif action == 'rebootstrap' then
         b.risk(assess.DANGEROUS).data_loss(true)
-            .effect('Wipes WAL/snap on ' .. tostring(target)
-                .. ' and re-joins it from a healthy peer.')
+            .effect('Expels ' .. tostring(target) .. ' from the cluster config '
+                .. '+ _cluster, wipes its WAL/snap, then re-adds it so it '
+                .. 're-joins as a BRAND-NEW replica id.')
+            .effect('Peers can replicate FROM ' .. tostring(target)
+                .. ' again (a reused id leaves them stuck on "invalid xlog '
+                .. 'order"); the cluster returns to an as-new state.')
+            .effect('Runs on the leader; during the window the replicaset is '
+                .. 'one node short (zero sync fault-tolerance until rejoin).')
             .warning('All local data on ' .. tostring(target) .. ' is erased.')
             .manual('Dump any local-only spaces on ' .. tostring(target)
-                .. ' before rebootstrap; keep instance_uuid stable.')
+                .. ' before rebootstrap. If etcd loses quorum mid-flight, '
+                .. 're-add the instance to the cluster config by hand.')
             .failure_cmd('inspect replication',
                 'box.info.replication; box.info.status')
             .confirm('ORPHAN ' .. tostring(target),
@@ -126,6 +133,34 @@ function M.resolve(payload, root)
             error = 'target_alias is required' }
     end
 
+    -- rebootstrap goes through the clean identity-reset orchestrator
+    -- (expel + re-add → fresh replica id), not a bare wipe fanout. Re-wrap
+    -- its result so the orphan path keeps its own action label.
+    if action == 'rebootstrap' then
+        local ok_ir, ir = pcall(require, 'webui.recovery.identity_reset')
+        local res
+        if ok_ir then
+            local call_ok, r = pcall(ir.run, { target_alias = target }, root)
+            res = call_ok and r
+                or { ok = false, results = { { peer = target, ok = false,
+                    msg = tostring(r) } } }
+        else
+            res = { ok = false, results = { { peer = target, ok = false,
+                msg = 'identity_reset module unavailable' } } }
+        end
+        pcall(audit.record, {
+            user = root and root.user, action = 'orphan.rebootstrap',
+            scope = 'cluster',
+            payload = { target = target, ok = res.ok },
+            request_id = root and root.request_id,
+        })
+        logger.info('orphan resolve', {
+            target = target, action = 'rebootstrap', ok = res.ok,
+        })
+        return { ok = res.ok, action = 'orphan_rebootstrap',
+            results = res.results or {} }
+    end
+
     local expr
     if action == 'force_reconnect' then
         expr = [[
@@ -133,12 +168,6 @@ function M.resolve(payload, root)
             pcall(function() box.cfg{ replication = {} } end)
             pcall(function() box.cfg{ replication = saved } end)
             return { ok = true }
-        ]]
-    elseif action == 'rebootstrap' then
-        expr = [[
-            return _G.webui_rebootstrap_remote
-                and _G.webui_rebootstrap_remote()
-                or { err = 'no rebootstrap rpc' }
         ]]
     elseif action == 'solo_promote' then
         expr = [[

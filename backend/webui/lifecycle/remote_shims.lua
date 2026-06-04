@@ -147,6 +147,19 @@ function M.install()
         }
     end)
 
+    -- Run the clean rebootstrap orchestrator ON THIS instance. The
+    -- recovery executor calls this on the RW leader so the whole
+    -- expel → wipe → re-add → verify flow runs on a node that survives
+    -- the target's wipe (the request itself may have landed anywhere,
+    -- including the orphan target, via HAProxy round-robin). Heavy
+    -- lifting lives in webui.recovery.identity_reset.
+    rawset(_G, 'webui_identity_reset_remote', function(args)
+        local ok_ir, ir = pcall(require, 'webui.recovery.identity_reset')
+        if not ok_ir then return { err = 'identity_reset module unavailable' } end
+        local target = type(args) == 'table' and args.target or nil
+        return ir.run({ target_alias = target })
+    end)
+
     -- Graceful restart (FO-12): drain the synchro queue (no-op on a
     -- follower) and exit so Docker's restart policy respins a fresh
     -- process that rejoins as a follower. Unlike rebootstrap this does

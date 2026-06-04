@@ -81,3 +81,31 @@ end
 g2.test_empty_entry_is_disconnected = function()
     t.assert_equals(ir._is_disconnected({}), true)
 end
+
+-- run() input guard runs before any box/leader access, so it is unit
+-- testable. The full phase machine (expel -> wipe -> re-add -> verify)
+-- is exercised by the integration recipe on the dev cluster (it is too
+-- tightly coupled to box / rpc to mock meaningfully), matching how the
+-- other recovery executors (orphan.lua, ops.lua) are tested.
+local g3 = t.group('recovery.identity_reset.run_guard')
+
+g3.test_run_rejects_missing_target = function()
+    local res = ir.run({})
+    t.assert_equals(res.ok, false)
+    t.assert_equals(res.action, 'rebootstrap')
+    t.assert_str_contains(res.error, 'target_alias')
+end
+
+g3.test_run_rejects_empty_target = function()
+    local res = ir.run({ target_alias = '' })
+    t.assert_equals(res.ok, false)
+    t.assert_str_contains(res.error, 'target_alias')
+end
+
+g3.test_module_exposes_orchestrator_surface = function()
+    t.assert_type(ir.run, 'function')
+    t.assert_type(ir._run_on_leader, 'function')
+    t.assert_type(ir.snapshot_master, 'function')
+    t.assert_type(ir.expel_cluster_row, 'function')
+    t.assert_type(ir.wait_peer_disconnected, 'function')
+end
