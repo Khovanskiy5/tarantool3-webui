@@ -440,6 +440,7 @@ interface TopologyPeer {
   observed_uri: string | null;
   reachable: boolean;
   suggestion: string | null;
+  needsFix: boolean;
 }
 const tOpen = ref(false);
 const tPeers = ref<TopologyPeer[]>([]);
@@ -465,21 +466,37 @@ async function openTopologyWizard() {
   const peers =
     (diag.data as { recoveryAction: ActionResult } | undefined)?.recoveryAction?.results ?? [];
   for (const p of peers) {
+    // `msg` is a JSON envelope: { declared, observed, reachable, suggestion }.
+    let detail: {
+      declared?: string | null;
+      observed?: string | null;
+      reachable?: boolean;
+      suggestion?: string | null;
+    } = {};
+    if (p.msg) {
+      try {
+        detail = JSON.parse(p.msg);
+      } catch {
+        detail = {};
+      }
+    }
     arr.push({
       alias: p.peer,
-      declared_uri: null,
-      observed_uri: null,
-      reachable: p.ok,
-      suggestion: p.ok ? null : p.msg,
+      declared_uri: detail.declared ?? null,
+      observed_uri: detail.observed ?? null,
+      reachable: detail.reachable === true,
+      suggestion: detail.suggestion ?? null,
+      // `ok` from the backend means "no action needed".
+      needsFix: !p.ok,
     });
   }
   tPeers.value = arr;
   for (const p of arr) {
-    if (p.suggestion) {
-      // suggestion msg currently encodes `declared=X observed=Y`
-      // — pull the Y portion as the proposed value.
-      const m = p.suggestion.match(/observed=(\S+)/);
-      if (m) tFixes.value[p.alias] = m[1];
+    if (p.needsFix) {
+      // Pre-fill the editable field: the auto-detected URI when we have
+      // one, otherwise the declared URI so the operator just corrects
+      // the typo.
+      tFixes.value[p.alias] = p.suggestion ?? p.declared_uri ?? '';
     }
   }
   tDiagnosed.value = true;
@@ -929,15 +946,16 @@ function quarantineWal(row: WalRow) {
           Diagnosing topology…
         </Message>
         <Message v-else-if="Object.keys(tFixes).length === 0" severity="success" :closable="false">
-          No replication topology issues detected. Every declared peer URI matches what the cluster
-          observes. Nothing to fix.
+          No replication topology issues detected. Every declared peer is reachable and its URI
+          matches what the cluster observes. Nothing to fix.
         </Message>
         <table v-else class="r-table">
           <thead>
             <tr>
               <th>Peer</th>
               <th>Reachable</th>
-              <th>Suggested URI</th>
+              <th>Declared URI</th>
+              <th>URI to apply</th>
             </tr>
           </thead>
           <tbody>
@@ -946,6 +964,9 @@ function quarantineWal(row: WalRow) {
                 <code>{{ p.alias }}</code>
               </td>
               <td>{{ p.reachable ? '✓' : '✗' }}</td>
+              <td>
+                <code>{{ p.declared_uri ?? '—' }}</code>
+              </td>
               <td>
                 <Fluid v-if="tFixes[p.alias] !== undefined">
                   <InputText v-model="tFixes[p.alias]" />
@@ -957,6 +978,17 @@ function quarantineWal(row: WalRow) {
             </tr>
           </tbody>
         </table>
+        <Message
+          v-if="tDiagnosed && tPeers.some((p) => !p.reachable)"
+          severity="warn"
+          size="small"
+          variant="simple"
+          :closable="false"
+        >
+          An unreachable peer either has a wrong URI — correct it above and apply — or the instance
+          is simply stopped, in which case the declared URI is fine and you should start the process
+          instead.
+        </Message>
       </div>
       <template #footer>
         <Button label="Close" severity="secondary" text @click="tOpen = false" />

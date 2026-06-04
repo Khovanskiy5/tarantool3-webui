@@ -1672,15 +1672,21 @@ local Mutation = types.object {
                         return { ok = false, action = 'topology_fix_diagnose',
                             error = diag.error, results = {} }
                     end
+                    -- One row per peer. `ok` means "no action needed";
+                    -- `msg` carries a JSON envelope so the SPA gets the
+                    -- declared/observed/reachable/suggestion details
+                    -- without us widening the shared result type.
                     local results = {}
                     for _, p in ipairs(diag.peers or {}) do
                         table.insert(results, {
                             peer = p.alias,
-                            ok   = p.suggestion == nil,
-                            msg  = p.suggestion ~= nil
-                                and ('declared=' .. tostring(p.declared_uri)
-                                    .. ' observed=' .. tostring(p.observed_uri))
-                                or nil,
+                            ok   = not p.needs_fix,
+                            msg  = json.encode({
+                                declared   = p.declared_uri,
+                                observed   = p.observed_uri,
+                                reachable  = p.reachable,
+                                suggestion = p.suggestion,
+                            }),
                         })
                     end
                     return {

@@ -29,6 +29,17 @@ local logger   = log_util.with_tag('recovery.topology')
 
 local M = {}
 
+-- Replace every verbatim occurrence of `old` with `new` in `s`,
+-- treating both as plain strings (no Lua-pattern magic). Returns the
+-- patched string and the replacement count. Used to rewrite a single
+-- URI in the raw cluster YAML without parsing it, so comments,
+-- ordering and formatting survive untouched.
+local function literal_replace(s, old, new)
+    local pat = old:gsub('%W', '%%%0')      -- escape every non-word char
+    local rep = new:gsub('%%', '%%%%')      -- escape % in the replacement
+    return s:gsub(pat, rep)
+end
+
 -- assess(payload, root) → Assessment (read-only). Fixing replication URIs
 -- never touches tuple data, so it is `caution` (a config reload / restart
 -- is the only effect), not `dangerous`.
@@ -103,14 +114,26 @@ function M.cross_check(declared, observed_by_alias)
             observed_uri = obs.uri,
             reachable    = obs.reachable == true,
             suggestion   = nil,
+            needs_fix    = false,
         }
-        -- We only suggest a fix when the observed URI is
-        -- different from the declared one AND the observed one
-        -- is reachable. Suggesting an unreachable URI would
-        -- replace one dead pointer with another.
+        -- Auto-suggest a fix when a REACHABLE peer answers on a
+        -- different address than the config declares — the pool
+        -- already worked around a stale/typo'd URI, so we know the
+        -- right value and can offer one-click correction.
         if obs.reachable and obs.uri ~= nil
             and obs.uri ~= decl.declared_uri then
             entry.suggestion = obs.uri
+            entry.needs_fix = true
+        end
+        -- Also flag an UNREACHABLE declared peer: a wrong host:port
+        -- means nothing answers, so the pool can't tell us the right
+        -- address (no auto-suggestion) — the operator edits the
+        -- pre-filled declared URI. A genuinely-stopped instance also
+        -- lands here; the panel labels it so the operator can tell a
+        -- typo apart from a down process.
+        if not entry.reachable and type(decl.declared_uri) == 'string'
+            and decl.declared_uri ~= '' then
+            entry.needs_fix = true
         end
         table.insert(out, entry)
     end
@@ -134,25 +157,30 @@ local function observed_from_state()
     return out
 end
 
--- Pull the current cluster YAML through the config module —
--- production calls already use the file-mirror fallback so we
--- always get the same bytes the runtime is configured from.
+-- Pull the current cluster YAML straight from etcd (the source of
+-- truth) the same way the config resolver does. Falls back to the
+-- on-disk mirror the resolver maintains for the fresh-boot window
+-- when etcd has no key yet.
 local function fetch_current_yaml()
-    local ok, cfg = pcall(require, 'webui.config_store.config')
-    if not ok then return nil, 'config module unavailable' end
-    -- Prefer the in-band read; fall back to local mirror on
-    -- fresh-cluster boot when etcd has no key yet.
-    if type(cfg.query_current_raw) == 'function' then
-        local raw, err = cfg.query_current_raw()
-        if raw ~= nil then return raw end
-        if type(cfg._read_local_yaml) == 'function' then
-            local mirror, mirror_err = cfg._read_local_yaml()
-            if mirror ~= nil then return mirror end
-            return nil, err or mirror_err
+    local ok_client, etcd_client = pcall(require, 'webui.config_store.client')
+    if ok_client and etcd_client ~= nil
+        and type(etcd_client.get_client) == 'function' then
+        local client = etcd_client.get_client()
+        if client ~= nil then
+            local kv = select(1, client:read_cluster_config())
+            if kv ~= nil and kv.value ~= nil then
+                return kv.value
+            end
         end
-        return nil, err
     end
-    return nil, 'no current YAML reader available'
+    -- Fresh-cluster boot: etcd has no key yet. The config resolver
+    -- exports the same on-disk mirror reader it uses for diffs.
+    local ok_cfg, resolver = pcall(require, 'webui.graphql.resolvers.config')
+    if ok_cfg and type(resolver._read_local_yaml) == 'function' then
+        local mirror = resolver._read_local_yaml()
+        if mirror ~= nil then return mirror end
+    end
+    return nil, 'current cluster YAML unavailable'
 end
 
 -- diagnose() → { current_yaml, peers: [...], has_fixes }
@@ -170,7 +198,7 @@ function M.diagnose()
     local peers = M.cross_check(declared, observed)
     local has_fixes = false
     for _, p in ipairs(peers) do
-        if p.suggestion ~= nil then has_fixes = true; break end
+        if p.needs_fix then has_fixes = true; break end
     end
     return {
         current_yaml = raw,
@@ -200,57 +228,126 @@ function M.apply(payload, root)
             error = 'YAML decode failed' }
     end
 
-    -- Mutate in place. The cluster YAML is dict-of-dicts so the
-    -- update is a straight key reach-down per alias; we do NOT
-    -- touch any other field. The audit chain captures the
-    -- before/after through the twophase commit downstream.
+    -- Discover the currently-declared URI per alias from the parsed
+    -- view — read-only. We then rewrite each URI with a literal string
+    -- replacement on the RAW YAML instead of re-encoding the parsed
+    -- tree, so comments, key ordering and formatting all survive (a
+    -- re-encode would strip every operator comment from the config).
+    local declared_by_alias = {}
+    for _, d in ipairs(M.walk_declared(parsed)) do
+        declared_by_alias[d.alias] = d.declared_uri
+    end
+
+    local new_yaml = raw
     local changed = {}
-    for _, group in pairs(parsed.groups or {}) do
-        for _, rs in pairs(group.replicasets or {}) do
-            for alias, inst in pairs(rs.instances or {}) do
-                local new_uri = fixes[alias]
-                if new_uri ~= nil and type(inst) == 'table' then
-                    inst.iproto = inst.iproto or {}
-                    inst.iproto.advertise = inst.iproto.advertise or {}
-                    inst.iproto.advertise.peer = inst.iproto.advertise.peer or {}
-                    local old_uri = inst.iproto.advertise.peer.uri
-                    inst.iproto.advertise.peer.uri = new_uri
-                    table.insert(changed,
-                        { alias = alias, from = old_uri, to = new_uri })
-                end
+    local skipped = {}
+    for alias, new_uri in pairs(fixes) do
+        local old_uri = declared_by_alias[alias]
+        if type(new_uri) ~= 'string' or new_uri == '' then
+            table.insert(skipped,
+                { alias = alias, reason = 'new URI is empty' })
+        elseif old_uri == new_uri then
+            -- already correct — nothing to do for this alias
+            table.insert(skipped,
+                { alias = alias, reason = 'declared URI already matches' })
+        elseif type(old_uri) ~= 'string' or old_uri == '' then
+            -- No declared URI to anchor the replacement on; a literal
+            -- edit can't safely insert a nested key. Surface it.
+            table.insert(skipped,
+                { alias = alias, reason = 'no declared URI to replace' })
+        else
+            local patched, n = literal_replace(new_yaml, old_uri, new_uri)
+            if n == 0 then
+                table.insert(skipped, { alias = alias,
+                    reason = 'declared URI not found in config text' })
+            else
+                new_yaml = patched
+                table.insert(changed,
+                    { alias = alias, from = old_uri, to = new_uri })
             end
         end
     end
 
-    local new_yaml = yaml.encode(parsed)
+    -- The recoveryAction GraphQL contract wants result rows shaped
+    -- { peer, ok, msg }. Map our internal change / skip records onto it
+    -- (a non-conforming row crashes serialization on non-null `peer`).
+    local function skipped_rows()
+        local rows = {}
+        for _, s in ipairs(skipped) do
+            rows[#rows + 1] = { peer = s.alias, ok = false, msg = s.reason }
+        end
+        return rows
+    end
+    local function applied_rows()
+        local rows = {}
+        for _, ch in ipairs(changed) do
+            rows[#rows + 1] = { peer = ch.alias, ok = true,
+                msg = tostring(ch.from) .. ' -> ' .. tostring(ch.to) }
+        end
+        for _, row in ipairs(skipped_rows()) do
+            rows[#rows + 1] = row
+        end
+        return rows
+    end
 
-    -- Route through the existing twophase commit. The config
-    -- module owns validation + etcd write + audit row + reload
-    -- fanout; we just hand it the patched YAML.
+    if #changed == 0 then
+        return { ok = false, action = 'topology_fix', results = skipped_rows(),
+            error = 'no applicable URI fix — nothing changed' }
+    end
+
+    -- Route through the existing two-phase config pipeline. The
+    -- config resolver owns validation + etcd write + audit row +
+    -- reload fan-out; we drive its prepare → commit pair exactly
+    -- like the config editor does, so the URI fix lands in the
+    -- source of truth and every instance reloads. `root` carries the
+    -- admin roles the recovery dispatcher already verified, so the
+    -- proposeConfig / commitConfig role checks pass through.
     local ok_cfg, config_resolver = pcall(require,
         'webui.graphql.resolvers.config')
-    if not ok_cfg or type(config_resolver.commit_config) ~= 'function' then
+    if not ok_cfg
+        or type(config_resolver.mutation_prepare) ~= 'function'
+        or type(config_resolver.mutation_commit) ~= 'function' then
         return { ok = false, action = 'topology_fix', results = {},
             error = 'config resolver unavailable' }
     end
 
-    local commit_ok, commit_res = pcall(config_resolver.commit_config,
-        root or {}, {
-            yaml          = new_yaml,
-            confirm_text  = payload.confirm_text or 'topology_fix',
-            reason        = 'recovery.topology_fix: '
-                .. tostring(#changed) .. ' URI fix(es)',
-        })
+    -- prepare: diff the patched YAML against the live etcd config and
+    -- validate it on every peer. Raises on NO_CHANGES / VALIDATION_FAILED.
+    local prep_ok, prep = pcall(config_resolver.mutation_prepare,
+        root or {}, { yaml = new_yaml })
+    if not prep_ok then
+        return { ok = false, action = 'topology_fix', results = applied_rows(),
+            error = tostring(prep) }
+    end
+
+    -- The prepared bundle lives in a replicated sync space. When apply()
+    -- runs on a read-only follower, prepare() forwarded the write to the
+    -- leader; commit() reads it back LOCALLY, so we must wait for it to
+    -- replicate here first — otherwise the back-to-back prepare+commit
+    -- races ahead of replication and hits PREPARED_NOT_FOUND. (The
+    -- interactive editor never sees this: a human pauses between the two
+    -- calls.) Observed replication lag is a few ms; the budget is ample.
+    local ok_tp, twophase = pcall(require, 'webui.config_store.twophase')
+    if ok_tp and type(twophase.get_prepared) == 'function' then
+        local fiber = require('fiber')
+        local deadline = fiber.time() + 3
+        while twophase.get_prepared(prep.prepared_id) == nil
+            and fiber.time() < deadline do
+            fiber.sleep(0.02)
+        end
+    end
+
+    -- commit: write to etcd, append the audit row, fan out the reload.
+    local commit_ok, commit_res = pcall(config_resolver.mutation_commit,
+        root or {}, { prepared_id = prep.prepared_id })
     if not commit_ok then
-        return {
-            ok = false, action = 'topology_fix', results = changed,
-            error = tostring(commit_res),
-        }
+        return { ok = false, action = 'topology_fix', results = applied_rows(),
+            error = tostring(commit_res) }
     end
     logger.info('topology_fix applied', { count = #changed })
     return {
         ok = true, action = 'topology_fix',
-        results = changed,
+        results = applied_rows(),
         commit  = commit_res,
     }
 end
