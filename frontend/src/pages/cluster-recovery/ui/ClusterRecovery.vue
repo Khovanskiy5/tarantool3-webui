@@ -521,6 +521,14 @@ function quarantineWal(row: WalRow) {
          any peer goes into the broken state). -->
     <div class="webui-recovery__toolbar">
       <Button
+        label="Split-brain resolve"
+        icon="pi pi-shield"
+        size="small"
+        severity="warn"
+        text
+        @click="openSplitBrainWizard"
+      />
+      <Button
         label="Topology fix"
         icon="pi pi-link"
         size="small"
