@@ -80,21 +80,29 @@ local function resolve_work_paths()
     return dirs
 end
 
--- Quiesce + wipe this instance's snap/xlog/vinyl work dirs, in place.
--- Reusable target-side primitive: the clean-rebootstrap orchestrator (on
--- the leader) drives identity reset around this call; here we only erase
--- local state so the next boot re-joins from scratch. → (deleted, failed)
--- as arrays of paths.
+-- Detach replication + go read-only so the instance stops accepting and
+-- replaying data while we prepare to wipe. Does NOT by itself stop every
+-- background xlog write, which is why nuke_workdirs() runs LAST, right
+-- before os.exit (see rebootstrap_handler).
+local function quiesce_self()
+    pcall(function() box.cfg{ replication = {} } end)
+    pcall(function() box.cfg{ read_only = true } end)
+end
+
+-- Erase this instance's snap/xlog/vinyl work dirs. → (deleted, failed,
+-- dirs) as arrays of paths.
 --
--- QUIESCE first (detach replication + go read-only) so no fresh WAL is
--- appended under the doomed identity between the wipe and os.exit.
 -- Recursive: descends into subdirectories (vinyl/ lives under work_dir as
 -- nested {space_id}/{index_id} folders) so a regex-only pass can't leave
 -- files behind that keep "invalid instance UUID" alive after restart.
-local function wipe_self_workdir()
-    pcall(function() box.cfg{ replication = {} } end)
-    pcall(function() box.cfg{ read_only = true } end)
-
+--
+-- MUST be the last act before os.exit. The WAL engine can flush/rotate an
+-- xlog even after `read_only = true`; if the nuke runs and then the process
+-- keeps yielding for a beat, that fresh xlog survives the wipe and the next
+-- boot dies on "invalid instance UUID" (its uuid no longer matches the
+-- pinned config uuid). Running nuke immediately before os.exit closes that
+-- window.
+local function nuke_workdirs()
     local dirs = resolve_work_paths()
     local deleted = {}
     local failed = {}
@@ -173,25 +181,29 @@ function M.rebootstrap_handler(req)
         }
     end
 
-    -- Quiesce + wipe local state. Identity (uuid / `_cluster` row) is
-    -- managed by the orchestrator on the leader, NOT here — see the handler
-    -- comment above. Quiescing detaches replication + goes read-only so no
-    -- fresh WAL is appended under the doomed identity before os.exit.
-    local deleted, failed, dirs = wipe_self_workdir()
+    -- Quiesce NOW so no new data is accepted/replayed; the actual wipe runs
+    -- last, inside the exit fiber, right before os.exit. Identity (uuid /
+    -- `_cluster` row) is managed by the orchestrator on the leader, NOT here.
+    quiesce_self()
+    local self_name = box.info.name
 
     logger.warn('rebootstrap initiated', {
-        instance = box.info.name, request_id = request_id,
-        deleted_count = #deleted, failed_count = #failed,
-        dirs = dirs,
+        instance = self_name, request_id = request_id,
     })
 
-    -- Schedule the exit so the HTTP response flushes first. 0.5s is
-    -- comfortably more than the handler's serialisation + TCP send.
+    -- Flush the HTTP response first, THEN wipe, THEN exit immediately. The
+    -- wipe must be the last act (see nuke_workdirs): doing it before a
+    -- yield would let the WAL engine recreate an xlog that survives the
+    -- wipe and breaks the next boot.
     fiber.create(function()
         fiber.self():name('webui_rebootstrap_exit', { truncate = true })
         fiber.sleep(0.5)
-        logger.warn('rebootstrap: exiting process; Docker restart policy ' ..
-            'will bring the container back', { instance = box.info.name })
+        local deleted, failed, dirs = nuke_workdirs()
+        logger.warn('rebootstrap: wiped, exiting process; Docker restart '
+            .. 'policy will bring the container back', {
+            instance = self_name, deleted_count = #deleted,
+            failed_count = #failed, dirs = dirs,
+        })
         os.exit(0)
     end)
 
@@ -200,12 +212,9 @@ function M.rebootstrap_handler(req)
         headers = { ['content-type'] = 'application/json' },
         body = json.encode({
             ok = true,
-            instance = box.info.name,
-            deleted_count = #deleted,
-            failed_count  = #failed,
-            failed        = #failed > 0 and failed or nil,
-            message = 'rebootstrap initiated; process exiting in 0.5s. ' ..
-                'Docker restart policy will recreate the container; ' ..
+            instance = self_name,
+            message = 'rebootstrap initiated; process exiting shortly. ' ..
+                'Docker restart policy will recreate the container; '..
                 'replication will catch up from healthy peers.',
         }),
     }
