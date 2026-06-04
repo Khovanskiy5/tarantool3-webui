@@ -16,36 +16,7 @@ import Button from 'primevue/button';
 import Checkbox from 'primevue/checkbox';
 import InputText from 'primevue/inputtext';
 
-export interface RecoveryCheck {
-  ok: boolean;
-  label: string;
-  detail?: string | null;
-}
-export interface RecoveryCommand {
-  title: string;
-  command: string;
-  note?: string | null;
-}
-export interface RecoveryConfirm {
-  required: boolean;
-  token?: string | null;
-  acknowledge?: string | null;
-}
-export interface Assessment {
-  action: string;
-  risk: 'safe' | 'caution' | 'dangerous' | string;
-  dataLoss: boolean;
-  autoSafe: boolean;
-  summary: string;
-  effects: string[];
-  warnings: string[];
-  manualRecovery: string[];
-  preconditions: RecoveryCheck[];
-  failureCommands: RecoveryCommand[];
-  confirm: RecoveryConfirm;
-  docs?: string | null;
-  fingerprint: string;
-}
+import type { Assessment } from '../model/useRecoveryAssessment';
 
 const props = defineProps<{
   assessment: Assessment | null;

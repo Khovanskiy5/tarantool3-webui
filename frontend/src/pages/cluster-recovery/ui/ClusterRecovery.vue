@@ -30,7 +30,12 @@ import Dialog from 'primevue/dialog';
 import InputText from 'primevue/inputtext';
 import InputNumber from 'primevue/inputnumber';
 import Fluid from 'primevue/fluid';
-import RecoveryAssessmentPanel, { type Assessment } from './RecoveryAssessmentPanel.vue';
+import {
+  RecoveryAssessmentPanel,
+  useRecoveryAssessment,
+  RECOVERY_ACTION_MUTATION,
+  type ActionResult,
+} from '@/features/recovery-assessment';
 
 import { getClient } from '@/shared/api/graphql';
 
@@ -67,13 +72,6 @@ interface RecoverySnapshot {
   split_brain_groups: SplitBrainGroup[];
 }
 
-interface ActionResult {
-  ok: boolean;
-  action: string;
-  error?: string | null;
-  results: { peer: string; ok: boolean; msg: string | null }[];
-}
-
 const SNAPSHOT_Q = /* GraphQL */ `
   query DrSnapshot {
     recoverySnapshot {
@@ -105,169 +103,31 @@ const SNAPSHOT_Q = /* GraphQL */ `
   }
 `;
 
-const ACTION_M = /* GraphQL */ `
-  mutation DrAction(
-    $action: String!
-    $payload: String
-    $acknowledge: Boolean
-    $confirmToken: String
-    $fingerprint: String
-    $idempotencyKey: String
-  ) {
-    recoveryAction(
-      action: $action
-      payload: $payload
-      acknowledge: $acknowledge
-      confirmToken: $confirmToken
-      fingerprint: $fingerprint
-      idempotencyKey: $idempotencyKey
-    ) {
-      ok
-      action
-      error
-      results {
-        peer
-        ok
-        msg
-      }
-    }
-  }
-`;
-
-const PREFLIGHT_Q = /* GraphQL */ `
-  query DrPreflight($action: String!, $payload: String) {
-    recoveryPreflight(action: $action, payload: $payload) {
-      action
-      risk
-      dataLoss
-      autoSafe
-      summary
-      effects
-      warnings
-      manualRecovery
-      preconditions {
-        ok
-        label
-        detail
-      }
-      failureCommands {
-        title
-        command
-        note
-      }
-      confirm {
-        required
-        token
-        acknowledge
-      }
-      docs
-      fingerprint
-    }
-  }
-`;
-
 const loading = ref(false);
 const snapshot = ref<RecoverySnapshot | null>(null);
 const error = ref<string | null>(null);
 const lastResult = ref<ActionResult | null>(null);
 
-// ── Assessment-driven apply flow (RC-5) ──────────────────────────────
-// Any action can be run through preflight -> assessment panel -> apply.
-// safe/caution: one Apply. dangerous: acknowledge + typed token. The
-// server re-checks the fingerprint; STALE_FINGERPRINT re-runs preflight.
-const assessOpen = ref(false);
-const assessBusy = ref(false);
-const assessment = ref<Assessment | null>(null);
-const assessAck = ref(false);
-const assessToken = ref('');
-const assessError = ref<string | null>(null);
-let assessAction = '';
-let assessPayload: string | null = null;
-
-function newIdempotencyKey(): string {
-  if (
-    typeof globalThis.crypto !== 'undefined' &&
-    typeof globalThis.crypto.randomUUID === 'function'
-  ) {
-    return globalThis.crypto.randomUUID();
-  }
-  return 'rc-' + Date.now() + '-' + Math.random().toString(36).slice(2);
-}
-
-async function runPreflight(): Promise<boolean> {
-  assessError.value = null;
-  const res = await getClient()
-    .query<{
-      recoveryPreflight: Assessment;
-    }>(
-      PREFLIGHT_Q,
-      { action: assessAction, payload: assessPayload },
-      { requestPolicy: 'network-only' },
-    )
-    .toPromise();
-  if (res.error) {
-    assessError.value = res.error.message;
-    return false;
-  }
-  assessment.value = res.data?.recoveryPreflight ?? null;
-  return assessment.value !== null;
-}
-
-// Open the assessment panel for an (action, payload).
-async function openAssessment(action: string, payload: string | null) {
-  assessAction = action;
-  assessPayload = payload;
-  assessment.value = null;
-  assessAck.value = false;
-  assessToken.value = '';
-  assessError.value = null;
-  assessOpen.value = true;
-  assessBusy.value = true;
-  try {
-    await runPreflight();
-  } finally {
-    assessBusy.value = false;
-  }
-}
-
-// Apply the assessed action, passing the enforcement context. On a stale
-// fingerprint, refresh the preflight and ask the operator to retry.
-async function applyAssessed() {
-  const a = assessment.value;
-  if (!a) return;
-  assessBusy.value = true;
-  assessError.value = null;
-  try {
-    const res = await getClient()
-      .mutation<{ recoveryAction: ActionResult }>(ACTION_M, {
-        action: assessAction,
-        payload: assessPayload,
-        acknowledge: a.confirm.required ? assessAck.value : null,
-        confirmToken: a.confirm.required ? assessToken.value.trim() : null,
-        fingerprint: a.fingerprint,
-        idempotencyKey: newIdempotencyKey(),
-      })
-      .toPromise();
-    if (res.error) {
-      assessError.value = res.error.message;
-      return;
-    }
-    const r = res.data?.recoveryAction ?? null;
-    if (r && !r.ok && (r.error ?? '').startsWith('STALE_FINGERPRINT')) {
-      // Cluster state moved since preflight — re-assess and ask again.
-      assessAck.value = false;
-      assessToken.value = '';
-      await runPreflight();
-      assessError.value = 'Cluster state changed — review the refreshed summary.';
-      return;
-    }
+// ── Assessment-driven apply flow (RC-5) — shared composable ──────────
+// Any action runs through preflight -> assessment panel -> enforced
+// apply (acknowledge + typed token + decision fingerprint). The SAME
+// hook drives the Suggestions banner, so the page wizards and the
+// banner share one risk model (plan invariant 8).
+const {
+  assessOpen,
+  assessBusy,
+  assessment,
+  assessAck,
+  assessToken,
+  assessError,
+  openAssessment,
+  applyAssessed,
+} = useRecoveryAssessment({
+  onApplied: async (r) => {
     lastResult.value = r;
-    assessOpen.value = false;
     await refresh();
-  } finally {
-    assessBusy.value = false;
-  }
-}
+  },
+});
 
 // Apply the snapshot's recommended safe action (one click).
 function applyRecommended() {
@@ -457,7 +317,7 @@ async function openTopologyWizard() {
   // results array carries one row per peer with `msg` filled
   // when a fix is suggested.
   const diag = await getClient()
-    .mutation(ACTION_M, {
+    .mutation(RECOVERY_ACTION_MUTATION, {
       action: 'topology_fix_diagnose',
       payload: null,
     })
@@ -524,7 +384,7 @@ async function openWalRepairWizard() {
   wBusy.value = true;
   wFiles.value = [];
   const res = await getClient()
-    .mutation(ACTION_M, {
+    .mutation(RECOVERY_ACTION_MUTATION, {
       action: 'wal_diagnose',
       payload: null,
     })

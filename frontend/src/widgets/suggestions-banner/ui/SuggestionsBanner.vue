@@ -1,103 +1,66 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia';
 import { computed, ref } from 'vue';
+import Dialog from 'primevue/dialog';
+import Message from 'primevue/message';
 
 import { useSuggestionStore } from '@/entities/suggestion';
-import { withTag } from '@/shared/lib/log';
+import {
+  RecoveryAssessmentPanel,
+  useRecoveryAssessment,
+  type ActionResult,
+} from '@/features/recovery-assessment';
 
-const log = withTag('suggestions-banner');
 const store = useSuggestionStore();
 const { data, total } = storeToRefs(store);
 
 const forceApply = computed(() => data.value?.forceApply ?? []);
 const restartReplication = computed(() => data.value?.restartReplication ?? []);
 
-const lastAction = ref<{
-  type: 'force_apply' | 'restart_replication' | 'rebootstrap';
-  ok: boolean;
-  message: string;
-  // Set after a failed restart_replication so the banner can offer
-  // the destructive follow-up ("Re-bootstrap this instance") next
-  // to the message instead of forcing the operator to remember the
-  // recovery procedure.
-  rebootstrap_for_alias?: string | null;
-} | null>(null);
-const busy = ref(false);
+// RC-6: the banner's actions now run through the SAME assessment model
+// as the recovery-page wizards — read-only `recoveryPreflight` ->
+// shared panel -> enforced `recoveryAction`. restart_replication is
+// `safe`, force_apply is `caution`, rebootstrap is `dangerous` (gated
+// behind acknowledge + typed token by the panel). No more bespoke
+// `window.confirm` and no bypassing the risk model.
+const lastResult = ref<ActionResult | null>(null);
+const {
+  assessOpen,
+  assessBusy,
+  assessment,
+  assessAck,
+  assessToken,
+  assessError,
+  openAssessment,
+  applyAssessed,
+} = useRecoveryAssessment({
+  onApplied: async (r) => {
+    lastResult.value = r;
+    await store.refresh();
+  },
+});
 
-const restartReplicationFailed = computed(
-  () =>
-    lastAction.value?.type === 'restart_replication' &&
-    !lastAction.value.ok &&
-    Boolean(lastAction.value.rebootstrap_for_alias),
-);
+const resultOk = computed(() => lastResult.value?.ok === true);
+const resultText = computed(() => {
+  const r = lastResult.value;
+  if (!r) return '';
+  if (r.error) return `${r.action}: ${r.error}`;
+  const detail = r.results.map((x) => `${x.peer}: ${x.ok ? 'ok' : (x.msg ?? 'failed')}`).join('; ');
+  return `${r.action}: ${r.ok ? 'ok' : 'failed'}${detail ? ` — ${detail}` : ''}`;
+});
 
-async function runForceApply(uuid: string | null | undefined) {
-  if (!uuid || busy.value) return;
-  busy.value = true;
-  try {
-    const res = await store.applyForceApply([uuid]);
-    if (res) {
-      lastAction.value = {
-        type: 'force_apply',
-        ok: res.ok,
-        message: res.message ?? `dispatched to ${res.results.length} peer(s)`,
-      };
-    }
-  } catch (err) {
-    log.error('apply force_apply failed', { err: String(err) });
-  } finally {
-    busy.value = false;
-  }
+function runForceApply(uuid: string | null | undefined) {
+  if (!uuid) return;
+  void openAssessment('force_apply', JSON.stringify({ instanceUuids: [uuid] }));
 }
 
-async function runRestartReplication(uuid: string | null | undefined, alias: string) {
-  if (!uuid || busy.value) return;
-  busy.value = true;
-  try {
-    const res = await store.applyRestartReplication([uuid]);
-    if (res) {
-      // When `ok: false` comes back the backend already crafted a
-      // human message that says STILL STOPPED — usually split-brain
-      // that can't be recovered by `box.cfg{replication=...}` alone.
-      // Stash the alias so the banner can offer the destructive
-      // re-bootstrap follow-up button.
-      lastAction.value = {
-        type: 'restart_replication',
-        ok: res.ok,
-        message: res.message ?? `dispatched to ${res.results.length} peer(s)`,
-        rebootstrap_for_alias: res.ok ? null : alias,
-      };
-    }
-  } catch (err) {
-    log.error('apply restart_replication failed', { err: String(err) });
-  } finally {
-    busy.value = false;
-  }
+function runRestartReplication(uuid: string | null | undefined) {
+  if (!uuid) return;
+  void openAssessment('restart_replication', JSON.stringify({ instanceUuids: [uuid] }));
 }
 
-async function runRebootstrap(alias: string) {
-  if (busy.value) return;
-  const confirmed = window.confirm(
-    `Re-bootstrap instance "${alias}"?\n\n` +
-      'This wipes WAL/snap on the target and triggers Docker restart-policy.\n' +
-      'Replication will catch up fresh from healthy peers (~10–30s downtime\n' +
-      'for this instance). Refused if the target owns the synchronous queue\n' +
-      '(promote another peer first).',
-  );
-  if (!confirmed) return;
-  busy.value = true;
-  try {
-    const res = await store.rebootstrapInstance(alias);
-    lastAction.value = {
-      type: 'rebootstrap',
-      ok: res.ok,
-      message: res.message ?? '(no message)',
-    };
-  } catch (err) {
-    log.error('rebootstrap dispatch failed', { err: String(err) });
-  } finally {
-    busy.value = false;
-  }
+function runRebootstrap(alias: string) {
+  void openAssessment('rebootstrap', JSON.stringify({ alias }));
 }
 </script>
 
@@ -115,7 +78,7 @@ async function runRebootstrap(alias: string) {
         <button
           type="button"
           class="webui-suggestions-banner__action"
-          :disabled="busy"
+          :disabled="assessOpen"
           @click="runForceApply(s.instanceUuid)"
         >
           Reload config
@@ -130,45 +93,61 @@ async function runRebootstrap(alias: string) {
         <button
           type="button"
           class="webui-suggestions-banner__action"
-          :disabled="busy"
-          @click="runRestartReplication(s.instanceUuid, s.instanceAlias)"
+          :disabled="assessOpen"
+          @click="runRestartReplication(s.instanceUuid)"
         >
           Restart replication
+        </button>
+        <!--
+          Escalation for a split-brain follower that won't recover via
+          box.cfg{replication=...}. `dangerous` — the shared panel gates
+          it behind acknowledge + a typed token; the backend refuses if
+          the target owns the synchronous queue.
+        -->
+        <button
+          type="button"
+          class="webui-suggestions-banner__action webui-suggestions-banner__action--danger"
+          :disabled="assessOpen"
+          @click="runRebootstrap(s.instanceAlias)"
+        >
+          Re-bootstrap
         </button>
       </li>
     </ul>
 
     <p
-      v-if="lastAction"
+      v-if="lastResult"
       :class="[
         'webui-suggestions-banner__result',
-        lastAction.ok
-          ? 'webui-suggestions-banner__result--ok'
-          : 'webui-suggestions-banner__result--err',
+        resultOk ? 'webui-suggestions-banner__result--ok' : 'webui-suggestions-banner__result--err',
       ]"
     >
-      {{ lastAction.type }}: {{ lastAction.message }}
+      {{ resultText }}
     </p>
 
-    <!--
-      Restart replication recovered nothing (typical split-brain
-      symptom). Offer the destructive recovery — re-bootstrap the
-      affected instance to clean state, then replication catches up
-      from healthy peers. The button is guarded by a native confirm()
-      and a backend-side refusal on the queue owner.
-    -->
-    <p v-if="restartReplicationFailed" class="webui-suggestions-banner__followup">
-      <strong>Replication did not recover.</strong>
-      Likely split-brain (LSN divergence in the synchronous queue). Manual recovery:
-      <button
-        type="button"
-        class="webui-suggestions-banner__action webui-suggestions-banner__action--danger"
-        :disabled="busy"
-        @click="runRebootstrap(lastAction!.rebootstrap_for_alias!)"
-      >
-        Re-bootstrap {{ lastAction!.rebootstrap_for_alias }}
-      </button>
-    </p>
+    <!-- Shared risk-assessment dialog (preflight -> panel -> enforced apply). -->
+    <Dialog
+      v-model:visible="assessOpen"
+      modal
+      header="Recovery — risk assessment"
+      :style="{ width: '34rem' }"
+    >
+      <Message v-if="assessError" severity="error" :closable="false" class="mb-2">
+        {{ assessError }}
+      </Message>
+      <div v-if="assessBusy && !assessment" class="webui-suggestions-banner__reason">
+        Assessing…
+      </div>
+      <RecoveryAssessmentPanel
+        v-else
+        v-model:acknowledge="assessAck"
+        v-model:token="assessToken"
+        :assessment="assessment"
+        :busy="assessBusy"
+        @apply="applyAssessed"
+        @cancel="assessOpen = false"
+      />
+    </Dialog>
   </section>
 </template>
 
@@ -242,6 +221,11 @@ async function runRebootstrap(alias: string) {
   cursor: progress;
 }
 
+.webui-suggestions-banner__action--danger {
+  background: var(--webui-danger, #c0392b);
+  color: #fff;
+}
+
 .webui-suggestions-banner__result {
   margin: 0.5rem 0 0;
   font-size: 0.8rem;
@@ -252,23 +236,5 @@ async function runRebootstrap(alias: string) {
 }
 .webui-suggestions-banner__result--err {
   color: var(--webui-danger);
-}
-
-.webui-suggestions-banner__followup {
-  margin: 0.5rem 0 0;
-  padding: 0.5rem 0.75rem;
-  font-size: 0.8rem;
-  border-radius: var(--webui-radius);
-  background: rgba(220, 80, 80, 0.08);
-  border: 1px solid rgba(220, 80, 80, 0.35);
-  color: var(--webui-text-muted);
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  flex-wrap: wrap;
-}
-.webui-suggestions-banner__action--danger {
-  background: var(--webui-danger, #c0392b);
-  color: #fff;
 }
 </style>
