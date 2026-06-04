@@ -133,6 +133,6 @@ async function onExpelConfirm() {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 </style>

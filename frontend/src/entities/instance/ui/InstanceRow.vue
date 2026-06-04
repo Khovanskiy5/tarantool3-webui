@@ -2,9 +2,10 @@
 import { computed } from 'vue';
 
 import type { Instance } from '../model/types';
-import { isLeader, reachability, shortUuid } from '../model/selectors';
+import { isLeader, reachability, shortVersion } from '../model/selectors';
 import InstanceBuckets from './InstanceBuckets.vue';
 import InstanceMemBar from './InstanceMemBar.vue';
+import InstanceId from './InstanceId.vue';
 
 const props = defineProps<{
   instance: Instance;
@@ -44,20 +45,28 @@ const reasonLabel = computed(() => props.instance.boxInfo?.roReason ?? '');
 <template>
   <tr :class="['webui-instance-row', stateClass, { 'webui-instance-row--self': isSelf }]">
     <td class="webui-instance-row__alias">
-      <span class="webui-instance-row__alias-text">{{ instance.alias }}</span>
-      <span
-        v-if="isSelf"
-        v-tooltip.top="'This is the instance answering the request'"
-        class="webui-instance-row__chip webui-instance-row__chip--self"
-        >self</span
-      >
-      <span
-        v-if="isLeader(instance, leaderAlias)"
-        class="webui-instance-row__chip webui-instance-row__chip--leader"
-        >leader</span
-      >
+      <span class="webui-instance-row__alias-inner">
+        <span class="webui-instance-row__alias-text">{{ instance.alias }}</span>
+        <!-- Fixed-width slot so the column keeps the same width whether an
+             instance carries zero, one, or both (self + leader) chips. -->
+        <span class="webui-instance-row__chips">
+          <span
+            v-if="isSelf"
+            v-tooltip.top="'This is the instance answering the request'"
+            class="webui-instance-row__chip webui-instance-row__chip--self"
+            >self</span
+          >
+          <span
+            v-if="isLeader(instance, leaderAlias)"
+            class="webui-instance-row__chip webui-instance-row__chip--leader"
+            >leader</span
+          >
+        </span>
+      </span>
     </td>
-    <td class="webui-instance-row__uuid">{{ shortUuid(instance.uuid) }}</td>
+    <td class="webui-instance-row__uuid">
+      <InstanceId :uuid="instance.uuid" />
+    </td>
     <td class="webui-instance-row__status">
       <span
         :class="[
@@ -72,8 +81,10 @@ const reasonLabel = computed(() => props.instance.boxInfo?.roReason ?? '');
       <span v-else>—</span>
     </td>
     <td class="webui-instance-row__uri">{{ instance.uri ?? '—' }}</td>
-    <td class="webui-instance-row__version">
-      {{ instance.boxInfo?.version ?? '—' }}
+    <td v-memo="[instance.boxInfo?.version]" class="webui-instance-row__version">
+      <span v-tooltip.top="instance.boxInfo?.version || undefined">
+        {{ shortVersion(instance.boxInfo?.version) }}
+      </span>
     </td>
     <td class="webui-instance-row__uptime">{{ uptime }}</td>
     <td class="webui-instance-row__buckets">
@@ -126,9 +137,28 @@ const reasonLabel = computed(() => props.instance.boxInfo?.roReason ?? '');
 .webui-instance-row__alias {
   font-family: var(--webui-font-mono);
   font-weight: 600;
-  display: flex;
+  white-space: nowrap;
+}
+
+/* Inline-flex wrapper inside the table cell so the alias keeps the
+   cell's vertical-align: middle while sitting next to its chips. */
+.webui-instance-row__alias-inner {
+  display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.6rem;
+}
+
+/* Reserve room for both the self + leader chips so the column width is
+   stable across rows that have zero, one, or two labels. */
+.webui-instance-row__chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 6rem;
+}
+
+/* Keep the version on a single line so the row stays one line tall. */
+.webui-instance-row__version {
   white-space: nowrap;
 }
 
@@ -142,7 +172,7 @@ const reasonLabel = computed(() => props.instance.boxInfo?.roReason ?? '');
   font-size: 0.65rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  padding: 0.05rem 0.4rem;
+  padding: 0.15rem 0.5rem;
   border-radius: 999px;
   font-weight: 700;
 }

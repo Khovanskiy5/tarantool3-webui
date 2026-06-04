@@ -68,7 +68,7 @@ const replicasetBucketsTotal = computed(() => {
           <th>Buckets</th>
           <th>Memory</th>
           <th>Last error</th>
-          <th v-if="showActions">Actions</th>
+          <th v-if="showActions" class="webui-rs-card__actions-head">Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -192,5 +192,13 @@ const replicasetBucketsTotal = computed(() => {
 
 .webui-rs-card__actions-cell {
   padding: 0.35rem 0.6rem;
+}
+
+/* Keep the action buttons on a single line and left-aligned so the
+   ACTIONS header sits directly above the first button. */
+.webui-rs-card__table th.webui-rs-card__actions-head,
+.webui-rs-card__actions-cell {
+  text-align: left;
+  white-space: nowrap;
 }
 </style>

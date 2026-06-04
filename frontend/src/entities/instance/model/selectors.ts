@@ -27,7 +27,19 @@ export function isLeader(instance: Instance, leaderAlias: string | null | undefi
   return instance.boxInfo?.ro === false;
 }
 
-export function shortUuid(uuid: string | null | undefined): string {
+// Docker-style short id: the trailing hex group of the instance UUID
+// (its last 12 chars), shown in a monospace cell with the full UUID in a
+// tooltip — mirrors how `docker ps` renders container ids.
+export function containerId(uuid: string | null | undefined): string {
   if (!uuid) return '—';
-  return `${uuid.slice(0, 8)}…`;
+  const tail = uuid.includes('-') ? uuid.slice(uuid.lastIndexOf('-') + 1) : uuid;
+  return tail.slice(-12);
+}
+
+// Short semver for the table column: drop the build suffix, e.g.
+// "3.7.0-0-g78b01ace947d" -> "3.7.0". The full string lives in the
+// cell's tooltip.
+export function shortVersion(version: string | null | undefined): string {
+  if (!version) return '—';
+  return version.split('-')[0];
 }
